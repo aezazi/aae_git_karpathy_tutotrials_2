@@ -305,8 +305,10 @@ class DataLoaderLite:
         return x, y
     
 # %%
+# NOTE: after experimenting with a number of different cpu and GPU AWS configurationns, G6e2xLarge is the smallest configuration that can handle B=16 and T=1024
+
 import time
-train_loader = DataLoaderLite(B=8, T=1024)
+train_loader = DataLoaderLite(B=16, T=2028)
 model = GPT(GPTConfig())
 model.to(device)
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
