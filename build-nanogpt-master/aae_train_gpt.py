@@ -24,7 +24,7 @@ print(f"Using device: {device}")
 """
 Note that in the initialization of the network in the MLP class, we are multiplying n_embd (the dimensions of the original embeddings) by 4. So for the inner layers, the dimensionality of the model is 384 * 4 =1536. 
 """
-# this is just a test comment to see if I can push changes to git 
+
 @dataclass
 class GPTConfig:
     block_size: int = 1024 # max sequence length
