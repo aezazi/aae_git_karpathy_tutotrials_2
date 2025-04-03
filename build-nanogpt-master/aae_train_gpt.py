@@ -29,6 +29,7 @@ Note that in the initialization of the network in the MLP class, we are multiply
 # another test commit from vs code local to github
 # And one more from vs code aws to git
 # test commit from vs code local to github using ssh
+# test commit from vs code ec2 to github using ssh
 
 
 @dataclass
