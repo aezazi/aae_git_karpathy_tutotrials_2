@@ -320,7 +320,7 @@ else:
 model = GPT(GPTConfig())
 model.to(device)
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
-for i in range(100):
+for i in range(10):
     t0 = time.time()
     x, y = train_loader.next_batch()
     optimizer.zero_grad()
