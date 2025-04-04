@@ -315,7 +315,7 @@ print(f'using device: {device}')
 if device == 'cuda':
     train_loader = DataLoaderLite(B=16, T=1024)
 else:
-    train_loader = DataLoaderLite(B=8, T=1024)
+    train_loader = DataLoaderLite(B=8, T=512)
 
 model = GPT(GPTConfig())
 model.to(device)
