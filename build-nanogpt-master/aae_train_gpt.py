@@ -8,6 +8,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 from hellaswag import render_example, iterate_examples
 import tiktoken
+import time
 
 #%%
 # Set the device      
@@ -18,7 +19,9 @@ elif torch.backends.mps.is_available():
 else:
     device = torch.device('cpu')
 
-print(f"Using device: {device}")
+# note that the variable "device" is a pytorch device object. It is not a string. So you cannot use it as a string in if statements. You have to use the .type attribute of the device object to get the type of the device as a string.
+print(f'type of device object: {type(device)}')
+print(f'device type as string: {device.type}')
 
 # %%
 """
@@ -309,18 +312,25 @@ class DataLoaderLite:
 # %%
 # NOTE: after experimenting with a number of different cpu and GPU AWS configurationns, G6e2xLarge is the smallest configuration that can handle B=16 and T=1024
 
-import time
-print(f'using device: {device}')
-
-if device == 'cuda':
+# NOTE: using device.type to get device as string for if statements.
+if device.type == 'cuda':
     train_loader = DataLoaderLite(B=16, T=1024)
+elif device.type == 'mps':
+    train_loader = DataLoaderLite(B=8, T=1024)
 else:
     train_loader = DataLoaderLite(B=8, T=512)
 
+if device.type == 'cuda':
+    print(f'using device: {device}')
+    torch.set_float32_matmul_precision('high')
+    print('using high precision for cuda')
+    
+
 model = GPT(GPTConfig())
 model.to(device)
+print(next(model.parameters()).device)
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
-for i in range(10):
+for i in range(20):
     t0 = time.time()
     x, y = train_loader.next_batch()
     optimizer.zero_grad()
