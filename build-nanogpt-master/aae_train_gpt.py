@@ -324,7 +324,7 @@ if device.type == 'cuda':
     print(f'using device: {device}')
     torch.set_float32_matmul_precision('high')
     print('using high precision for cuda')
-    
+
 
 model = GPT(GPTConfig())
 model.to(device)
@@ -334,8 +334,11 @@ for i in range(20):
     t0 = time.time()
     x, y = train_loader.next_batch()
     optimizer.zero_grad()
-    # with torch.autocast(device_type=device, dtype=torch.float16):
-    logits, loss = model(x.to(device), y.to(device))
+
+    # if the decive is 'cuda', we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs.
+    if device.type == 'cuda':
+        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+            logits, loss = model(x.to(device), y.to(device))
 
     loss.backward()
     optimizer.step()
