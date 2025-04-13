@@ -97,7 +97,8 @@ class CausalSelfAttention(nn.Module):
         # print(v.shape)
         # print('-'*50)
 
-        # This is the scaled dot-product attention built-in pytorch function. It takes the dot product of the query and key, scales it by the square root of the head size, and then applies a softmax to get the attention weights. The attention weights are then multiplied by the value to get the output. the is_causal=True argument ensures that the attention is only applied to the left of the current position in the sequence (i.e. it is causal). This is done by applying a mask to the attention weights.
+        # PPytorch implemnetation of Flash attention algorithim. This is the scaled dot-product attention built-in pytorch function. It takes the dot product of the query and key, scales it by the square root of the head size, and then applies a softmax to get the attention weights. The attention weights are then multiplied by the value to get the output. the is_causal=True argument ensures that the attention is only applied to the left of the current position in the sequence (i.e. it is causal). This is done by applying a mask to the attention weights. See Karpathy's video tutorial at 2:00:00 for more details. 
+        
         y = F.scaled_dot_product_attention(q, k, v, is_causal=True) # (B, nh, T, hs)
         
         # transpose back to (B, T, nh*hs) and combine heads
@@ -320,15 +321,20 @@ elif device.type == 'mps':
 else:
     train_loader = DataLoaderLite(B=8, T=512)
 
+# if cude is available, we use bfloat16 precision for the forward pass and use torch.compile. These are performance optimization for training on GPUs. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
 if device.type == 'cuda':
     print(f'using device: {device}')
     torch.set_float32_matmul_precision('high')
     print('using high precision for cuda')
+    model = torch.compile(model)
 
 
 model = GPT(GPTConfig())
 model.to(device)
+   
 print(next(model.parameters()).device)
+
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 for i in range(20):
     t0 = time.time()
@@ -339,6 +345,8 @@ for i in range(20):
     if device.type == 'cuda':
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
             logits, loss = model(x.to(device), y.to(device))
+    else:
+        logits, loss = model(x.to(device), y.to(device))
 
     loss.backward()
     optimizer.step()
