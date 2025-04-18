@@ -27,13 +27,6 @@ print(f'device type as string: {device.type}')
 """
 Note that in the initialization of the network in the MLP class, we are multiplying n_embd (the dimensions of the original embeddings) by 4. So for the inner layers, the dimensionality of the model is 384 * 4 =1536. 
 """
-# test comment to commit changes from vs code local to github
-# test comit from vs code aws to github
-# another test commit from vs code local to github
-# And one more from vs code aws to git
-# test commit from vs code local to github using ssh
-# test commit from vs code ec2 to github using ssh
-
 
 @dataclass
 class GPTConfig:
@@ -67,10 +60,10 @@ class CausalSelfAttention(nn.Module):
     def forward(self, x):
         # input is a batch of sequences of embeddings
         B, T, C = x.size()
+        
         # split the embeddings into key, query, value
         # the first 2 dimensions are the batch and sequence length. the last dimension is the embedding dimension
         # nh is "number of heads", hs is "head size", and C (number of channels) = nh * hs  e.g. in GPT-2 (124M), n_head=12, hs=64, so nh*hs=C=768 channels in the transformer
-
         qkv = self.c_attn(x) # (B, T, 3 * C)
         # print(qkv.shape)
 
@@ -97,7 +90,7 @@ class CausalSelfAttention(nn.Module):
         # print(v.shape)
         # print('-'*50)
 
-        # PPytorch implemnetation of Flash attention algorithim. This is the scaled dot-product attention built-in pytorch function. It takes the dot product of the query and key, scales it by the square root of the head size, and then applies a softmax to get the attention weights. The attention weights are then multiplied by the value to get the output. the is_causal=True argument ensures that the attention is only applied to the left of the current position in the sequence (i.e. it is causal). This is done by applying a mask to the attention weights. See Karpathy's video tutorial at 2:00:00 for more details. 
+        # Pytorch implementation of Flash attention algorithim. This is the scaled dot-product attention built-in pytorch function. It takes the dot product of the query and key, scales it by the square root of the head size, and then applies a softmax to get the attention weights. The attention weights are then multiplied by the value to get the output. the is_causal=True argument ensures that the attention is only applied to the left of the current position in the sequence (i.e. it is causal). This is done by applying a mask to the attention weights. See Karpathy's video tutorial at 2:00:00 for more details. 
         
         y = F.scaled_dot_product_attention(q, k, v, is_causal=True) # (B, nh, T, hs)
         
