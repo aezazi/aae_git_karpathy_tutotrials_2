@@ -31,7 +31,8 @@ Note that in the initialization of the network in the MLP class, we are multiply
 @dataclass
 class GPTConfig:
     block_size: int = 1024 # max sequence length
-    vocab_size: int = 50257
+    # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
+    vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
@@ -60,7 +61,7 @@ class CausalSelfAttention(nn.Module):
     def forward(self, x):
         # input is a batch of sequences of embeddings
         B, T, C = x.size()
-        
+
         # split the embeddings into key, query, value
         # the first 2 dimensions are the batch and sequence length. the last dimension is the embedding dimension
         # nh is "number of heads", hs is "head size", and C (number of channels) = nh * hs  e.g. in GPT-2 (124M), n_head=12, hs=64, so nh*hs=C=768 channels in the transformer
