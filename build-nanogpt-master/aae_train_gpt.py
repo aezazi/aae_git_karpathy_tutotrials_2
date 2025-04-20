@@ -329,7 +329,7 @@ model.to(device)
 print(next(model.parameters()).device)
 
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), weight_decay=1e-1)
 for i in range(20):
     t0 = time.time()
     x, y = train_loader.next_batch()
@@ -343,6 +343,8 @@ for i in range(20):
         logits, loss = model(x.to(device), y.to(device))
 
     loss.backward()
+    # clip the gradients to prevent exploding gradients
+    norm = nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optimizer.step()
     # synchronize the device to make sure all operations are complete before measuring time
     if device.type == 'mps':
@@ -352,7 +354,7 @@ for i in range(20):
     t1 = time.time()
     dt = (t1 - t0) * 1000
     tokens_per_sec = train_loader.B * train_loader.T / (t1 - t0)
-    print(f"Step {i+1}, Loss: {loss.item()}, Time: {dt:.2f}ms, Tokens/s: {tokens_per_sec:.2f}")
+    print(f"Step {i+1}, Loss: {loss.item()}, norm: {norm:.4f}, Time: {dt:.2f}ms, Tokens/s: {tokens_per_sec:.2f}")
     
 
 # %%
