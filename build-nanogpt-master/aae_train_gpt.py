@@ -311,11 +311,11 @@ class DataLoaderLite:
 if device.type == 'cuda':
     train_loader = DataLoaderLite(B=16, T=1024)
 elif device.type == 'mps':
-    train_loader = DataLoaderLite(B=8, T=1024)
+    train_loader = DataLoaderLite(B=10, T=1024)
 else:
     train_loader = DataLoaderLite(B=8, T=512)
 
-# if cude is available, we use bfloat16 precision for the forward pass and use torch.compile. These are performance optimization for training on GPUs. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
+# if cuda is available, we use bfloat16 precision for the forward pass and use torch.compile. These are performance optimization for training on GPUs. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
 if device.type == 'cuda':
     print(f'using device: {device}')
     torch.set_float32_matmul_precision('high')
