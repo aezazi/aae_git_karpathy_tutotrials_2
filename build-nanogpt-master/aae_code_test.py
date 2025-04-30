@@ -28,6 +28,7 @@ def aae_decorator(func):
 def sum_func(*args):
     return sum(args)
 
+#%%
 sum_func(1,2,3)
 
 # %%
@@ -47,7 +48,7 @@ print('-'*50)
 
 # rows of the table can be accessed via the row index. Here we access rows 1, 5, 8
 input_indices = torch.tensor([1, 5, 8, 5])  # Example token_id indices
-print(f'embeddings at index  1, 5 , 8 5:\n{embedding_layer(input_indices)}')
+print(f'embeddings at index  1, 5 , 8 , 5:\n{embedding_layer(input_indices)}')
 print('-'*50)
 
 
@@ -91,20 +92,22 @@ print('-'*50)
 print(f'the embeddings of the  token_ids are {embedding_layer(ids).shape}:\n{embedding_layer(ids)}')
 
 
-
-# %%
 # %%
 # understant pytorch tensor dimensions
 torch.manual_seed(4)
 
+print('creating a random tensor of shape (2, 4, 5)')
 t = torch.rand(2,4,5) # pytorch treats the first dimension as the batch dimension
 print(t)
 print('-'*60)
 
+print('transposing the second and third dimensions of the tensor')
 t_t = t.transpose(2,1) #transpose the second and third dimensions
 print(t_t)
 print('-'*60)
 
+# reshaping the tensor to shape (2, 5, 4). This is as if the tensor was flattened  to a (1, 20) tensor and then reshaped to (5, 4) for each batch
+print('reshaping the tensor to shape (2, 5, 4)')
 t_r = t.view(-1,5,4)
 print(t_r)
 

@@ -44,3 +44,6 @@ debug.log
 *.key
 *.crt
 .ec2-user/
+
+# AAE-specific files
+aae-test.py
