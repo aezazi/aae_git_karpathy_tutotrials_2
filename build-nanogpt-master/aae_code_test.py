@@ -115,7 +115,7 @@ print(t_r)
 """
 test behavior of reshape vs view. Karpathy prefers view
 
-the major diffference is that view requires that the input tensor be contiguous and that the new shape have the exact same number of elements as the input. reshape is more flexible...see docs
+the major difference is that view requires that the input tensor be contiguous and that the new shape have the exact same number of elements as the input. reshape is more flexible...see docs
 """
 # 
 
