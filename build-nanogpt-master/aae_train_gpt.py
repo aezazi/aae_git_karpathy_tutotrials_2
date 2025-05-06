@@ -334,7 +334,7 @@ print(next(model.parameters()).device)
 
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), weight_decay=1e-8)
-for i in range(1000):
+for i in range(5000):
     t0 = time.time()
     x, y = train_loader.next_batch()
     optimizer.zero_grad()
