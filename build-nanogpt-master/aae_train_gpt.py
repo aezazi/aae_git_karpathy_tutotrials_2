@@ -36,6 +36,7 @@ class GPTConfig:
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
+
 #%%
 # instantiate and check the config
 config = GPTConfig()
@@ -305,7 +306,9 @@ class DataLoaderLite:
         return x, y
     
 # %%
+# Run the train loop
 # NOTE: after experimenting with a number of different cpu and GPU AWS configurationns, G6e2xLarge is the smallest configuration that can handle B=16 and T=1024
+# NOTE: After making efficeinecy improvements to the code, I was able to run B=16 and T=1024 on a G6exLarge instance. Cost savings over the G6e2xLarge instance. About 100k tokens per second.
 
 # NOTE: using device.type to get device as string for if statements.
 if device.type == 'cuda':
@@ -330,7 +333,7 @@ print(next(model.parameters()).device)
 
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), weight_decay=1e-8)
-for i in range(20):
+for i in range(1000):
     t0 = time.time()
     x, y = train_loader.next_batch()
     optimizer.zero_grad()
