@@ -309,6 +309,7 @@ class DataLoaderLite:
 # Run the train loop
 # NOTE: after experimenting with a number of different cpu and GPU AWS configurationns, G6e2xLarge is the smallest configuration that can handle B=16 and T=1024
 # NOTE: After making efficeinecy improvements to the code, I was able to run B=16 and T=1024 on a G6exLarge instance. Cost savings over the G6e2xLarge instance. About 100k tokens per second.
+# NOTE: Ran training on a G6e2xLarge instance. About 103k tokens per second. Not much diffrence compared to G6exLarge instance.
 
 # NOTE: using device.type to get device as string for if statements.
 if device.type == 'cuda':
