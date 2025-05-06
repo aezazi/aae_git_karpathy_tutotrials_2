@@ -260,7 +260,7 @@ class GPT(nn.Module):
 # %%
 # check if the model loads correctly. This initializes the model with the pretrained weights from Huggingface.
 # model = GPT.from_pretrained('gpt2')
-# print('Model loaded successfully!')
+# print('pretrained model loaded successfully!')
 
 # Now we want to train the model ourselves. To do this we first initialize the model with just our own configuration and no pretrained weights
 model = GPT(GPTConfig())
