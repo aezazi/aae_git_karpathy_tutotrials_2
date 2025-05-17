@@ -332,9 +332,18 @@ model.to(device)
    
 print(next(model.parameters()).device)
 
+# define the optimizer and parameters
+max_steps = 100
+T_0 = 10
+base_lr = 3e-4
+eta_min = 1e-5
+warm_up_steps = 10
+
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), weight_decay=1e-8)
-for i in range(5000):
+scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=T_0, T_mult=1, eta_min=0, last_epoch=-1)
+
+for step in range(max_steps):
     t0 = time.time()
     x, y = train_loader.next_batch()
     optimizer.zero_grad()

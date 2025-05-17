@@ -240,4 +240,94 @@ index = torch.tensor([[0, 0], [1, 0]])
 result = torch.gather(t, 0, index)
 print(result)
 print('-'*60)
+
+# %%
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+import matplotlib.pyplot as plt
+
+# Dummy model
+model = nn.Linear(512, 512)
+
+# Optimizer
+max_lr = 6e-4
+min_lr = max_lr * 0.1
+optimizer = optim.AdamW(model.parameters(), lr=0.0)  # Start with zero for warmup
+
+# Cosine scheduler (we'll manually call this after warmup ends)
+cosine_scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=1, eta_min=min_lr)
+
+# Warmup parameters
+warmup_steps = 10
+total_steps = 100
+
+# Track learning rates
+lrs = []
+
+for step in range(total_steps):
+    if step < warmup_steps:
+        # Linear warmup: scale up from 0 to base_lr
+        warmup_lr = max_lr * (step + 1) / warmup_steps
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = warmup_lr
+        lrs.append(warmup_lr)
+   
+    else:
+        # Step the cosine scheduler
+        cosine_scheduler.step(step - warmup_steps)
+        lrs.append(optimizer.param_groups[0]['lr'])
+
+    # Simulate training step here
+    # train_one_step(model, optimizer)
+
+# Plotting
+plt.figure(figsize=(10, 5))
+plt.plot(range(total_steps), lrs, marker='o')
+plt.title('Learning Rate Schedule: Warmup + CosineAnnealingWarmRestarts')
+plt.xlabel('step')
+plt.ylabel('Learning Rate')
+plt.grid(True)
+plt.show()
+print(lrs)
+
+# %%
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+import matplotlib.pyplot as plt
+
+# Dummy model
+model = nn.Linear(512, 512)
+
+# Optimizer
+optimizer = optim.AdamW(model.parameters(), lr=1e-3)
+
+# CosineAnnealingWarmRestarts scheduler
+scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2, eta_min=1e-5)
+
+# Store learning rates for visualization
+lrs = []
+
+for epoch in range(60):  # Simulating 60 epochs
+    # Simulate one epoch of training
+    # train_one_epoch(model, optimizer)
+
+    # Log the current LR (all param groups will have the same LR here)
+    lrs.append(scheduler.get_last_lr()[0])
+    
+    # Step the scheduler
+    scheduler.step()
+
+# Plotting the learning rate schedule
+plt.figure(figsize=(10, 5))
+plt.plot(range(60), lrs, marker='o')
+plt.title('CosineAnnealingWarmRestarts Learning Rate Schedule')
+plt.xlabel('Epoch')
+plt.ylabel('Learning Rate')
+plt.grid(True)
+plt.show()
+
 # %%
