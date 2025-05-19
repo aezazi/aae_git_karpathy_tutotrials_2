@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+import torch.optim as optim
+import matplotlib.pyplot as plt
 # %%
 """
 understand decorators. Decorators take a function as the argument, add some additional functionality to that function, and return the modified function with same name as the function.. In that sense, they are like a closure.
@@ -242,11 +244,14 @@ print(result)
 print('-'*60)
 
 # %%
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
-import matplotlib.pyplot as plt
+# experimenting with pytorch's AdamW optimizer and learning rate scheduler
+# AdamW is a variant of the Adam optimizer that decouples weight decay from the optimization step. 
+# It is particularly useful for training large models with weight decay regularization. The main difference between Adam and AdamW is that in AdamW, the weight decay term is applied directly to the weights before the update step, rather than being included in the gradient calculation.
+# This decoupling allows for better control over the weight decay and can lead to improved generalization performance, especially in large-scale training scenarios.
+# cosine annealing is a learning rate schedule that gradually decreases the learning rate over time, following a cosine function. It starts with a high learning rate and decreases it to a minimum value, then restarts the cycle. This approach can help the model converge more effectively by allowing it to explore the parameter space initially and then fine-tune the weights as training progresses.
+# The CosineAnnealingWarmRestarts scheduler is a variant of cosine annealing that includes warm restarts. It periodically resets the learning rate to a higher value, allowing the model to escape local minima and explore the parameter space more effectively. This can lead to better convergence and improved performance in some cases.
+# I have also added a warmup phase to the learning rate schedule. The warmup phase gradually increases the learning rate from a small value to the initial learning rate over a specified number of steps. This can help stabilize training in the early stages and prevent large updates that could lead to divergence.
+
 
 # Dummy model
 model = nn.Linear(512, 512)
@@ -254,14 +259,14 @@ model = nn.Linear(512, 512)
 # Optimizer
 max_lr = 6e-4
 min_lr = max_lr * 0.1
-optimizer = optim.AdamW(model.parameters(), lr=0.0)  # Start with zero for warmup
+optimizer = optim.AdamW(model.parameters(), lr=max_lr)  
 
 # Cosine scheduler (we'll manually call this after warmup ends)
 cosine_scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=1, eta_min=min_lr)
 
 # Warmup parameters
 warmup_steps = 10
-total_steps = 100
+total_steps = 50
 
 # Track learning rates
 lrs = []
@@ -272,12 +277,12 @@ for step in range(total_steps):
         warmup_lr = max_lr * (step + 1) / warmup_steps
         for param_group in optimizer.param_groups:
             param_group['lr'] = warmup_lr
-        lrs.append(warmup_lr)
+        # lrs.append(warmup_lr)
    
     else:
         # Step the cosine scheduler
         cosine_scheduler.step(step - warmup_steps)
-        lrs.append(optimizer.param_groups[0]['lr'])
+    lrs.append(optimizer.param_groups[0]['lr'])
 
     # Simulate training step here
     # train_one_step(model, optimizer)
@@ -293,41 +298,67 @@ plt.show()
 print(lrs)
 
 # %%
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
-import matplotlib.pyplot as plt
+# creating a class to encapsulate the learning rate scheduler
+class LearingRateScheduler:
+    def __init__(self, 
+                 model = nn.Linear(512,512), 
+                 optimizer = torch.optim.AdamW(nn.Linear(512, 512).parameters(), lr=6e-4),
+                 total_steps = 50, restart = False, warm_up_steps =10,  max_lr=6e-4, 
+                 min_lr = 1e-5, T_mult=1, steps_to_restart = 10):
+        
+        self.optimizer = optimizer
+        self.model = model
+        self.total_steps = total_steps
+        self.warm_up_steps = warm_up_steps
+        self.max_lr = max_lr
+        self.min_lr = min_lr
+        self.restart = restart
+        self.T_mult = T_mult
+        self.steps_to_restart = steps_to_restart
 
-# Dummy model
-model = nn.Linear(512, 512)
+        self.lrs =[]
+        from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+        from torch.optim.lr_scheduler import CosineAnnealingLR
+        
+        if restart:
+            self.scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=self.steps_to_restart, T_mult=self.T_mult, eta_min=self.min_lr)
+        else:
+            self.scheduler = CosineAnnealingLR(optimizer, T_max=self.total_steps, 
+                                               eta_min=self.min_lr)
 
-# Optimizer
-optimizer = optim.AdamW(model.parameters(), lr=1e-3)
-
-# CosineAnnealingWarmRestarts scheduler
-scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2, eta_min=1e-5)
-
-# Store learning rates for visualization
-lrs = []
-
-for epoch in range(60):  # Simulating 60 epochs
-    # Simulate one epoch of training
-    # train_one_epoch(model, optimizer)
-
-    # Log the current LR (all param groups will have the same LR here)
-    lrs.append(scheduler.get_last_lr()[0])
     
-    # Step the scheduler
-    scheduler.step()
+    def set_lr(self, step):
+        if step < self.warm_up_steps:
+            # Linear warmup: scale up from 0 to base_lr
+            warmup_lr = self.max_lr * (step) /self.warm_up_steps
+            # print(f'setting warmup lr to {warmup_lr}')
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = warmup_lr
+        if step >= self.warm_up_steps:
+            # Step the cosine scheduler
+            self.scheduler.step(step - self.warm_up_steps)
 
-# Plotting the learning rate schedule
+        
+        self.lrs.append(self.optimizer.param_groups[0]['lr']) 
+# %%
+# test the lr_scheduler class'
+total_steps = 50
+sch = LearingRateScheduler(restart=True, total_steps=total_steps, warm_up_steps=10, max_lr=6e-4, min_lr=1e-5, steps_to_restart=10)
+
+# %%
+for step in range(total_steps):
+    sch.set_lr(step)
+   
 plt.figure(figsize=(10, 5))
-plt.plot(range(60), lrs, marker='o')
-plt.title('CosineAnnealingWarmRestarts Learning Rate Schedule')
-plt.xlabel('Epoch')
+plt.plot(range(total_steps), sch.lrs, marker='o')
+plt.title('Learning Rate Schedule: Warmup + CosineAnnealingWarmRestarts')
+plt.xlabel('step')
 plt.ylabel('Learning Rate')
 plt.grid(True)
 plt.show()
 
 # %%
+print(sch.lrs)
+
+# %%
+

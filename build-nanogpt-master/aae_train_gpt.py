@@ -282,6 +282,8 @@ class DataLoaderLite:
         tokens = enc.encode(text)
         self.tokens = torch.tensor(tokens, dtype=torch.long)
         print(f'Loaded {len(self.tokens)} tokens')
+        print(f'Batch size: {B}, Sequence length: {T}')
+        print(f'Tokens per batch: {(self.B * self.T)}')
         print(f'1 epoch = {len(self.tokens) // (self.B * self.T)} batches')
 
         # this keeps track of wherer we are in the text for batching
@@ -304,20 +306,24 @@ class DataLoaderLite:
             self.current_position = 0
         
         return x, y
-    
+   
 # %%
-# Run the train loop
-# NOTE: after experimenting with a number of different cpu and GPU AWS configurationns, G6e2xLarge is the smallest configuration that can handle B=16 and T=1024
-# NOTE: After making efficeinecy improvements to the code, I was able to run B=16 and T=1024 on a G6exLarge instance. Cost savings over the G6e2xLarge instance. About 100k tokens per second.
-# NOTE: Ran training on a G6e2xLarge instance. About 103k tokens per second. Not much diffrence compared to G6exLarge instance.
+# initialize the dataloader based on the device type. The batch size and sequence length are set based on the device type and my experiments.
 
 # NOTE: using device.type to get device as string for if statements.
 if device.type == 'cuda':
     train_loader = DataLoaderLite(B=16, T=1024)
 elif device.type == 'mps':
-    train_loader = DataLoaderLite(B=10, T=1024)
+    train_loader = DataLoaderLite(B=12, T=1024)
 else:
     train_loader = DataLoaderLite(B=8, T=512)
+
+
+#%%
+# Run the train loop
+# NOTE: after experimenting with a number of different cpu and GPU AWS configurationns, G6e2xLarge is the smallest configuration that can handle B=16 and T=1024
+# NOTE: After making efficeinecy improvements to the code, I was able to run B=16 and T=1024 on a G6exLarge instance. Cost savings over the G6e2xLarge instance. About 100k tokens per second.
+# NOTE: Ran training on a G6e2xLarge instance. About 103k tokens per second. Not much diffrence compared to G6exLarge instance.
 
 # if cuda is available, we use bfloat16 precision for the forward pass and use torch.compile. These are performance optimization for training on GPUs. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
 if device.type == 'cuda':
@@ -329,19 +335,43 @@ if device.type == 'cuda':
 
 model = GPT(GPTConfig())
 model.to(device)
-   
+
+# Check the device of the Thimodel parameters. 
 print(next(model.parameters()).device)
 
-# define the optimizer and parameters
-max_steps = 100
-T_0 = 10
-base_lr = 3e-4
-eta_min = 1e-5
+# define the optimizer and scheduler parameters
+max_steps = 50
+max_lr = 6e-4
+min_lr = max_lr * 0.1
 warm_up_steps = 10
 
+# the number of iterations over which lr is reduced to the minimum and then reset to the maximum
+T_0 = 10
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), weight_decay=1e-8)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=T_0, T_mult=1, eta_min=0, last_epoch=-1)
+
+optimizer = torch.optim.AdamW(model.parameters(), lr=max_lr, betas=(0.9, 0.95), weight_decay=1e-8)
+
+scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=T_0, T_mult=2, eta_min=min_lr, last_epoch=-1)
+
+class lr_scheduler:
+    def __init__(self, step, ):
+        self.step = step
+        self.warm_up_steps = warm_up_steps
+        self.max_lr = max_lr
+        self.scheduler = scheduler
+lrs =[]
+def set_lr(step):
+    if step < warm_up_steps-1:
+        # Linear warmup: scale up from 0 to base_lr
+        warmup_lr = max_lr * (step + 1) / warm_up_steps
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = warmup_lr
+    else:
+        # Step the cosine scheduler
+        scheduler.step(step - warm_up_steps)
+    
+    lrs.append(optimizer.param_groups[0]['lr']) 
+
 
 for step in range(max_steps):
     t0 = time.time()
@@ -359,6 +389,8 @@ for step in range(max_steps):
     # clip the gradients to prevent exploding gradients
     norm = nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optimizer.step()
+    set_lr(step)
+
     # synchronize the device to make sure all operations are complete before measuring time
     if device.type == 'mps':
         torch.mps.synchronize()
@@ -367,8 +399,21 @@ for step in range(max_steps):
     t1 = time.time()
     dt = (t1 - t0) * 1000
     tokens_per_sec = train_loader.B * train_loader.T / (t1 - t0)
-    print(f"Step {i+1}, Loss: {loss.item()}, norm: {norm:.4f}, Time: {dt:.2f}ms, Tokens/s: {tokens_per_sec:.2f}")
+    print(f"Step {step}, Loss: {loss.item()}, LR: {optimizer.param_groups[0]['lr']}, norm: {norm:.4f}, Time: {dt:.2f}ms, Tokens/s: {tokens_per_sec:.2f}")
     
+
+#%%
+# Plotting the learning rate schedule
+
+import matplotlib.pyplot as plt
+plt.figure(figsize=(10, 5))
+plt.plot(range(max_steps), lrs, marker='o')
+plt.title('Learning Rate Schedule: Warmup + CosineAnnealingWarmRestarts')
+plt.xlabel('step')
+plt.ylabel('Learning Rate')
+plt.grid(True)
+plt.show()
+
 
 # %%
 ###################################################################################################
