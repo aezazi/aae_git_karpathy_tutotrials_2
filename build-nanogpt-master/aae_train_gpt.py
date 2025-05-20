@@ -320,7 +320,7 @@ else:
 
 
 #%%
-# Run the train loop
+# create optimizer and scheduler
 # NOTE: after experimenting with a number of different cpu and GPU AWS configurationns, G6e2xLarge is the smallest configuration that can handle B=16 and T=1024
 # NOTE: After making efficeinecy improvements to the code, I was able to run B=16 and T=1024 on a G6exLarge instance. Cost savings over the G6e2xLarge instance. About 100k tokens per second.
 # NOTE: Ran training on a G6e2xLarge instance. About 103k tokens per second. Not much diffrence compared to G6exLarge instance.
@@ -340,40 +340,67 @@ model.to(device)
 print(next(model.parameters()).device)
 
 # define the optimizer and scheduler parameters
-max_steps = 50
+training_steps = 50 # the number of training steps
 max_lr = 6e-4
 min_lr = max_lr * 0.1
 warm_up_steps = 10
+T_max = training_steps # if not using restarts, the number of iterations over which lr is reduced to the minimum 
+restart = False # whether to use cosine annealing with restarts or not
+T_0 = 10 # if using restarts, the number of iterations over which lr is reduced to the minimum before restart
+T_mult = 1 # the factor by which T_0 is multiplied at each restart.
 
-# the number of iterations over which lr is reduced to the minimum and then reset to the maximum
-T_0 = 10
-
-
+# define the optimizer. 
 optimizer = torch.optim.AdamW(model.parameters(), lr=max_lr, betas=(0.9, 0.95), weight_decay=1e-8)
 
-scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=T_0, T_mult=2, eta_min=min_lr, last_epoch=-1)
-
-class lr_scheduler:
-    def __init__(self, step, ):
-        self.step = step
+# This my implementation of the cosine learning rate scheduler and is different from Karpathy's implementation. I am using the Pytorch implementaitons of cosine annealing schedures with and without out restart as well as my own code for an initial linear warm-up. the user has to option use cosine annealing with restarts or not, as well as the option to use a linear warmup or not with the warmup steps as a parameter
+class CosineLearingRateScheduler:
+    def __init__(self, 
+                 optimizer = None,
+                 T_max = 50, restart = False, warm_up_steps =10,  max_lr=6e-4, 
+                 min_lr = 1e-5, T_mult=1, T_0 = 10):
+        
+        self.optimizer = optimizer
+        self.T_max = T_max
         self.warm_up_steps = warm_up_steps
         self.max_lr = max_lr
-        self.scheduler = scheduler
-lrs =[]
-def set_lr(step):
-    if step < warm_up_steps-1:
-        # Linear warmup: scale up from 0 to base_lr
-        warmup_lr = max_lr * (step + 1) / warm_up_steps
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = warmup_lr
-    else:
-        # Step the cosine scheduler
-        scheduler.step(step - warm_up_steps)
-    
-    lrs.append(optimizer.param_groups[0]['lr']) 
+        self.min_lr = min_lr
+        self.restart = restart
+        self.T_mult = T_mult
+        self.T_0 = T_0
+
+        assert self.optimizer is not None, 'an optimizer object must be provided'
+
+        self.lrs =[]
+        from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+        from torch.optim.lr_scheduler import CosineAnnealingLR
+        
+        if restart:
+            self.scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=self.T_0, T_mult=self.T_mult, eta_min=self.min_lr)
+        else:
+            self.scheduler = CosineAnnealingLR(optimizer, T_max=self.T_max, 
+                                               eta_min=self.min_lr)
+
+    def set_lr(self, step):
+        if step < self.warm_up_steps:
+            # Linear warmup: scale up from 0 to max_lr
+            warmup_lr = self.max_lr * (step) /self.warm_up_steps
+            # print(f'setting warmup lr to {warmup_lr}')
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = warmup_lr
+        
+        if step >= self.warm_up_steps:
+            # Step the cosine scheduler
+            self.scheduler.step(step - self.warm_up_steps)
+        
+        self.lrs.append(self.optimizer.param_groups[0]['lr'])
+
+# instantiate the learning rate scheduler
+scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=training_steps, restart=restart, warm_up_steps=warm_up_steps, max_lr=max_lr, min_lr=min_lr, T_mult=T_mult, T_0=T_0)
 
 
-for step in range(max_steps):
+# %%
+# training loop
+for step in range(training_steps):
     t0 = time.time()
     x, y = train_loader.next_batch()
     optimizer.zero_grad()
@@ -389,7 +416,7 @@ for step in range(max_steps):
     # clip the gradients to prevent exploding gradients
     norm = nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optimizer.step()
-    set_lr(step)
+    scheduler.set_lr(step)
 
     # synchronize the device to make sure all operations are complete before measuring time
     if device.type == 'mps':
@@ -407,7 +434,7 @@ for step in range(max_steps):
 
 import matplotlib.pyplot as plt
 plt.figure(figsize=(10, 5))
-plt.plot(range(max_steps), lrs, marker='o')
+plt.plot(range(training_steps), scheduler.lrs, marker='o')
 plt.title('Learning Rate Schedule: Warmup + CosineAnnealingWarmRestarts')
 plt.xlabel('step')
 plt.ylabel('Learning Rate')
