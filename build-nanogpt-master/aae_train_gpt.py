@@ -285,6 +285,7 @@ class DataLoaderLite:
         print(f'Batch size: {B}, Sequence length: {T}')
         print(f'Tokens per batch: {(self.B * self.T)}')
         print(f'1 epoch = {len(self.tokens) // (self.B * self.T)} batches')
+        self.batches_per_epoch = len(self.tokens) // (self.B * self.T)
 
         # this keeps track of wherer we are in the text for batching
         self.current_position = 0
@@ -332,22 +333,21 @@ if device.type == 'cuda':
     print('using high precision for cuda')
     model = torch.compile(model)
 
-
-model = GPT(GPTConfig())
 model.to(device)
 
 # Check the device of the Thimodel parameters. 
 print(next(model.parameters()).device)
 
 # define the optimizer and scheduler parameters
-training_steps = 50 # the number of training steps
+training_steps = 2000  # the number of training steps
 max_lr = 6e-4
 min_lr = max_lr * 0.1
-warm_up_steps = 10
+warm_up_steps = .1 * training_steps 
 T_max = training_steps # if not using restarts, the number of iterations over which lr is reduced to the minimum 
 restart = False # whether to use cosine annealing with restarts or not
-T_0 = 10 # if using restarts, the number of iterations over which lr is reduced to the minimum before restart
-T_mult = 1 # the factor by which T_0 is multiplied at each restart.
+T_0 = train_loader.batches_per_epoch//2 # if using restarts, the number of iterations over which lr is reduced to the minimum before restart
+print(f'T_0: {T_0}')
+T_mult = 2 # the factor by which T_0 is multiplied at each restart.
 
 # define the optimizer. 
 optimizer = torch.optim.AdamW(model.parameters(), lr=max_lr, betas=(0.9, 0.95), weight_decay=1e-8)
@@ -433,7 +433,7 @@ for step in range(training_steps):
 # Plotting the learning rate schedule
 
 import matplotlib.pyplot as plt
-plt.figure(figsize=(10, 5))
+plt.figure(figsize=(50, 20))
 plt.plot(range(training_steps), scheduler.lrs, marker='o')
 plt.title('Learning Rate Schedule: Warmup + CosineAnnealingWarmRestarts')
 plt.xlabel('step')
