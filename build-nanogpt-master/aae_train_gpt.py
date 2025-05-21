@@ -292,7 +292,6 @@ class GPT(nn.Module):
         return optimizer
 
 
-
 # %%
 
 # Now we want to train the model ourselves. To do this we first initialize the model with just our own configuration and no pretrained weights
@@ -301,13 +300,9 @@ print('Model initialized successfully!')
 
 #%%
 # create the optimizer.
-training_steps = 10  # the number of training steps
 base_lr = 6e-4
-
 optimizer = model.configure_optimizers(weight_decay=0.01, learning_rate=base_lr, device_type=device.type)
 print('Optimizer initialized successfully!')
-
-
 
 
 # %%
@@ -350,7 +345,6 @@ class DataLoaderLite:
         
         return x, y
    
-# %%
 # initialize the dataloader based on the device type. The batch size and sequence length are set based on the device type and my experiments.
 
 # NOTE: using device.type to get device as string for if statements.
@@ -379,18 +373,8 @@ print(next(model.parameters()).device)
 
 
 # %%
-# create the learning rate scheduler
+# create learning rate scheduler class
 # This my implementation of the cosine learning rate scheduler and is different from Karpathy's implementation. I am using the Pytorch implementatons of cosine annealing schedures with and without out restart as well as my own code for an initial linear warm-up. the user has to option use cosine annealing with restarts or not, as well as the option to use a linear warmup or not with the warmup steps as a parameter
-
-# define the scheduler parameters
-max_lr = base_lr
-min_lr = max_lr * 0.1
-warm_up_steps = .1 * training_steps 
-T_max = training_steps # if not using restarts, the number of iterations over which lr is reduced to the minimum 
-restart = False # whether to use cosine annealing with restarts or not
-T_0 = train_loader.batches_per_epoch//2 # if using restarts, the number of iterations over which lr is reduced to the minimum before restart
-print(f'T_0: {T_0}')
-T_mult = 2 # the factor by which T_0 is multiplied at each restart.
 
 class CosineLearingRateScheduler:
     def __init__(self, 
@@ -433,7 +417,21 @@ class CosineLearingRateScheduler:
         
         self.lrs.append(self.optimizer.param_groups[0]['lr'])
 
+
+#%%
 # instantiate the learning rate scheduler
+
+# define the scheduler parameters
+training_steps = 2000  # the number of training steps
+max_lr = base_lr
+min_lr = max_lr * 0.1
+warm_up_steps = .1 * training_steps 
+T_max = training_steps # if not using restarts, the number of iterations over which lr is reduced to the minimum 
+restart = False # whether to use cosine annealing with restarts or not
+T_0 = train_loader.batches_per_epoch//2 # if using restarts, the number of iterations over which lr is reduced to the minimum before restart
+print(f'T_0: {T_0}')
+T_mult = 2 # the factor by which T_0 is multiplied at each restart.
+
 scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=training_steps, restart=restart, warm_up_steps=warm_up_steps, max_lr=max_lr, min_lr=min_lr, T_mult=T_mult, T_0=T_0)
 
 
@@ -484,7 +482,16 @@ plt.ylabel('Learning Rate')
 plt.grid(True)
 plt.show()
 
+plt.figure(figsize=(100, 40))
+plt.plot(range(training_steps//5), loss_list, marker='o')
+plt.title('Loss vs Step')
+plt.xlabel('step')
+plt.ylabel('Loss')
+plt.grid(True)
+plt.show()
 
+#%%
+print(loss_list)
 # %%
 ###################################################################################################
 
