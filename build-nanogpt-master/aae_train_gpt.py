@@ -255,6 +255,22 @@ class GPT(nn.Module):
                     sd[k].copy_(sd_hf[k])
 
         return model
+    
+    # NOTE: In PyTorch's AdamW optimizer, param_group is a dictionary specifying the tensors to be optimized along with group-specific optimization options. It allows for applying different hyperparameters, such as learning rate or weight decay, to different sets of parameters within the model. This is useful for fine-tuning specific layers or parts of the network with varying optimization strategies. optimizer.param_groups is a list of such dictionaries, where each dictionary corresponds to a different group of parameters. The optimizer iterates over these groups during the optimization process, applying the specified settings to each group.
+
+    # configure_optimizers is a method that creates parameter groups (optim_groups) for the optimizer  to apply weight decay only to tensors that are involved in matmul (excludes bias and layernorm tensors). This is a performance optimization that allows for more efficient training on GPUs. It creates two parameter groups: one for the weights and one for the biases. The weights are optimized with weight decay and the biases and layernorms are optimized without weight decay. This is done to improve generalization and reduce overfitting. The method also sets the learning rate and weight decay for each parameter group.
+    # 
+    # It also implements GPU kernel fusion by . 
+
+    def configure_optimizers(self, weight_decay=0.01, learning_rate=6e-4):
+        decay_params = set()
+        no_decay_params = set()
+        for name, parameter in self.named_parameters():  
+            if 'bias' in name or 'ln' in name:
+                no_decay_params.add(name)
+            else:
+                decay_params.add(name)
+        
 
 
 
@@ -321,12 +337,9 @@ else:
 
 
 #%%
-# create optimizer and scheduler
-# NOTE: after experimenting with a number of different cpu and GPU AWS configurationns, G6e2xLarge is the smallest configuration that can handle B=16 and T=1024
-# NOTE: After making efficeinecy improvements to the code, I was able to run B=16 and T=1024 on a G6exLarge instance. Cost savings over the G6e2xLarge instance. About 100k tokens per second.
-# NOTE: Ran training on a G6e2xLarge instance. About 103k tokens per second. Not much diffrence compared to G6exLarge instance.
+# Implement torch.compile.
+# if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
 
-# if cuda is available, we use bfloat16 precision for the forward pass and use torch.compile. These are performance optimization for training on GPUs. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
 if device.type == 'cuda':
     print(f'using device: {device}')
     torch.set_float32_matmul_precision('high')
@@ -335,12 +348,37 @@ if device.type == 'cuda':
 
 model.to(device)
 
-# Check the device of the Thimodel parameters. 
+# Check model is on what device. 
 print(next(model.parameters()).device)
 
-# define the optimizer and scheduler parameters
-training_steps = 2000  # the number of training steps
-max_lr = 6e-4
+#%%
+# create the optimizer.
+training_steps = 500  # the number of training steps
+base_lr = 6e-4
+
+optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr, betas=(0.9, 0.95), weight_decay=1e-8)
+#%%
+print(type(optimizer.param_groups[0]))
+print(optimizer.param_groups[0].keys())
+for name, param in model.named_parameters():
+    # if 'bias' in name or 'ln' in name:
+    print(name)
+
+decay_params = set()
+no_decay_params = set()
+for name, parameter in model.named_parameters():  
+    if 'bias' in name or 'ln' in name:
+        no_decay_params.add(name)
+    else:
+        decay_params.add(name)
+       
+
+# %%
+# create the learning rate scheduler
+# This my implementation of the cosine learning rate scheduler and is different from Karpathy's implementation. I am using the Pytorch implementatons of cosine annealing schedures with and without out restart as well as my own code for an initial linear warm-up. the user has to option use cosine annealing with restarts or not, as well as the option to use a linear warmup or not with the warmup steps as a parameter
+
+# define the scheduler parameters
+max_lr = base_lr
 min_lr = max_lr * 0.1
 warm_up_steps = .1 * training_steps 
 T_max = training_steps # if not using restarts, the number of iterations over which lr is reduced to the minimum 
@@ -349,10 +387,6 @@ T_0 = train_loader.batches_per_epoch//2 # if using restarts, the number of itera
 print(f'T_0: {T_0}')
 T_mult = 2 # the factor by which T_0 is multiplied at each restart.
 
-# define the optimizer. 
-optimizer = torch.optim.AdamW(model.parameters(), lr=max_lr, betas=(0.9, 0.95), weight_decay=1e-8)
-
-# This my implementation of the cosine learning rate scheduler and is different from Karpathy's implementation. I am using the Pytorch implementaitons of cosine annealing schedures with and without out restart as well as my own code for an initial linear warm-up. the user has to option use cosine annealing with restarts or not, as well as the option to use a linear warmup or not with the warmup steps as a parameter
 class CosineLearingRateScheduler:
     def __init__(self, 
                  optimizer = None,
@@ -383,7 +417,7 @@ class CosineLearingRateScheduler:
     def set_lr(self, step):
         if step < self.warm_up_steps:
             # Linear warmup: scale up from 0 to max_lr
-            warmup_lr = self.max_lr * (step) /self.warm_up_steps
+            warmup_lr = self.max_lr * (step + 1) /self.warm_up_steps
             # print(f'setting warmup lr to {warmup_lr}')
             for param_group in self.optimizer.param_groups:
                 param_group['lr'] = warmup_lr
@@ -400,6 +434,7 @@ scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=training_steps
 
 # %%
 # training loop
+loss_list= []
 for step in range(training_steps):
     t0 = time.time()
     x, y = train_loader.next_batch()
@@ -428,12 +463,15 @@ for step in range(training_steps):
     tokens_per_sec = train_loader.B * train_loader.T / (t1 - t0)
     print(f"Step {step}, Loss: {loss.item()}, LR: {optimizer.param_groups[0]['lr']}, norm: {norm:.4f}, Time: {dt:.2f}ms, Tokens/s: {tokens_per_sec:.2f}")
     
+    if step % 5 == 0:
+        loss_list.append(loss.item())
+    
 
 #%%
 # Plotting the learning rate schedule
 
 import matplotlib.pyplot as plt
-plt.figure(figsize=(50, 20))
+plt.figure(figsize=(100, 40))
 plt.plot(range(training_steps), scheduler.lrs, marker='o')
 plt.title('Learning Rate Schedule: Warmup + CosineAnnealingWarmRestarts')
 plt.xlabel('step')

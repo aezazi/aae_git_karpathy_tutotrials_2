@@ -325,4 +325,7 @@ plt.show()
 print(sch.lrs)
 
 # %%
+print(510 % 5)
 
+
+# %%
