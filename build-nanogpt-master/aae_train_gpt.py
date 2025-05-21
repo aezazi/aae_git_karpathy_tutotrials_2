@@ -256,13 +256,21 @@ class GPT(nn.Module):
 
         return model
     
-    # NOTE: In PyTorch's AdamW optimizer, param_group is a dictionary specifying the tensors to be optimized along with group-specific optimization options. It allows for applying different hyperparameters, such as learning rate or weight decay, to different sets of parameters within the model. This is useful for fine-tuning specific layers or parts of the network with varying optimization strategies. optimizer.param_groups is a list of such dictionaries, where each dictionary corresponds to a different group of parameters. The optimizer iterates over these groups during the optimization process, applying the specified settings to each group.
+   
 
-    # configure_optimizers is a method that creates parameter groups (optim_groups) for the optimizer  to apply weight decay only to tensors that are involved in matmul (excludes bias and layernorm tensors). This is a performance optimization that allows for more efficient training on GPUs. It creates two parameter groups: one for the weights and one for the biases. The weights are optimized with weight decay and the biases and layernorms are optimized without weight decay. This is done to improve generalization and reduce overfitting. The method also sets the learning rate and weight decay for each parameter group.
-    # 
-    # It also implements GPU kernel fusion by . 
+    def configure_optimizers(self, weight_decay=0.01, learning_rate=6e-4, device_type= None):
+        
+     # NOTE: In PyTorch's AdamW optimizer, param_group is a dictionary specifying the tensors to be optimized along with group-specific optimization options. It allows for applying different hyperparameters, such as learning rate or weight decay, to different sets of parameters within the model. This is useful for fine-tuning specific layers or parts of the network with varying optimization strategies. optimizer.param_groups is a list of such dictionaries, where each dictionary corresponds to a different group of parameters. The optimizer iterates over these groups during the optimization process, applying the specified settings to each group.
 
-    def configure_optimizers(self, weight_decay=0.01, learning_rate=6e-4):
+    # configure_optimizers is a method that creates parameter groups (param_groups) for the optimizer  to apply weight decay only to tensors that are involved in matmul (excludes bias and layernorm tensors). This is a performance optimization that allows for more efficient training on GPUs. It creates two parameter groups: one for the weights and one for the biases. The weights are optimized with weight decay and the biases and layernorms are optimized without weight decay. This is done to improve generalization and reduce overfitting. The method also sets the learning rate and weight decay for each parameter group.
+    
+    # Note that my implementation of this method is different from Karpathy's.
+
+
+        assert device_type is not None, 'a device_type must be specified'
+
+        # create parameter groups for the optimizer to apply weight decay only to tensors that are not bias or layernorm.
+
         decay_params = set()
         no_decay_params = set()
         for name, parameter in self.named_parameters():  
@@ -270,18 +278,36 @@ class GPT(nn.Module):
                 no_decay_params.add(name)
             else:
                 decay_params.add(name)
+        param_groups = [
+            {"params": [parameter for name, parameter in self.named_parameters() if name in decay_params], "weight_decay": weight_decay},
+            {"params": [parameter for name, parameter in self.named_parameters() if name in no_decay_params], "weight_decay": 0.0}
+        ]
         
+        # use fusion for the optimizer if the device is cuda. This is a performance optimization that allows for more efficient training on GPUs. when fusion is available, PyTorch internally uses torch._foreach APIs or custom fused CUDA kernels. It avoids multiple reads/writes to GPU memory per parameter per step. Can lead to significant speedups in large-scale training tasks (e.g., transformer models with billions of parameters).
+        if device_type == 'cuda':
+            optimizer = torch.optim.AdamW(param_groups, lr=learning_rate, betas=(0.9, 0.95), weight_decay=weight_decay, eps=1e-8, fused=True)
+        else:
+            optimizer = torch.optim.AdamW(param_groups, lr=learning_rate, betas=(0.9, 0.95), weight_decay=weight_decay, eps=1e-8, fused=False)
+        
+        return optimizer
 
 
 
 # %%
-# check if the model loads correctly. This initializes the model with the pretrained weights from Huggingface.
-# model = GPT.from_pretrained('gpt2')
-# print('pretrained model loaded successfully!')
 
 # Now we want to train the model ourselves. To do this we first initialize the model with just our own configuration and no pretrained weights
 model = GPT(GPTConfig())
 print('Model initialized successfully!')
+
+#%%
+# create the optimizer.
+training_steps = 10  # the number of training steps
+base_lr = 6e-4
+
+optimizer = model.configure_optimizers(weight_decay=0.01, learning_rate=base_lr, device_type=device.type)
+print('Optimizer initialized successfully!')
+
+
 
 
 # %%
@@ -351,27 +377,6 @@ model.to(device)
 # Check model is on what device. 
 print(next(model.parameters()).device)
 
-#%%
-# create the optimizer.
-training_steps = 500  # the number of training steps
-base_lr = 6e-4
-
-optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr, betas=(0.9, 0.95), weight_decay=1e-8)
-#%%
-print(type(optimizer.param_groups[0]))
-print(optimizer.param_groups[0].keys())
-for name, param in model.named_parameters():
-    # if 'bias' in name or 'ln' in name:
-    print(name)
-
-decay_params = set()
-no_decay_params = set()
-for name, parameter in model.named_parameters():  
-    if 'bias' in name or 'ln' in name:
-        no_decay_params.add(name)
-    else:
-        decay_params.add(name)
-       
 
 # %%
 # create the learning rate scheduler
