@@ -18,7 +18,6 @@ class DataLoaderLite:
         print(f'Loaded {len(self.tokens)} tokens')
         print(f'Batch size: {B}, Sequence length: {T}')
         print(f'Tokens per batch: {(self.B * self.T)}')
-        print(f'1 epoch = {len(self.tokens) // (self.B * self.T)} batches')
         self.batches_per_epoch = len(self.tokens) // (self.B * self.T)
 
         # this keeps track of wherer we are in the text for batching

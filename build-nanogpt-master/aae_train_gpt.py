@@ -278,20 +278,6 @@ model.to(device)
 # Check model is on what device. 
 print(f'model and parameters are on device: {next(model.parameters()).device}')
 
-# %%
-# NOTE: I moved the code for the dataloader to a separate file called aae_utils.py. 
-from aae_utils import DataLoaderLite
-
-# initialize the dataloader based on the device type. The batch size and sequence length are set based on the device type and my experiments.
-
-# NOTE: using device.type to get device as string for if statements.
-if device.type == 'cuda':
-    train_loader = DataLoaderLite(B=16, T=1024)
-elif device.type == 'mps':
-    train_loader = DataLoaderLite(B=10, T=1024)
-else:
-    train_loader = DataLoaderLite(B=8, T=512)
-
 
 #%%
 # NOTE: I moved the code for optimizer configuration to a separate file called aae_utils.py.
@@ -303,15 +289,38 @@ optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.01, learni
 
 print('Optimizer initialized successfully!')
 
+# %%
+# NOTE: I moved the code for the dataloader to a separate file called aae_utils.py. 
+from aae_utils import DataLoaderLite
+
+# initialize the dataloader based on the device type. The batch size and sequence length are set based on the device type and my experiments.
+
+# NOTE: using device.type to get device as string for if statements.
+if device.type == 'cuda':
+    train_loader = DataLoaderLite(B=16, T=1024)
+elif device.type == 'mps':
+    train_loader = DataLoaderLite(B=8, T=1024)
+else:
+    train_loader = DataLoaderLite(B=8, T=512)
+
+# we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
+effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
+
+assert effective_batch_size_desired % (train_loader.B * train_loader.T) == 0, f"effective batch size {effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.T}"
+
+# this is the desired number of micro steps to accumulate gradients over. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU.
+accumulation_steps = effective_batch_size_desired // (train_loader.B * train_loader.T) 
+print(f"accumulation steps desired: {accumulation_steps}")
+
 
 #%%
 # create scheduler and launch training loop.
 # NOTE: I moved the code for the scheduler to a separate aae_utils.py file.
 from aae_utils import CosineLearingRateScheduler
 
-training_steps = 200
-# define the scheduler parameters
+training_steps = 50
 
+# define the scheduler parameters
 T_max = training_steps # the number of iterations over which lr is reduced to the minimum
 max_lr = base_lr
 min_lr = max_lr * 0.1
@@ -326,9 +335,9 @@ scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=T_max, restart
 print('Scheduler initialized successfully!')
 
 
-if device.type == 'cuda':
-    accumulation_steps = 8 # number of micro steps to accumulate gradients over
-elif device.type == 'mps':
+if device.type == 'cuda' or device.type == 'mps':
+    accumulation_steps = 64 # number of micro steps to accumulate gradients over
+else:
     accumulation_steps = 2
 
 loss_list= []
@@ -340,7 +349,6 @@ for step in range(training_steps):
         # this is a gradient accumulation step. We accumulate gradients over 4 steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
         x, y = train_loader.next_batch()
         
-
         # if the decive is 'cuda', we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs.
         if device.type == 'cuda':
             with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
