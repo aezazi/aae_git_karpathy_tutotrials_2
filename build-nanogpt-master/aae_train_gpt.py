@@ -261,35 +261,9 @@ class GPT(nn.Module):
 
 
 # %%
-
-
+#Instantiate the model nad implement torch.compile if cuda is available.
 model = GPT(GPTConfig())
-print('Model initialized successfully!')
 
-#%%
-from aae_utils import ConfigureOptimizer
-# create the optimizer.
-base_lr = 6e-4
-optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.01, learning_rate=base_lr, device_type=device.type)
-print('Optimizer initialized successfully!')
-
-
-# %%
-# Now we create a preliminary dataloader
-from aae_utils import DataLoaderLite
-
-# initialize the dataloader based on the device type. The batch size and sequence length are set based on the device type and my experiments.
-
-# NOTE: using device.type to get device as string for if statements.
-if device.type == 'cuda':
-    train_loader = DataLoaderLite(B=16, T=1024)
-elif device.type == 'mps':
-    train_loader = DataLoaderLite(B=12, T=1024)
-else:
-    train_loader = DataLoaderLite(B=8, T=512)
-
-
-#%%
 # Implement torch.compile.
 # if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
 
@@ -303,43 +277,83 @@ if device.type == 'cuda':
 model.to(device)
 
 # Check model is on what device. 
-print(next(model.parameters()).device)
+print(f'model and parameters are on device: {next(model.parameters()).device}')
+
+# %%
+# NOTE: I moved the code for the dataloader to a separate file called aae_utils.py. 
+from aae_utils import DataLoaderLite
+
+# initialize the dataloader based on the device type. The batch size and sequence length are set based on the device type and my experiments.
+
+# NOTE: using device.type to get device as string for if statements.
+if device.type == 'cuda':
+    train_loader = DataLoaderLite(B=16, T=1024)
+elif device.type == 'mps':
+    train_loader = DataLoaderLite(B=10, T=1024)
+else:
+    train_loader = DataLoaderLite(B=8, T=512)
 
 
 #%%
-# NOTE: i moved the code for the scheduler to a separate aae_utils.py file.
+# NOTE: I moved the code for optimizer configuration to a separate file called aae_utils.py.
+from aae_utils import ConfigureOptimizer
+
+# Instantiate and create the optimizer.
+base_lr = 6e-4
+optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.01, learning_rate=base_lr, device_type=device.type)
+
+print('Optimizer initialized successfully!')
+
+
+#%%
+# create scheduler.
+# NOTE: I moved the code for the scheduler to a separate aae_utils.py file.
 from aae_utils import CosineLearingRateScheduler
 
 # define the scheduler parameters
-training_steps = 5  # the number of training steps
+T_max = 5  # total number of steps over which the learning rate is scheduled. Note that this number is a placeholder and will be updated based on the number of steps in the training loop, batch size and accumulation steps. See training loop below
+
 max_lr = base_lr
 min_lr = max_lr * 0.1
-warm_up_steps = .1 * training_steps 
-T_max = training_steps # if not using restarts, the number of iterations over which lr is reduced to the minimum 
+warm_up_steps = .1 * T_max if .1 * T_max >= 3 else 0 
 restart = False # whether to use cosine annealing with restarts or not
 T_0 = train_loader.batches_per_epoch//2 # if using restarts, the number of iterations over which lr is reduced to the minimum before restart
 T_mult = 2 # the factor by which T_0 is multiplied at each restart.
 
-# instantiate the learning rate scheduler
-scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=training_steps, restart=restart, warm_up_steps=warm_up_steps, max_lr=max_lr, min_lr=min_lr, T_mult=T_mult, T_0=T_0)
+# instantiate and create learning rate scheduler
+scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=T_max, restart=restart, warm_up_steps=warm_up_steps, max_lr=max_lr, min_lr=min_lr, T_mult=T_mult, T_0=T_0)
 
+print('Scheduler initialized successfully!')
 
 # %%
 # training loop
+training_steps = 10
+if device.type == 'cuda':
+    accumulation_steps = 4 # number of micro steps to accumulate gradients over
+elif device.type == 'mps':
+    accumulation_steps = 2
+
 loss_list= []
 for step in range(training_steps):
     t0 = time.time()
-    x, y = train_loader.next_batch()
     optimizer.zero_grad()
+    loss_accum  = 0.0
+    for micro_step in range(accumulation_steps):
+        # this is a gradient accumulation step. We accumulate gradients over 4 steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
+        x, y = train_loader.next_batch()
+        
 
-    # if the decive is 'cuda', we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs.
-    if device.type == 'cuda':
-        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+        # if the decive is 'cuda', we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs.
+        if device.type == 'cuda':
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                logits, loss = model(x.to(device), y.to(device))
+        else:
             logits, loss = model(x.to(device), y.to(device))
-    else:
-        logits, loss = model(x.to(device), y.to(device))
+        
+        loss = loss / accumulation_steps # divide the loss by the number of micro steps to get the average loss of the accumulated micro steps
+        loss_accum += loss.detach() # accumulate the loss over the micro steps. Look at Pytorch documentation for more details on tensor.detach() vs. tensor.item()
+        loss.backward()
 
-    loss.backward()
     # clip the gradients to prevent exploding gradients
     norm = nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optimizer.step()
@@ -352,8 +366,8 @@ for step in range(training_steps):
         torch.cuda.synchronize()
     t1 = time.time()
     dt = (t1 - t0) * 1000
-    tokens_per_sec = train_loader.B * train_loader.T / (t1 - t0)
-    print(f"Step {step}, Loss: {loss.item()}, LR: {optimizer.param_groups[0]['lr']}, norm: {norm:.4f}, Time: {dt:.2f}ms, Tokens/s: {tokens_per_sec:.2f}")
+    tokens_per_sec = train_loader.B * train_loader.T * accumulation_steps/ (t1 - t0)
+    print(f"Step {step}, Loss: {loss_accum.item()}, LR: {optimizer.param_groups[0]['lr']}, norm: {norm:.4f}, Time: {dt:.2f}ms, Tokens/s: {tokens_per_sec:.2f}")
     
     if step % 5 == 0:
         loss_list.append(loss.item())
