@@ -105,11 +105,12 @@ class CosineLearingRateScheduler:
         from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
         from torch.optim.lr_scheduler import CosineAnnealingLR
         
-        if restart:
+        if self.restart:
             self.scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=self.T_0, T_mult=self.T_mult, eta_min=self.min_lr)
         else:
             self.scheduler = CosineAnnealingLR(optimizer, T_max=self.T_max, 
                                                eta_min=self.min_lr)
+     
 
     def set_lr(self, step):
         if step < self.warm_up_steps:

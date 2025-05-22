@@ -275,7 +275,6 @@ if device.type == 'cuda':
     print('torch.compile applied to model')
 
 model.to(device)
-
 # Check model is on what device. 
 print(f'model and parameters are on device: {next(model.parameters()).device}')
 
@@ -306,18 +305,19 @@ print('Optimizer initialized successfully!')
 
 
 #%%
-# create scheduler.
+# create scheduler and launch training loop.
 # NOTE: I moved the code for the scheduler to a separate aae_utils.py file.
 from aae_utils import CosineLearingRateScheduler
 
+training_steps = 200
 # define the scheduler parameters
-T_max = 5  # total number of steps over which the learning rate is scheduled. Note that this number is a placeholder and will be updated based on the number of steps in the training loop, batch size and accumulation steps. See training loop below
 
+T_max = training_steps # the number of iterations over which lr is reduced to the minimum
 max_lr = base_lr
 min_lr = max_lr * 0.1
-warm_up_steps = .1 * T_max if .1 * T_max >= 3 else 0 
+warm_up_steps = .1 * T_max 
 restart = False # whether to use cosine annealing with restarts or not
-T_0 = train_loader.batches_per_epoch//2 # if using restarts, the number of iterations over which lr is reduced to the minimum before restart
+T_0 = T_max // 3 # if using restarts, the number of iterations over which lr is reduced to the minimum before restart
 T_mult = 2 # the factor by which T_0 is multiplied at each restart.
 
 # instantiate and create learning rate scheduler
@@ -325,11 +325,9 @@ scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=T_max, restart
 
 print('Scheduler initialized successfully!')
 
-# %%
-# training loop
-training_steps = 10
+
 if device.type == 'cuda':
-    accumulation_steps = 4 # number of micro steps to accumulate gradients over
+    accumulation_steps = 8 # number of micro steps to accumulate gradients over
 elif device.type == 'mps':
     accumulation_steps = 2
 
@@ -370,7 +368,7 @@ for step in range(training_steps):
     print(f"Step {step}, Loss: {loss_accum.item()}, LR: {optimizer.param_groups[0]['lr']}, norm: {norm:.4f}, Time: {dt:.2f}ms, Tokens/s: {tokens_per_sec:.2f}")
     
     if step % 5 == 0:
-        loss_list.append(loss.item())
+        loss_list.append(loss_accum.item())
     
 
 #%%
