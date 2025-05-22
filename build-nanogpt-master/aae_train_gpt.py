@@ -10,6 +10,7 @@ from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
 
+
 #%%
 # Set the device      
 if torch.cuda.is_available():
@@ -19,11 +20,12 @@ elif torch.backends.mps.is_available():
 else:
     device = torch.device('cpu')
 
-# note that the variable "device" is a pytorch device object. It is not a string. So you cannot use it as a string in if statements. You have to use the .type attribute of the device object to get the type of the device as a string.
+# note that the variable "device" is a pytorch device object. It is not a string. So you cannot use it as a string in an if statements. You have to use the .type attribute of the device object to get the type of the device as a string.
 print(f'type of device object: {type(device)}')
 print(f'device type as string: {device.type}')
 
 # %%
+# This is the configuration for the GPT model. It defines the hyperparameters for the model. The block size is the maximum sequence length, vocab size is the size of the vocabulary, n_layer is the number of transformer blocks, n_head is the number of attention heads, and n_embd is the embedding dimension. 
 """
 Note that in the initialization of the network in the MLP class, we are multiplying n_embd (the dimensions of the original embeddings) by 4. So for the inner layers, the dimensionality of the model is 384 * 4 =1536. 
 """
@@ -37,10 +39,9 @@ class GPTConfig:
     n_head: int = 12
     n_embd: int = 768
 
-#%%
 # instantiate and check the config
 config = GPTConfig()
-config.block_size
+print(f'GPTConfig instantiated with block size: {config.block_size}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
 
 #%%
 class CausalSelfAttention(nn.Module):
@@ -365,6 +366,7 @@ if device.type == 'cuda':
     torch.set_float32_matmul_precision('high')
     print('using high precision for cuda')
     model = torch.compile(model)
+    print('torch.compile applied to model')
 
 model.to(device)
 
