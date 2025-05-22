@@ -297,7 +297,7 @@ from aae_utils import DataLoaderLite
 
 # NOTE: using device.type to get device as string for if statements.
 if device.type == 'cuda':
-    train_loader = DataLoaderLite(B=16, T=1024)
+    train_loader = DataLoaderLite(B=32, T=1024)
 elif device.type == 'mps':
     train_loader = DataLoaderLite(B=8, T=1024)
 else:
