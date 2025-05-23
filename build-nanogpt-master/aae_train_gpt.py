@@ -261,7 +261,7 @@ class GPT(nn.Module):
 
 
 # %%
-#Instantiate the model nad implement torch.compile if cuda is available.
+#Instantiate the model and implement torch.compile if cuda is available.
 model = GPT(GPTConfig())
 
 # Implement torch.compile.
@@ -275,7 +275,7 @@ if device.type == 'cuda':
     print('torch.compile applied to model')
 
 model.to(device)
-# Check model is on what device. 
+# Check model is on which device. 
 print(f'model and parameters are on device: {next(model.parameters()).device}')
 
 
@@ -290,6 +290,7 @@ optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.01, learni
 print('Optimizer initialized successfully!')
 
 # %%
+# Instantiate the dataloader and load the data.
 # NOTE: I moved the code for the dataloader to a separate file called aae_utils.py. 
 from aae_utils import DataLoaderLite
 
@@ -297,7 +298,7 @@ from aae_utils import DataLoaderLite
 
 # NOTE: using device.type to get device as string for if statements.
 if device.type == 'cuda':
-    train_loader = DataLoaderLite(B=32, T=1024)
+    train_loader = DataLoaderLite(B=16, T=1024)
 elif device.type == 'mps':
     train_loader = DataLoaderLite(B=8, T=1024)
 else:
@@ -335,9 +336,10 @@ scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=T_max, restart
 print('Scheduler initialized successfully!')
 
 
-if device.type == 'cuda' or device.type == 'mps':
-    accumulation_steps = 64 # number of micro steps to accumulate gradients over
-else:
+#%%
+# Run the training loop.
+# if cuda or mps is not available, use just 2 accumulation steps. 
+if device.type != 'cuda' or device.type == 'mps': 
     accumulation_steps = 2
 
 loss_list= []
@@ -345,8 +347,8 @@ for step in range(training_steps):
     t0 = time.time()
     optimizer.zero_grad()
     loss_accum  = 0.0
-    for micro_step in range(accumulation_steps):
-        # this is a gradient accumulation step. We accumulate gradients over 4 steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
+    for micro_step in range(16):
+        # this is a gradient accumulation step. We accumulate gradients over desired accumalation steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
         x, y = train_loader.next_batch()
         
         # if the decive is 'cuda', we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs.
