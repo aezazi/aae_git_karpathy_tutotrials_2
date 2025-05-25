@@ -268,6 +268,7 @@ import torch.distributed as dist
 ddp = int(os.environ.get('RANK', -1)) != -1
 
 if ddp:
+    print('Running in Distributed Data Parallel (DDP) mode')
     # to use DDP, we must have cuda available
     assert torch.cuda.is_available(), "Distributed Data Parallel (DDP) requires CUDA to be available."
     
@@ -307,6 +308,13 @@ torch.manual_seed(42) # set the random seed for reproducibility
 if torch.cuda.is_available():
     torch.cuda.manual_seed(42) # set the random seed for cuda for reproducibility
 
+#%%
+# DDP launch for e.g. 8 GPUs:
+# torchrun --standalone --nproc_per_node=4 aae_train_gpt_multi_GPU.py
+# the code below is to check if the DDP is working correctly. It prints the rank of the current process and the total number of processes. This is useful for debugging and ensuring that the DDP is set up correctly.
+print('I am GPU rank {ddp_rank}, of {ddp_world_size}')
+print('Bye')
+import sys; sys.exit(0) # exit the script after printing the rank. This is just for testing the DDP setup. Remove this line to continue with the training loop.
 
 # %%
 #Instantiate the model and implement torch.compile if cuda is available.
@@ -364,11 +372,6 @@ if master_process:
     print(f"effective batch size desired: {effective_batch_size_desired}")
     print(f"accumulation steps desired: {accumulation_steps}")
 
-#%%
-# the code below is to check if the DDP is working correctly. It prints the rank of the current process and the total number of processes. This is useful for debugging and ensuring that the DDP is set up correctly.
-print('I am GPU rank {ddp_rank}, of {ddp_world_size}')
-print('Bye')
-import sys; sys.exit(0) # exit the script after printing the rank. This is just for testing the DDP setup. Remove this line to continue with the training loop.
 
 #%%
 # create scheduler and launch training loop.
