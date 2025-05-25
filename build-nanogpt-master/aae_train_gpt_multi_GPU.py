@@ -300,9 +300,7 @@ else:
     else:
         device = torch.device('cpu')
 
-# note that the variable "device" is a pytorch device object. It is not a string. So you cannot use it as a string in an if statements. You have to use the .type attribute of the device object to get the type of the device as a string.
-print(f'type of device object: {type(device)}')
-print(f'device type as string: {device.type}')
+
 
 torch.manual_seed(42) # set the random seed for reproducibility
 if torch.cuda.is_available():
@@ -312,7 +310,7 @@ if torch.cuda.is_available():
 # DDP launch for e.g. 8 GPUs:
 # torchrun --standalone --nproc_per_node=4 aae_train_gpt_multi_GPU.py
 # the code below is to check if the DDP is working correctly. It prints the rank of the current process and the total number of processes. This is useful for debugging and ensuring that the DDP is set up correctly.
-print('I am GPU rank {ddp_rank}, of {ddp_world_size}')
+print(f'I am GPU rank {ddp_rank}, of {ddp_world_size}')
 print('Bye')
 import sys; sys.exit(0) # exit the script after printing the rank. This is just for testing the DDP setup. Remove this line to continue with the training loop.
 
@@ -344,6 +342,14 @@ base_lr = 6e-4
 optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.01, learning_rate=base_lr, device_type=device.type)
 
 print('Optimizer initialized successfully!')
+
+#%%
+# DDP launch for e.g. 8 GPUs:
+# torchrun --standalone --nproc_per_node=4 aae_train_gpt_multi_GPU.py
+# the code below is to check if the DDP is working correctly. It prints the rank of the current process and the total number of processes. This is useful for debugging and ensuring that the DDP is set up correctly.
+print(f'I am GPU rank {ddp_rank}, of {ddp_world_size}')
+print('Bye')
+import sys; sys.exit(0) # exit the script after printing the rank. This is just for testing the DDP setup. Remove this line to continue with the training loop.
 
 # %%
 # Instantiate the dataloader and load the data.
