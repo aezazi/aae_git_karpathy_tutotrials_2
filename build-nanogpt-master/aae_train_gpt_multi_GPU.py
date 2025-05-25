@@ -10,19 +10,18 @@ from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
 
-
 #%%
 # Set the device      
-if torch.cuda.is_available():
-    device = torch.device('cuda')
-elif torch.backends.mps.is_available():
-    device = torch.device('mps')
-else:
-    device = torch.device('cpu')
+# if torch.cuda.is_available():
+#     device = torch.device('cuda')
+# elif torch.backends.mps.is_available():
+#     device = torch.device('mps')
+# else:
+#     device = torch.device('cpu')
 
 # note that the variable "device" is a pytorch device object. It is not a string. So you cannot use it as a string in an if statements. You have to use the .type attribute of the device object to get the type of the device as a string.
-print(f'type of device object: {type(device)}')
-print(f'device type as string: {device.type}')
+# print(f'type of device object: {type(device)}')
+# print(f'device type as string: {device.type}')
 
 # %%
 # This is the configuration for the GPT model. It defines the hyperparameters for the model. The block size is the maximum sequence length, vocab size is the size of the vocabulary, n_layer is the number of transformer blocks, n_head is the number of attention heads, and n_embd is the embedding dimension. 
@@ -259,6 +258,55 @@ class GPT(nn.Module):
     
    
 
+#%%
+# DDP setup
+from torch.distributed import init_process_group, destroy_process_group
+from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed as dist
+
+# a simple way to check whether your script is being run under Distributed Data Parallel (DDP) — specifically when using torchrun.
+ddp = int(os.environ.get('RANK', -1)) != -1
+
+if ddp:
+    # to use DDP, we must have cuda available
+    assert torch.cuda.is_available(), "Distributed Data Parallel (DDP) requires CUDA to be available."
+    
+    init_process_group(backend='nccl') # initialize the process group for DDP
+    ddp_rank = int(os.environ['RANK']) # get the rank of the current process
+    ddp_local_rank = int(os.environ['LOCAL_RANK']) # get the local rank of the current process
+    ddp_world_size = int(os.environ['WORLD_SIZE']) # get the total number of processes
+    print(f"Running in DDP mode with rank {ddp_rank} and world size {ddp_world_size}")
+    
+    # set the device to the local rank of the current process
+    device = f'cuda:{ddp_local_rank}' 
+    torch.cuda.set_device(device) # set the device for the current process
+
+    # the master process will perform logging and saving checkpoints.
+    master_process = ddp_rank == 0 
+
+else:
+    # if not using DDP, just use the default device
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    ddp_rank = 0
+    ddp_local_rank = 0
+    ddp_world_size = 1
+    master_process = True
+
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+    elif torch.backends.mps.is_available():
+        device = torch.device('mps')
+    else:
+        device = torch.device('cpu')
+
+# note that the variable "device" is a pytorch device object. It is not a string. So you cannot use it as a string in an if statements. You have to use the .type attribute of the device object to get the type of the device as a string.
+print(f'type of device object: {type(device)}')
+print(f'device type as string: {device.type}')
+
+torch.manual_seed(42) # set the random seed for reproducibility
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(42) # set the random seed for cuda for reproducibility
+
 
 # %%
 #Instantiate the model and implement torch.compile if cuda is available.
@@ -307,12 +355,20 @@ else:
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
 effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
 
-assert effective_batch_size_desired % (train_loader.B * train_loader.T) == 0, f"effective batch size {effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.T}"
+assert effective_batch_size_desired % (train_loader.B * train_loader.T * ddp_world_size) == 0, f"effective batch size {effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.T}"
 
 # this is the desired number of micro steps to accumulate gradients over. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU.
-accumulation_steps = effective_batch_size_desired // (train_loader.B * train_loader.T) 
-print(f"accumulation steps desired: {accumulation_steps}")
+accumulation_steps = effective_batch_size_desired // (train_loader.B * train_loader.T * ddp_world_size) 
 
+if master_process:
+    print(f"effective batch size desired: {effective_batch_size_desired}")
+    print(f"accumulation steps desired: {accumulation_steps}")
+
+#%%
+# the code below is to check if the DDP is working correctly. It prints the rank of the current process and the total number of processes. This is useful for debugging and ensuring that the DDP is set up correctly.
+print('I am GPU rank {ddp_rank}, of {ddp_world_size}')
+print('Bye')
+import sys; sys.exit(0) # exit the script after printing the rank. This is just for testing the DDP setup. Remove this line to continue with the training loop.
 
 #%%
 # create scheduler and launch training loop.
@@ -338,16 +394,16 @@ print('Scheduler initialized successfully!')
 
 #%%
 # Run the training loop.
-# if cuda or mps is not available, use just 2 accumulation steps. 
+# if cuda or mps is not available, use just 4 accumulation steps. 
 if device.type != 'cuda' or device.type == 'mps': 
-    accumulation_steps = 2
+    accumulation_steps = 4
 
 loss_list= []
 for step in range(training_steps):
     t0 = time.time()
     optimizer.zero_grad()
     loss_accum  = 0.0
-    for micro_step in range(16):
+    for micro_step in range(accumulation_steps):
         # this is a gradient accumulation step. We accumulate gradients over desired accumalation steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
         x, y = train_loader.next_batch()
         

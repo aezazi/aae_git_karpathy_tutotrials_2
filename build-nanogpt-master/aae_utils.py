@@ -40,6 +40,34 @@ class DataLoaderLite:
             self.current_position = 0
         
         return x, y
+    
+class DataLoaderMultiGPU:
+    def __init__(self, B, T, device_type=None):
+        self.B = B
+        self.T = T
+       
+
+    def next_batch(self):
+        B, T = self.B, self.T
+
+        # select a sequence of tokens equal to batch size * sequence length + 1 (for the target token)
+        buf = self.tokens[self.current_position:self.current_position + B*T + 1]
+        self.current_position += B*T # update the current position in the text
+        
+        # create the input and target sequences from the buffer
+        x = buf[:-1].view(B, T) # input sequence
+        y = buf[1:].view(B, T) # target sequence
+
+        # if loading the next batch would go beyond the end of the training text, reset to the beginning of the text
+        if self.current_position + B*T + 1 > len(self.tokens):
+            # reset to the beginning of the text
+            self.current_position = 0
+        
+        if self.device_type == 'cuda':
+            x = x.cuda(non_blocking=True)
+            y = y.cuda(non_blocking=True)
+
+        return x, y
 # %%
 # class to configure the optimizer
 
