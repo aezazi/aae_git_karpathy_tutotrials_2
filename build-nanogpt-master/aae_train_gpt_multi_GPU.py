@@ -14,9 +14,12 @@ import numpy as np
 #%%
 assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
 
-# note that the variable "device" is a pytorch device object. It is not a string. So you cannot use it as a string in an if statements. You have to use the .type attribute of the device object to get the type of the device as a string.
-# print(f'type of device object: {type(device)}')
-# print(f'device type as string: {device.type}')
+# a simple way to check whether your script is being run under Distributed Data Parallel (DDP) — specifically when using torchrun. Note that I moved  this code to the top of the script so that I can immediately check if the script is running in DDP mode. Karpathy has it much later in the script, but I find it more convenient to have it at the top.
+ddp = int(os.environ.get('RANK', -1)) != -1
+if ddp:
+    master_process = int(os.environ['RANK']) == 0
+    if master_process:
+        print('Running in Distributed Data Parallel (DDP) mode')
 
 # %%
 # This is the configuration for the GPT model. It defines the hyperparameters for the model. The block size is the maximum sequence length, vocab size is the size of the vocabulary, n_layer is the number of transformer blocks, n_head is the number of attention heads, and n_embd is the embedding dimension. 
@@ -35,7 +38,9 @@ class GPTConfig:
 
 # instantiate and check the config
 config = GPTConfig()
-print(f'GPTConfig instantiated with block size: {config.block_size}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
+
+if master_process:
+    print(f'GPTConfig instantiated with block size: {config.block_size}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
 
 #%%
 class CausalSelfAttention(nn.Module):
@@ -259,13 +264,7 @@ from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 
-# a simple way to check whether your script is being run under Distributed Data Parallel (DDP) — specifically when using torchrun.
-ddp = int(os.environ.get('RANK', -1)) != -1
-
 if ddp:
-    print('Running in Distributed Data Parallel (DDP) mode')
-    # to use DDP, we must have cuda available
-    assert torch.cuda.is_available(), "Distributed Data Parallel (DDP) requires CUDA to be available."
     
     # Note that LOCAL_RANK is the rank of the process on one given node (when using multiple nodes), while RANK is the rank of the process across all nodes (when using multiple nodes). When using a setup with just one node, LOCAL_RANK and RANK are the same. 
     init_process_group(backend='nccl') # initialize the process group for DDP
@@ -306,7 +305,6 @@ if torch.cuda.is_available():
 #Instantiate the model and implement torch.compile if cuda is available.
 # if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
 
-assert device.type == 'cuda', "This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU and decice is set to 'cuda'."
 
 model = GPT(GPTConfig())
 
@@ -321,6 +319,7 @@ if ddp:
     # wrap the model in DDP if using DDP
     model = DDP(model, device_ids=[ddp_local_rank])
     print(f'Model wrapped in DistributedDataParallel (DDP) on device: {device}')
+raw_model = model.module if ddp else model # get the raw model from the DDP wrapper. This is useful for accessing the model's parameters and methods directly.
 
 
 #%%
@@ -330,7 +329,7 @@ from aae_utils import ConfigureOptimizer
 
 
 base_lr = 6e-4
-optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.1, learning_rate=base_lr, device_type=device.type)
+optimizer = ConfigureOptimizer(raw_model).create_optimizer(weight_decay=0.1, learning_rate=base_lr, device_type=device)
 
 print('Optimizer initialized successfully! on GPU rank {ddp_rank}, of {ddp_world_size}')
 
@@ -349,7 +348,7 @@ from aae_utils import DataLoaderMultiGPU
 
 # initialize the dataloader based on the device type. The batch size and sequence length are set based on the device type and my experiments.
 
-train_loader = DataLoaderMultiGPU(B=16, T=1024, process_rank = ddp_rank,ddp_world_size=ddp_world_size)
+train_loader = DataLoaderMultiGPU(B=16, T=1024, process_rank = ddp_rank, num_processes=ddp_world_size)
 
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
 effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
@@ -417,7 +416,7 @@ for step in range(training_steps):
 
 
     if ddp:
-        dist.all_reduce(loss_aacum, op=dist.ReduceOp.AVG)
+        dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG)
 
     # clip the gradients to prevent exploding gradients
     norm = nn.utils.clip_grad_norm_(model.parameters(), 1.0)

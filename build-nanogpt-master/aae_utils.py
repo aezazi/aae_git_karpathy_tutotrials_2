@@ -76,9 +76,9 @@ class DataLoaderMultiGPU:
             # reset to the beginning of the text that was assisgned to this process.
             self.current_position = self.B * self.T * self.process_rank 
         
-        if self.device_type == 'cuda':
-            x = x.cuda(non_blocking=True)
-            y = y.cuda(non_blocking=True)
+        
+        x = x.cuda(non_blocking=True)
+        y = y.cuda(non_blocking=True)
 
         return x, y
 # %%
