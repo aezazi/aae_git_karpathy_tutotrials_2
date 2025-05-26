@@ -272,11 +272,11 @@ if ddp:
     # to use DDP, we must have cuda available
     assert torch.cuda.is_available(), "Distributed Data Parallel (DDP) requires CUDA to be available."
     
+    # Note that LOCAL_RANK is the rank of the process on one given node (when using multiple nodes), while RANK is the rank of the process across all nodes (when using multiple nodes). When using a setup with just one node, LOCAL_RANK and RANK are the same. 
     init_process_group(backend='nccl') # initialize the process group for DDP
     ddp_rank = int(os.environ['RANK']) # get the rank of the current process
     ddp_local_rank = int(os.environ['LOCAL_RANK']) # get the local rank of the current process
     ddp_world_size = int(os.environ['WORLD_SIZE']) # get the total number of processes
-    print(f"Running in DDP mode with rank {ddp_rank} and world size {ddp_world_size}")
     
     # set the device to the local rank of the current process
     device = f'cuda:{ddp_local_rank}' 
