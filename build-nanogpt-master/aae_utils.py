@@ -20,7 +20,7 @@ class DataLoaderLite:
         print(f'Tokens per batch: {(self.B * self.T)}')
         self.batches_per_epoch = len(self.tokens) // (self.B * self.T)
 
-        # this keeps track of wherer we are in the text for batching
+        # this keeps track of where we are in the text for batching
         self.current_position = 0
 
     def next_batch(self):
@@ -42,26 +42,39 @@ class DataLoaderLite:
         return x, y
     
 class DataLoaderMultiGPU:
-    def __init__(self, B, T, device_type=None):
+    def __init__(self, B, T, process_rank=0, num_processes=1):
         self.B = B
         self.T = T
-       
+        self.process_rank = process_rank
+        self.num_processes = num_processes
+        with open('input.txt', 'r') as f:
+            text = f.read()
+        enc = tiktoken.get_encoding("gpt2")
+        tokens = enc.encode(text)
+        self.tokens = torch.tensor(tokens, dtype=torch.long)
+        print(f'Loaded {len(self.tokens)} tokens')
+        print(f'Batch size: {B}, Sequence length: {T}')
+        print(f'Tokens per batch: {(self.B * self.T)}')
+
+        # this keeps track of where we are in the text for batching. Note that the current position is multiplied by the process RANK to ensure that each process gets a different part of the text. The text assigned to each process remains the same throughout training. 
+        self.current_position = self.B * self.T * self.process_rank 
 
     def next_batch(self):
         B, T = self.B, self.T
 
         # select a sequence of tokens equal to batch size * sequence length + 1 (for the target token)
         buf = self.tokens[self.current_position:self.current_position + B*T + 1]
-        self.current_position += B*T # update the current position in the text
         
         # create the input and target sequences from the buffer
         x = buf[:-1].view(B, T) # input sequence
         y = buf[1:].view(B, T) # target sequence
 
+        self.current_position += B * T * self.num_processes # update the current position in the text
+
         # if loading the next batch would go beyond the end of the training text, reset to the beginning of the text
-        if self.current_position + B*T + 1 > len(self.tokens):
-            # reset to the beginning of the text
-            self.current_position = 0
+        if self.current_position + B*T*self.num_processes + 1 > len(self.tokens):
+            # reset to the beginning of the text that was assisgned to this process.
+            self.current_position = self.B * self.T * self.process_rank 
         
         if self.device_type == 'cuda':
             x = x.cuda(non_blocking=True)

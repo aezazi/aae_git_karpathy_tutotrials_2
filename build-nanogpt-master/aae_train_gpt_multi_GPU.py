@@ -9,15 +9,10 @@ from torch.nn import functional as F
 from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
+import numpy as np
 
 #%%
-# Set the device      
-# if torch.cuda.is_available():
-#     device = torch.device('cuda')
-# elif torch.backends.mps.is_available():
-#     device = torch.device('mps')
-# else:
-#     device = torch.device('cpu')
+assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
 
 # note that the variable "device" is a pytorch device object. It is not a string. So you cannot use it as a string in an if statements. You have to use the .type attribute of the device object to get the type of the device as a string.
 # print(f'type of device object: {type(device)}')
@@ -299,72 +294,62 @@ else:
         device = torch.device('mps')
     else:
         device = torch.device('cpu')
-
-
+    
+    print(f"using device: {device}")
 
 torch.manual_seed(42) # set the random seed for reproducibility
 if torch.cuda.is_available():
     torch.cuda.manual_seed(42) # set the random seed for cuda for reproducibility
 
-#%%
-# DDP launch for e.g. 8 GPUs:
-# torchrun --standalone --nproc_per_node=4 aae_train_gpt_multi_GPU.py
-# the code below is to check if the DDP is working correctly. It prints the rank of the current process and the total number of processes. This is useful for debugging and ensuring that the DDP is set up correctly.
-print(f'I am GPU rank {ddp_rank}, of {ddp_world_size}')
-print('Bye')
-import sys; sys.exit(0) # exit the script after printing the rank. This is just for testing the DDP setup. Remove this line to continue with the training loop.
 
 # %%
 #Instantiate the model and implement torch.compile if cuda is available.
-model = GPT(GPTConfig())
-
-# Implement torch.compile.
 # if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
 
-if device.type == 'cuda':
-    print(f'using device: {device}')
-    torch.set_float32_matmul_precision('high')
-    print('using high precision for cuda')
-    model = torch.compile(model)
-    print('torch.compile applied to model')
+assert device.type == 'cuda', "This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU and decice is set to 'cuda'."
 
+model = GPT(GPTConfig())
+
+torch.set_float32_matmul_precision('high')
 model.to(device)
+model = torch.compile(model)
+
 # Check model is on which device. 
 print(f'model and parameters are on device: {next(model.parameters()).device}')
 
+if ddp:
+    # wrap the model in DDP if using DDP
+    model = DDP(model, device_ids=[ddp_local_rank])
+    print(f'Model wrapped in DistributedDataParallel (DDP) on device: {device}')
+
 
 #%%
+# Instantiate and create the optimizer.
 # NOTE: I moved the code for optimizer configuration to a separate file called aae_utils.py.
 from aae_utils import ConfigureOptimizer
 
-# Instantiate and create the optimizer.
-base_lr = 6e-4
-optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.01, learning_rate=base_lr, device_type=device.type)
 
-print('Optimizer initialized successfully!')
+base_lr = 6e-4
+optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.1, learning_rate=base_lr, device_type=device.type)
+
+print('Optimizer initialized successfully! on GPU rank {ddp_rank}, of {ddp_world_size}')
 
 #%%
-# DDP launch for e.g. 8 GPUs:
+# DDP launch for e.g. 4 GPUs:
 # torchrun --standalone --nproc_per_node=4 aae_train_gpt_multi_GPU.py
 # the code below is to check if the DDP is working correctly. It prints the rank of the current process and the total number of processes. This is useful for debugging and ensuring that the DDP is set up correctly.
-print(f'I am GPU rank {ddp_rank}, of {ddp_world_size}')
-print('Bye')
-import sys; sys.exit(0) # exit the script after printing the rank. This is just for testing the DDP setup. Remove this line to continue with the training loop.
+# print(f'I am GPU rank {ddp_rank}, of {ddp_world_size}')
+# print('Bye')
+# import sys; sys.exit(0) # exit the script after printing the rank. This is just for testing the DDP setup. Remove this line to continue with the training loop.
 
 # %%
 # Instantiate the dataloader and load the data.
 # NOTE: I moved the code for the dataloader to a separate file called aae_utils.py. 
-from aae_utils import DataLoaderLite
+from aae_utils import DataLoaderMultiGPU
 
 # initialize the dataloader based on the device type. The batch size and sequence length are set based on the device type and my experiments.
 
-# NOTE: using device.type to get device as string for if statements.
-if device.type == 'cuda':
-    train_loader = DataLoaderLite(B=16, T=1024)
-elif device.type == 'mps':
-    train_loader = DataLoaderLite(B=8, T=1024)
-else:
-    train_loader = DataLoaderLite(B=8, T=512)
+train_loader = DataLoaderMultiGPU(B=16, T=1024, process_rank = ddp_rank,ddp_world_size=ddp_world_size)
 
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
 effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
@@ -398,15 +383,12 @@ T_mult = 2 # the factor by which T_0 is multiplied at each restart.
 # instantiate and create learning rate scheduler
 scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=T_max, restart=restart, warm_up_steps=warm_up_steps, max_lr=max_lr, min_lr=min_lr, T_mult=T_mult, T_0=T_0)
 
-print('Scheduler initialized successfully!')
+print('Scheduler initialized successfully on GPU rank {ddp_rank}, of {ddp_world_size}!')
 
 
 #%%
 # Run the training loop.
-# if cuda or mps is not available, use just 4 accumulation steps. 
-if device.type != 'cuda' or device.type == 'mps': 
-    accumulation_steps = 4
-
+model.train() # set the model to training mode
 loss_list= []
 for step in range(training_steps):
     t0 = time.time()
@@ -415,17 +397,27 @@ for step in range(training_steps):
     for micro_step in range(accumulation_steps):
         # this is a gradient accumulation step. We accumulate gradients over desired accumalation steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
         x, y = train_loader.next_batch()
+        x, y = x.to(device), y.to(device) # move the data to the device. 
+
+        # By default, ddp synchronizes the loss from each process after each micro step by taking an average of all the processes and making that average the loss for all the processes for that step. Its very inefficient to do this at each micro_step. So we want to only synchronize gradients among all the processes on the last micro step. See Karpathy's video tutorial at 2:57:00 for more details. The code below sets the require_backward_grad_sync attribute of the model to True only on the last micro step. 
+        if ddp:
+            model.require_backward_grad_sync = (micro_step == accumulation_steps - 1) 
+
+        # we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs. The device must be cuda.
+        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+            logits, loss = model(x, y)
         
-        # if the decive is 'cuda', we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs.
-        if device.type == 'cuda':
-            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-                logits, loss = model(x.to(device), y.to(device))
-        else:
-            logits, loss = model(x.to(device), y.to(device))
         
-        loss = loss / accumulation_steps # divide the loss by the number of micro steps to get the average loss of the accumulated micro steps
-        loss_accum += loss.detach() # accumulate the loss over the micro steps. Look at Pytorch documentation for more details on tensor.detach() vs. tensor.item()
+        # divide the loss by the number of micro steps to get the average loss of the accumulated micro steps
+        loss = loss / accumulation_steps 
+        
+        # Look at Pytorch documentation for more details on tensor.detach() vs. tensor.item()
+        loss_accum += loss.detach() 
         loss.backward()
+
+
+    if ddp:
+        dist.all_reduce(loss_aacum, op=dist.ReduceOp.AVG)
 
     # clip the gradients to prevent exploding gradients
     norm = nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -433,19 +425,22 @@ for step in range(training_steps):
     scheduler.set_lr(step)
 
     # synchronize the device to make sure all operations are complete before measuring time
-    if device.type == 'mps':
-        torch.mps.synchronize()
-    elif device.type == 'cuda':
-        torch.cuda.synchronize()
+    torch.cuda.synchronize()
+    
     t1 = time.time()
     dt = (t1 - t0) * 1000
-    tokens_per_sec = train_loader.B * train_loader.T * accumulation_steps/ (t1 - t0)
-    print(f"Step {step}, Loss: {loss_accum.item()}, LR: {optimizer.param_groups[0]['lr']}, norm: {norm:.4f}, Time: {dt:.2f}ms, Tokens/s: {tokens_per_sec:.2f}")
+    tokens_processed = train_loader.B * train_loader.T * accumulation_steps * ddp_world_size
+    tokens_per_sec = tokens_processed / dt
+    if master_process:
+        print(f"Step {step}, Loss: {loss_accum.item()}, LR: {optimizer.param_groups[0]['lr']}, norm: {norm:.4f}, Time: {dt:.2f}ms, Tokens/s: {tokens_per_sec:.2f}")
     
     if step % 5 == 0:
         loss_list.append(loss_accum.item())
     
-
+    if ddp:
+        destroy_process_group()
+    
+    import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
 #%%
 # Plotting the learning rate schedule
 

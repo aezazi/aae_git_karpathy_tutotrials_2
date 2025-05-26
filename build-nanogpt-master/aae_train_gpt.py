@@ -315,8 +315,9 @@ print(f"accumulation steps desired: {accumulation_steps}")
 
 
 #%%
-# create scheduler and launch training loop.
 # NOTE: I moved the code for the scheduler to a separate aae_utils.py file.
+# create scheduler and launch training loop.
+
 from aae_utils import CosineLearingRateScheduler
 
 training_steps = 50
@@ -361,6 +362,7 @@ for step in range(training_steps):
         loss = loss / accumulation_steps # divide the loss by the number of micro steps to get the average loss of the accumulated micro steps
         loss_accum += loss.detach() # accumulate the loss over the micro steps. Look at Pytorch documentation for more details on tensor.detach() vs. tensor.item()
         loss.backward()
+
 
     # clip the gradients to prevent exploding gradients
     norm = nn.utils.clip_grad_norm_(model.parameters(), 1.0)
