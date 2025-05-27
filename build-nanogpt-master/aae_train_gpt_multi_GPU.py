@@ -392,8 +392,8 @@ for step in range(training_steps):
     t0 = time.time()
     optimizer.zero_grad()
     loss_accum  = 0.0
-    micro_steps = 3 # set the number of mirco steps to accumulate gradients over
-    for micro_step in range(1):
+    micro_steps = 2 # set the number of mirco steps to accumulate gradients over
+    for micro_step in range(micro_steps):
         # this is a gradient accumulation step. We accumulate gradients over desired accumalation steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
         x, y = train_loader.next_batch()
         x, y = x.to(device), y.to(device) # move the data to the device. 
