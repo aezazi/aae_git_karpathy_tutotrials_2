@@ -72,7 +72,7 @@ class DataLoaderMultiGPU:
         self.current_position += B * T * self.num_processes # update the current position in the text
 
         # if loading the next batch would go beyond the end of the training text, reset to the beginning of the text
-        if self.current_position + B*T*self.num_processes + 1 > len(self.tokens):
+        if self.current_position + (B*T*self.num_processes + 1) > len(self.tokens):
             # reset to the beginning of the text that was assisgned to this process.
             self.current_position = self.B * self.T * self.process_rank 
         

@@ -349,8 +349,8 @@ T = 1024 # sequence length
 train_loader = DataLoaderMultiGPU(B=B, T=T, process_rank = ddp_rank, num_processes=ddp_world_size)
 
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
-effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
-# effective_batch_size_desired =393216
+# effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
+effective_batch_size_desired =393216
 
 assert effective_batch_size_desired % (train_loader.B * train_loader.T * ddp_world_size) == 0, f"effective batch size {effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.T}"
 
@@ -392,7 +392,7 @@ for step in range(training_steps):
     t0 = time.time()
     optimizer.zero_grad()
     loss_accum  = 0.0
-    for micro_step in range(3):
+    for micro_step in range(1):
         # this is a gradient accumulation step. We accumulate gradients over desired accumalation steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
         x, y = train_loader.next_batch()
         x, y = x.to(device), y.to(device) # move the data to the device. 
