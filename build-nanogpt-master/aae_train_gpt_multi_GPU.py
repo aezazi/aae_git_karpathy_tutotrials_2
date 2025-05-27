@@ -310,7 +310,7 @@ model = GPT(GPTConfig())
 
 torch.set_float32_matmul_precision('high')
 model.to(device)
-model = torch.compile(model)
+model = torch.compile(model, backend='inductor', mode='default')
 
 # Check model is on which device. 
 print(f'model and parameters are on device: {next(model.parameters()).device}')
@@ -318,7 +318,7 @@ print(f'model and parameters are on device: {next(model.parameters()).device}')
 if ddp:
     # wrap the model in DDP if using DDP
     model = DDP(model, device_ids=[ddp_local_rank])
-    print(f'Model wrapped in DistributedDataParallel (DDP) on device: {device}')
+    print(f'Model wrapped in DDP on device: {device}')
 raw_model = model.module if ddp else model # get the raw model from the DDP wrapper. This is useful for accessing the model's parameters and methods directly.
 
 
@@ -331,15 +331,11 @@ from aae_utils import ConfigureOptimizer
 base_lr = 6e-4
 optimizer = ConfigureOptimizer(raw_model).create_optimizer(weight_decay=0.1, learning_rate=base_lr, device_type=device)
 
-print('Optimizer initialized successfully! on GPU rank {ddp_rank}, of {ddp_world_size}')
+print(f'Optimizer initialized on GPU rank {ddp_rank}, device {device}')
 
 #%%
 # DDP launch for e.g. 4 GPUs:
 # torchrun --standalone --nproc_per_node=4 aae_train_gpt_multi_GPU.py
-# the code below is to check if the DDP is working correctly. It prints the rank of the current process and the total number of processes. This is useful for debugging and ensuring that the DDP is set up correctly.
-# print(f'I am GPU rank {ddp_rank}, of {ddp_world_size}')
-# print('Bye')
-# import sys; sys.exit(0) # exit the script after printing the rank. This is just for testing the DDP setup. Remove this line to continue with the training loop.
 
 # %%
 # Instantiate the dataloader and load the data.
@@ -347,11 +343,14 @@ print('Optimizer initialized successfully! on GPU rank {ddp_rank}, of {ddp_world
 from aae_utils import DataLoaderMultiGPU
 
 # initialize the dataloader based on the device type. The batch size and sequence length are set based on the device type and my experiments.
+B = 16 # batch size
+T = 1024 # sequence length
 
-train_loader = DataLoaderMultiGPU(B=16, T=1024, process_rank = ddp_rank, num_processes=ddp_world_size)
+train_loader = DataLoaderMultiGPU(B=B, T=T, process_rank = ddp_rank, num_processes=ddp_world_size)
 
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
 effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
+# effective_batch_size_desired =393216
 
 assert effective_batch_size_desired % (train_loader.B * train_loader.T * ddp_world_size) == 0, f"effective batch size {effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.T}"
 
@@ -382,7 +381,7 @@ T_mult = 2 # the factor by which T_0 is multiplied at each restart.
 # instantiate and create learning rate scheduler
 scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=T_max, restart=restart, warm_up_steps=warm_up_steps, max_lr=max_lr, min_lr=min_lr, T_mult=T_mult, T_0=T_0)
 
-print('Scheduler initialized successfully on GPU rank {ddp_rank}, of {ddp_world_size}!')
+print(f'Scheduler initialized successfully on GPU rank {ddp_rank}, of {ddp_world_size}')
 
 
 #%%
@@ -393,7 +392,7 @@ for step in range(training_steps):
     t0 = time.time()
     optimizer.zero_grad()
     loss_accum  = 0.0
-    for micro_step in range(accumulation_steps):
+    for micro_step in range(3):
         # this is a gradient accumulation step. We accumulate gradients over desired accumalation steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
         x, y = train_loader.next_batch()
         x, y = x.to(device), y.to(device) # move the data to the device. 
@@ -427,7 +426,7 @@ for step in range(training_steps):
     torch.cuda.synchronize()
     
     t1 = time.time()
-    dt = (t1 - t0) * 1000
+    dt = (t1 - t0)
     tokens_processed = train_loader.B * train_loader.T * accumulation_steps * ddp_world_size
     tokens_per_sec = tokens_processed / dt
     if master_process:
@@ -436,10 +435,10 @@ for step in range(training_steps):
     if step % 5 == 0:
         loss_list.append(loss_accum.item())
     
-    if ddp:
-        destroy_process_group()
-    
-    import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
+if ddp:
+    destroy_process_group()
+
+import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
 #%%
 # Plotting the learning rate schedule
 
