@@ -355,11 +355,11 @@ effective_batch_size_desired =393216
 assert effective_batch_size_desired % (train_loader.B * train_loader.T * ddp_world_size) == 0, f"effective batch size {effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.T}"
 
 # this is the desired number of micro steps to accumulate gradients over. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU.
-accumulation_steps = effective_batch_size_desired // (train_loader.B * train_loader.T * ddp_world_size) 
+accumulation_steps_desired = effective_batch_size_desired // (train_loader.B * train_loader.T * ddp_world_size) 
 
 if master_process:
     print(f"effective batch size desired: {effective_batch_size_desired}")
-    print(f"accumulation steps desired: {accumulation_steps}")
+    print(f"accumulation steps desired: {accumulation_steps_desired}")
 
 
 #%%
@@ -392,6 +392,7 @@ for step in range(training_steps):
     t0 = time.time()
     optimizer.zero_grad()
     loss_accum  = 0.0
+    micro_steps = 3 # set the number of mirco steps to accumulate gradients over
     for micro_step in range(1):
         # this is a gradient accumulation step. We accumulate gradients over desired accumalation steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
         x, y = train_loader.next_batch()
@@ -399,7 +400,7 @@ for step in range(training_steps):
 
         # By default, ddp synchronizes the loss from each process after each micro step by taking an average of all the processes and making that average the loss for all the processes for that step. Its very inefficient to do this at each micro_step. So we want to only synchronize gradients among all the processes on the last micro step. See Karpathy's video tutorial at 2:57:00 for more details. The code below sets the require_backward_grad_sync attribute of the model to True only on the last micro step. 
         if ddp:
-            model.require_backward_grad_sync = (micro_step == accumulation_steps - 1) 
+            model.require_backward_grad_sync = (micro_step == micro_steps - 1) 
 
         # we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs. The device must be cuda.
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
@@ -407,7 +408,7 @@ for step in range(training_steps):
         
         
         # divide the loss by the number of micro steps to get the average loss of the accumulated micro steps
-        loss = loss / accumulation_steps 
+        loss = loss / micro_steps 
         
         # Look at Pytorch documentation for more details on tensor.detach() vs. tensor.item()
         loss_accum += loss.detach() 
@@ -427,7 +428,7 @@ for step in range(training_steps):
     
     t1 = time.time()
     dt = (t1 - t0)
-    tokens_processed = train_loader.B * train_loader.T * accumulation_steps * ddp_world_size
+    tokens_processed = train_loader.B * train_loader.T * micro_steps * ddp_world_size
     tokens_per_sec = tokens_processed / dt
     if master_process:
         print(f"Step {step}, Loss: {loss_accum.item()}, LR: {optimizer.param_groups[0]['lr']}, norm: {norm:.4f}, Time: {dt:.2f}ms, Tokens/s: {tokens_per_sec:.2f}")
