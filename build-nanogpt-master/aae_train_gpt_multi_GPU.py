@@ -334,9 +334,6 @@ optimizer = ConfigureOptimizer(raw_model).create_optimizer(weight_decay=0.1, lea
 
 print(f'Optimizer initialized on GPU rank {ddp_rank}, device {device}')
 
-#%%
-# DDP launch for e.g. 4 GPUs:
-# torchrun --standalone --nproc_per_node=4 aae_train_gpt_multi_GPU.py
 
 # %%
 # Instantiate the dataloader and load the data.
@@ -383,7 +380,6 @@ T_mult = 2 # the factor by which T_0 is multiplied at each restart.
 scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=T_max, restart=restart, warm_up_steps=warm_up_steps, max_lr=max_lr, min_lr=min_lr, T_mult=T_mult, T_0=T_0)
 
 print(f'Scheduler initialized successfully on GPU rank {ddp_rank}, of {ddp_world_size}')
-
 
 #%%
 # Run the training loop.
@@ -441,6 +437,10 @@ if ddp:
     destroy_process_group()
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
+
+#%%
+# DDP launch for e.g. 4 GPUs:
+# torchrun --standalone --nproc_per_node=4 aae_train_gpt_multi_GPU.py
 
 #%%
 # Plotting the learning rate schedule
