@@ -340,15 +340,14 @@ print('Scheduler initialized successfully!')
 #%%
 # Run the training loop.
 # if cuda or mps is not available, use just 2 accumulation steps. 
-if device.type != 'cuda' or device.type == 'mps': 
-    accumulation_steps = 2
+accumulation_steps = 4
 
 loss_list= []
 for step in range(training_steps):
     t0 = time.time()
     optimizer.zero_grad()
     loss_accum  = 0.0
-    for micro_step in range(16):
+    for micro_step in range(accumulation_steps):
         # this is a gradient accumulation step. We accumulate gradients over desired accumalation steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
         x, y = train_loader.next_batch()
         
@@ -375,9 +374,9 @@ for step in range(training_steps):
     elif device.type == 'cuda':
         torch.cuda.synchronize()
     t1 = time.time()
-    dt = (t1 - t0) * 1000
-    tokens_per_sec = train_loader.B * train_loader.T * accumulation_steps/ (t1 - t0)
-    print(f"Step {step}, Loss: {loss_accum.item()}, LR: {optimizer.param_groups[0]['lr']}, norm: {norm:.4f}, Time: {dt:.2f}ms, Tokens/s: {tokens_per_sec:.2f}")
+    dt = (t1 - t0) 
+    tokens_per_sec = train_loader.B * train_loader.T * accumulation_steps/ dt
+    print(f"Step {step}, Loss: {loss_accum.item():.8f}, LR: {optimizer.param_groups[0]['lr']:.8f}, norm: {norm:.4f}, Time: {dt:.2f} sec, Tokens/s: {tokens_per_sec:.2f}")
     
     if step % 5 == 0:
         loss_list.append(loss_accum.item())
