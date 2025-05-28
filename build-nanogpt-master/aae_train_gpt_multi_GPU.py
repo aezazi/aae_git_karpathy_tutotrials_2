@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from hellaswag import render_example, iterate_examples
+# from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
 import numpy as np
@@ -256,7 +256,6 @@ class GPT(nn.Module):
 
         return model
     
-   
 
 #%%
 # DDP setup
@@ -310,6 +309,8 @@ model = GPT(GPTConfig())
 
 torch.set_float32_matmul_precision('high')
 model.to(device)
+
+# model = torch.compile()
 model = torch.compile(model, backend='inductor', mode='default')
 
 # Check model is on which device. 
@@ -343,7 +344,7 @@ print(f'Optimizer initialized on GPU rank {ddp_rank}, device {device}')
 from aae_utils import DataLoaderMultiGPU
 
 # initialize the dataloader based on the device type. The batch size and sequence length are set based on the device type and my experiments.
-B = 16 # batch size
+B = 32 # batch size
 T = 1024 # sequence length
 
 train_loader = DataLoaderMultiGPU(B=B, T=T, process_rank = ddp_rank, num_processes=ddp_world_size)
@@ -440,6 +441,7 @@ if ddp:
     destroy_process_group()
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
+
 #%%
 # Plotting the learning rate schedule
 
