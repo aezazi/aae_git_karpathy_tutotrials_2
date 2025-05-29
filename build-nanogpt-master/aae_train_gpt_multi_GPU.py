@@ -302,6 +302,7 @@ if torch.cuda.is_available():
 
 # %%
 #Instantiate the model and implement torch.compile if cuda is available.
+
 # if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
 
 
@@ -311,7 +312,7 @@ torch.set_float32_matmul_precision('high')
 model.to(device)
 
 # model = torch.compile()
-# model = torch.compile(model, backend='inductor', mode='default')
+model = torch.compile(model, backend='inductor', mode='default')
 
 # Check model is on which device. 
 print(f'model and parameters are on device: {next(model.parameters()).device}')
@@ -341,14 +342,14 @@ print(f'Optimizer initialized on GPU rank {ddp_rank}, device {device}')
 from aae_utils import DataLoaderMultiGPU
 
 # initialize the dataloader based on the device type. The batch size and sequence length are set based on the device type and my experiments.
-B = 16 # batch size
+B = 32 # batch size
 T = 1024 # sequence length
 
 train_loader = DataLoaderMultiGPU(B=B, T=T, process_rank = ddp_rank, num_processes=ddp_world_size)
 
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
-# effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
-effective_batch_size_desired =393216
+effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
+# effective_batch_size_desired =393216
 
 assert effective_batch_size_desired % (train_loader.B * train_loader.T * ddp_world_size) == 0, f"effective batch size {effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.T}"
 
@@ -365,7 +366,7 @@ if master_process:
 # NOTE: I moved the code for the scheduler to a separate aae_utils.py file.
 from aae_utils import CosineLearingRateScheduler
 
-training_steps = 50
+training_steps = 100
 
 # define the scheduler parameters
 T_max = training_steps # the number of iterations over which lr is reduced to the minimum
@@ -389,7 +390,7 @@ for step in range(training_steps):
     t0 = time.time()
     optimizer.zero_grad()
     loss_accum  = 0.0
-    micro_steps = 2 # set the number of mirco steps to accumulate gradients over
+    micro_steps = accumulation_steps_desired # set the number of mirco steps to accumulate gradients over
     for micro_step in range(micro_steps):
         # this is a gradient accumulation step. We accumulate gradients over desired accumalation steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
         x, y = train_loader.next_batch()
