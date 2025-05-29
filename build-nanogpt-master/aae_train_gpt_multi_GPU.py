@@ -311,7 +311,7 @@ model = GPT(GPTConfig())
 torch.set_float32_matmul_precision('high')
 model.to(device)
 
-# model = torch.compile()
+# model = torch.compile(model)
 model = torch.compile(model, backend='inductor', mode='default')
 
 # Check model is on which device. 
@@ -360,13 +360,12 @@ if master_process:
     print(f"effective batch size desired: {effective_batch_size_desired}")
     print(f"accumulation steps desired: {accumulation_steps_desired}")
 
-
 #%%
 # create scheduler and launch training loop.
 # NOTE: I moved the code for the scheduler to a separate aae_utils.py file.
 from aae_utils import CosineLearingRateScheduler
 
-training_steps = 100
+training_steps = 1000
 
 # define the scheduler parameters
 T_max = training_steps # the number of iterations over which lr is reduced to the minimum
@@ -429,7 +428,7 @@ for step in range(training_steps):
     tokens_processed = train_loader.B * train_loader.T * micro_steps * ddp_world_size
     tokens_per_sec = tokens_processed / dt
     if master_process:
-        print(f"Step {step}, Loss: {loss_accum.item()}, LR: {optimizer.param_groups[0]['lr']}, norm: {norm:.4f}, Time: {dt:.2f}ms, Tokens/s: {tokens_per_sec:.2f}")
+        print(f"Step {step}, Loss: {loss_accum.item()}, LR: {optimizer.param_groups[0]['lr']}, norm: {norm:.4f}, Time: {dt:.2f}sec, Tokens/sec: {tokens_per_sec:.2f}")
     
     if step % 5 == 0:
         loss_list.append(loss_accum.item())
