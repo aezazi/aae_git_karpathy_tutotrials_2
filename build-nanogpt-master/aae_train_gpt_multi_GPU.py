@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-# from hellaswag import render_example, iterate_examples
+from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
 import numpy as np
