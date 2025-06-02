@@ -342,7 +342,7 @@ print(f'Optimizer initialized on GPU rank {ddp_rank}, device {device}')
 from aae_utils import DataLoaderMultiGPU
 
 # initialize the dataloader based on the device type. The batch size and sequence length are set based on the device type and my experiments.
-B = 32 # batch size
+B = 64 # batch size
 T = 1024 # sequence length
 
 train_loader = DataLoaderMultiGPU(B=B, T=T, process_rank = ddp_rank, num_processes=ddp_world_size)
@@ -365,7 +365,7 @@ if master_process:
 # NOTE: I moved the code for the scheduler to a separate aae_utils.py file.
 from aae_utils import CosineLearingRateScheduler
 
-training_steps = 1000
+training_steps = 50
 
 # define the scheduler parameters
 T_max = training_steps # the number of iterations over which lr is reduced to the minimum
