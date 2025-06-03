@@ -45,5 +45,6 @@ debug.log
 *.crt
 .ec2-user/
 
-# AAE-specific files
-aae-test.py
+
+# fineweb-edu tokenized and sharded files
+edu_fineweb10B/
