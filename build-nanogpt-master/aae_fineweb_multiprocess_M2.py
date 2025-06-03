@@ -49,7 +49,8 @@ def process_dataset():
     current_shard = 0
     token_count = 0
 
-    with Pool(processes=6, initializer=init_worker) as pool:
+    nprocs = max(1, os.cpu_count()//2)
+    with Pool(processes=nprocs, initializer=init_worker) as pool:
         for token_lists in tqdm(pool.imap(tokenize_batch, stream_batches(dataset, batch_size=100)), desc="Tokenizing"):
             buffer.extend(token_lists)
             token_count += len(token_lists)
@@ -70,7 +71,10 @@ def process_dataset():
                     return
 #%%
 
-process_dataset()
+if __name__ == '__main__':
+    import multiprocessing as mp
+    mp.set_start_method('spawn', force=True)  # or 'fork' if you're sure it works
+    process_dataset()
 
 # %%
 tokens = np.fromfile("token_shards/shard_099.tok.bin", dtype=np.uint32)
