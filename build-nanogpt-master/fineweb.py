@@ -1,3 +1,4 @@
+#%%
 """
 FineWeb-Edu dataset (for srs pretraining)
 https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu
@@ -14,6 +15,8 @@ import tiktoken
 from datasets import load_dataset # pip install datasets
 from tqdm import tqdm # pip install tqdm
 
+
+#%%
 # ------------------------------------------
 local_dir = "edu_fineweb10B"
 remote_name = "sample-10BT"
@@ -26,6 +29,7 @@ os.makedirs(DATA_CACHE_DIR, exist_ok=True)
 # download the dataset
 fw = load_dataset("HuggingFaceFW/fineweb-edu", name=remote_name, split="train")
 
+#%%
 # init the tokenizer
 enc = tiktoken.get_encoding("gpt2")
 eot = enc._special_tokens['<|endoftext|>'] # end of text token
@@ -41,6 +45,7 @@ def tokenize(doc):
 def write_datafile(filename, tokens_np):
     np.save(filename, tokens_np)
 
+#%%
 # tokenize all documents and write output shards, each of shard_size tokens (last shard has remainder)
 nprocs = max(1, os.cpu_count()//2)
 with mp.Pool(nprocs) as pool:
@@ -80,3 +85,5 @@ with mp.Pool(nprocs) as pool:
         split = "val" if shard_index == 0 else "train"
         filename = os.path.join(DATA_CACHE_DIR, f"edufineweb_{split}_{shard_index:06d}")
         write_datafile(filename, all_tokens_np[:token_count])
+
+# %%
