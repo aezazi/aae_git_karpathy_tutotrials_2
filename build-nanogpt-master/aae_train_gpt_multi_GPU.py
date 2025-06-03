@@ -311,8 +311,8 @@ model = GPT(GPTConfig())
 torch.set_float32_matmul_precision('high')
 model.to(device)
 
-# model = torch.compile(model)
-model = torch.compile(model, backend='inductor', mode='default')
+model = torch.compile(model)
+# model = torch.compile(model, backend='inductor', mode='default')
 
 # Check model is on which device. 
 print(f'model and parameters are on device: {next(model.parameters()).device}')
@@ -342,7 +342,7 @@ print(f'Optimizer initialized on GPU rank {ddp_rank}, device {device}')
 from aae_utils import DataLoaderMultiGPU
 
 # initialize the dataloader based on the device type. The batch size and sequence length are set based on the device type and my experiments.
-B = 64 # batch size
+B = 128 # batch size
 T = 1024 # sequence length
 
 train_loader = DataLoaderMultiGPU(B=B, T=T, process_rank = ddp_rank, num_processes=ddp_world_size)
