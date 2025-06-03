@@ -27,7 +27,7 @@ DATA_CACHE_DIR = os.path.join(os.path.dirname(__file__), local_dir)
 os.makedirs(DATA_CACHE_DIR, exist_ok=True)
 
 # download the dataset
-fw = load_dataset("HuggingFaceFW/fineweb-edu", name=remote_name, split="train", streaming=True)
+fw = load_dataset("HuggingFaceFW/fineweb-edu", name=remote_name, split="train")
 
 #%%
 # init the tokenizer
