@@ -136,4 +136,9 @@ def create_shards(dataset_iterator, shard_dir=shard_dir):
 if __name__ == "__main__":
     dataset_iterator = stream_dataset()
     create_shards(dataset_iterator)
+    
+# %%
+tokens = np.fromfile("aae_token_shards_multiprocess/shard_000071.npy", dtype=np.uint16)
+print(tokens[-1])
+print(len(tokens))
 # %%
