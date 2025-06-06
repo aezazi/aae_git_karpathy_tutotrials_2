@@ -46,5 +46,9 @@ debug.log
 .ec2-user/
 
 
-# fineweb-edu tokenized and sharded files
+# tokenized and sharded files
 edu_fineweb10B/
+aae_token_shards_no_multiprocess/
+aae_token_shards_multiprocess_M2/
+aae_token_shards_multiprocess_gpu/
+aae_token_shards_multiprocess/
