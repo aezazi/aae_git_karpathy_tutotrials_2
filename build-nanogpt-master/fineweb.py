@@ -100,7 +100,7 @@ with mp.Pool(nprocs) as pool:
         write_datafile(filename, all_tokens_np[:token_count])
 
 # %%
-tokens = np.fromfile("edu_fineweb10B/edufineweb_train_000013.npy", dtype=np.uint16)
-print(tokens[:-10])
-print(len(tokens))
+tokens = np.fromfile("edu_fineweb10B/edufineweb_train_000001.npy", dtype=np.uint16)
+print(tokens[0])
+print(f'{len(tokens):,}')
 # %%

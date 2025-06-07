@@ -338,8 +338,10 @@ a = np.concatenate((a,b))
 print(a, type(a))
 print(len(a))
 
+
 # %%
-x = 100_000_000
-y = int(1e8)
-x == y
+e = np.empty(10)
+e[:len(a)] = a
+# %%
+e
 # %%
