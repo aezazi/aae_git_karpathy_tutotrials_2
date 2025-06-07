@@ -29,7 +29,7 @@ eot_token_id = encoder.eot_token # get gpt2 tokenizer eot token id
 print(eot_token_id)
 #%%
 # Load the dataset with streaming to avoid memory overflow
-dataset_iterator = load_dataset("HuggingFaceFW/fineweb-edu", split="train", name="sample-10BT", streaming=True)
+dataset_iterator = load_dataset("HuggingFaceFW/fineweb-edu", split="train", name="sample-10BT", streaming=False)
 
 #%%
 # create tokenization function
@@ -64,7 +64,8 @@ def create_shards(dataset_iterator, shard_dir=shard_dir):
 
         # my approach differs from Karpathy in that I do not split documents between shards. If current example does not fit in the current shard, save the shard and start a new one
         if shard_token_count + len(tokens) > shard_size:
-            shard_save_path = os.path.join(shard_dir, f'shard_{shard_idx:06d}')
+            shard_save_path = os.path.join(shard_dir, f'shard_{shard_idx:04d}')
+            shard_tokens = np.array(shard_tokens, dtype=np.uint16)
             np.save(shard_save_path, shard_tokens)
             
             # measure time to create this shard
@@ -79,10 +80,9 @@ def create_shards(dataset_iterator, shard_dir=shard_dir):
             shard_idx += 1
             shard_tokens = [eot_token_id]
             shard_token_count = len(shard_tokens)
-
-        else:
-            shard_tokens.extend(tokens)
-            shard_token_count += len(tokens)
+        
+        shard_tokens.extend(tokens)
+        shard_token_count += len(tokens)
         
     if shard_token_count > 0:
             shard_save_path = os.path.join(shard_dir, f'shard_{shard_idx:06d}')
@@ -95,7 +95,9 @@ def create_shards(dataset_iterator, shard_dir=shard_dir):
 # %%
 create_shards(dataset_iterator)
 # %%
-import time
-time.time()
+tokens = np.load("aae_token_shards_no_multiprocess/shard_000001.npy")
+print(type(tokens))
+print(tokens[-1])
+print(len(tokens))
 
 # %%
