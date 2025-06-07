@@ -32,9 +32,8 @@ eot_token_id = encoder.eot_token # get gpt2 tokenizer eot token id
 print(eot_token_id)
 #%%
 # Load the dataset with streaming to avoid memory overflow
-def get_dataset():
-    dataset_iterator = load_dataset("HuggingFaceFW/fineweb-edu", split="train", name="sample-10BT", streaming=False)
-    return dataset_iterator
+
+dataset_iterator = load_dataset("HuggingFaceFW/fineweb-edu", split="train", name="sample-10BT", streaming=False)
 
 #%%
 # create tokenization function
@@ -43,6 +42,7 @@ def tokenize(example: str, eot=eot_token_id):
     text = example['text']
     tokens = encoder.encode_ordinary(text)
     tokens.append(eot)
+    print('i am here1')
     return tokens
 
 # test tokenize function
@@ -65,7 +65,7 @@ def create_shards(dataset_iterator, shard_dir=shard_dir):
     d_start = time.time()
     with mp.Pool(num_workers) as pool:
         for tokens in pool.map(tokenize, dataset_iterator, chunksize=16):
-            
+            print('i am here2')
             # if adding more tokens goes over the shard size limit, save the shard and start a new shard
             if shard_token_count + len(tokens) > shard_size:
                 shard_save_path = os.path.join(shard_dir, f'shard_{shard_idx:04d}')
@@ -99,7 +99,7 @@ def create_shards(dataset_iterator, shard_dir=shard_dir):
 
 # %%
 if __name__ == "__main__":
-    dataset_iterator = get_dataset()
+    # mp.set_start_method('spawn')
     create_shards(dataset_iterator)
 
 # %%
