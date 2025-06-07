@@ -50,6 +50,11 @@ def write_datafile(filename, tokens_np):
 #%%
 # tokenize all documents and write output shards, each of shard_size tokens (last shard has remainder)
 nprocs = max(1, os.cpu_count()//2)
+print(f'num_workers: {nprocs}')
+
+import time
+d_start = time.time()
+
 with mp.Pool(nprocs) as pool:
     shard_index = 0
     # preallocate buffer to hold current shard
@@ -68,6 +73,12 @@ with mp.Pool(nprocs) as pool:
                 progress_bar = tqdm(total=shard_size, unit="tokens", desc=f"Shard {shard_index}")
             progress_bar.update(len(tokens))
         else:
+            # measure time to create this shard
+            d_end = time.time()
+            dt = d_end - d_start
+            d_start = d_end
+            print(f'| time to create shard: {dt:.3f} sec')
+
             # write the current shard and start a new one
             split = "val" if shard_index == 0 else "train"
             filename = os.path.join(DATA_CACHE_DIR, f"edufineweb_{split}_{shard_index:06d}")
