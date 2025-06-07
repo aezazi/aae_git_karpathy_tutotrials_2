@@ -8,6 +8,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 import torch.optim as optim
 import matplotlib.pyplot as plt
+import numpy as np
 # %%
 """
 understand decorators. Decorators take a function as the argument, add some additional functionality to that function, and return the modified function with same name as the function.. In that sense, they are like a closure.
@@ -330,4 +331,15 @@ my_iterator = iter(my_list)
 
 
 
+# %%
+a = np.array([1,2,3,4])
+b = np.array([7,8,9])
+a = np.concatenate((a,b))
+print(a, type(a))
+print(len(a))
+
+# %%
+x = 100_000_000
+y = int(1e8)
+x == y
 # %%

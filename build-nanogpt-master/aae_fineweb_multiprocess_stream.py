@@ -21,7 +21,7 @@ import multiprocessing as mp
 tokenizer_name = "gpt2"
 shard_size = 100_000_000
 shard_dir = "aae_token_shards_multiprocess"
-num_workers = max(1, os.cpu_count()//2) 
+num_workers = max(1, os.cpu_count()-1) 
 print(f'num_workers: {num_workers}')
 batch_size_multiprocess = 100_000
 
@@ -45,7 +45,8 @@ def tokenize(example: str, eot=eot_token_id):
     text = example['text']
     tokens = encoder.encode_ordinary(text)
     tokens.append(eot)
-    tokens = np.array(tokens)
+    tokens = np.array(tokens, dtype=np.uint16)
+    print('tokenizing')
     return tokens
 
 # test tokenize function
@@ -63,7 +64,7 @@ def create_shards(dataset_iterator, shard_dir=shard_dir):
     shard_idx = 0
     # initialize shard tokens with eot token at the begining to signal that this document is a continuation
     # pool = mp.Pool(num_workers)
-    shard_tokens = [eot_token_id] 
+    shard_tokens = np.array([eot_token_id]) 
     shard_token_count = len(shard_tokens)
 
     doc_batch = []
@@ -96,11 +97,12 @@ def create_shards(dataset_iterator, shard_dir=shard_dir):
                         shard_token_count = len(shard_tokens)
 
                     else:
-                        # print('i am here 3')
-                        shard_tokens.extend(tokens)
+                        shard_tokens = np.concatenate((shard_tokens, tokens))
                         shard_token_count += len(tokens)
+                        print(f'concating to shard | shard legnth: {shard_token_count}')
         
                 doc_batch =[] # clear the batch
+                print('cleared batch')
 
         # processs any remaining docs in the last batch if not empty
         if len(doc_batch) > 0:
@@ -117,11 +119,11 @@ def create_shards(dataset_iterator, shard_dir=shard_dir):
 
                     # start new shard
                     shard_idx += 1
-                    shard_tokens = [eot_token_id]
+                    shard_tokens = np.array([eot_token_id]) 
                     shard_token_count = len(shard_tokens)
 
             else:
-                shard_tokens.extend(tokens)
+                shard_tokens = np.concatenate((shard_tokens, tokens))
                 shard_token_count += len(tokens)
 
         if shard_token_count > 0:
@@ -140,7 +142,7 @@ if __name__ == "__main__":
     create_shards(dataset_iterator)
     
 # %%
-tokens = np.load("aae_token_shards_multiprocess/shard_000001.npy")
-print(tokens[0])
-print(len(tokens))
+# tokens = np.load("aae_token_shards_multiprocess/shard_000001.npy")
+# print(tokens[0])
+# print(len(tokens))
 # %%

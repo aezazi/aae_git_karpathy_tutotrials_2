@@ -65,7 +65,7 @@ def create_shards(dataset_iterator, shard_dir=shard_dir):
     d_start = time.time()
     with mp.Pool(num_workers) as pool:
         for tokens in pool.map(tokenize, dataset_iterator, chunksize=16):
-            print('i am here 2')
+            p
             # if adding more tokens goes over the shard size limit, save the shard and start a new shard
             if shard_token_count + len(tokens) > shard_size:
                 shard_save_path = os.path.join(shard_dir, f'shard_{shard_idx:04d}')
@@ -85,9 +85,9 @@ def create_shards(dataset_iterator, shard_dir=shard_dir):
                 shard_token_count = len(shard_tokens)
 
             else:
-                print('I am here 3')
                 shard_tokens.extend(tokens)
                 shard_token_count += len(tokens)
+                print('concating shard len: {shard_token_count}')
 
         if shard_token_count > 0:
                 shard_save_path = os.path.join(shard_dir, f'shard_{shard_idx:06d}')
