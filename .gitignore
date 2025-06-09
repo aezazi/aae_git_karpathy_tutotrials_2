@@ -51,4 +51,9 @@ edu_fineweb10B/
 aae_token_shards_no_multiprocess/
 aae_token_shards_multiprocess_M2/
 aae_token_shards_multiprocess_gpu/
-aae_token_shards_multiprocess/
+aae_token_shards_mp/
+aae_token_shards_no_mp/
+aae_token_shards_mp_M2/
+aae_token_shards_mp_gpu/
+aae_token_shards_mp/
+aae_token_shards/
