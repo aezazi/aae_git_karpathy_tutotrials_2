@@ -332,16 +332,29 @@ my_iterator = iter(my_list)
 
 
 # %%
+# experimenting with how to construct a numpy array that is exactly the size of 
+tok_buffer = np.empty(20, dtype=np.uint16)
+tok_buffer[0] =256
+# print(type(tok_buffer[4]))
+tok_count = 1
+print(tok_buffer)
+print('-'*40,'\n')
+
 a = np.array([1,2,3,4])
-b = np.array([7,8,9])
-a = np.concatenate((a,b))
-print(a, type(a))
-print(len(a))
+tok_buffer[tok_count : tok_count+len(a)] = a
+tok_count += len(a)
+print(tok_buffer)
+print('-'*40,'\n')
 
 
-# %%
-e = np.empty(10)
-e[:len(a)] = a
-# %%
-e
+b = np.array([5,6,7,8,9,10,11])
+tok_buffer[tok_count : tok_count+len(b)] = b
+tok_count += len(b)
+print(tok_buffer)
+print('-'*40,'\n')
+
+tok_final = tok_buffer[:tok_count]
+print(tok_final)
+
+
 # %%
