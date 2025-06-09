@@ -18,7 +18,7 @@ import multiprocessing as mp
 tokenizer_name = "gpt2"
 shard_size = 100_000_000
 shard_dir = "aae_token_shards_mp"
-num_workers = max(1, os.cpu_count()-1)
+num_workers = max(1, os.cpu_count() // 2)
 
 #%%
 encoder = tiktoken.get_encoding(tokenizer_name)
@@ -73,11 +73,8 @@ def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=s
 
         d_start = time.time()
         
-        # NOTE: that pool.map outputs a list of  tokens for each example in dataset_iterator 
-        # creating the 'results' variable is how we can wrap the pool output in tqdm for showing progress bars. wraping pool.imap directly in tqdm did not work.
-        results = tqdm(pool.imap(tokenize, dataset_iterator), total=len(dataset_iterator), desc=" Percent of datatset processed (cumulative)", unit_scale=True, colour='blue')
-        
-        for tokens  in results:
+        # NOTE: that pool.map outputs a list of  tokens for each example in dataset_iterator  
+        for tokens  in tqdm(pool.imap(tokenize, dataset_iterator), total=len(dataset_iterator), desc=" Percent of datatset processed (cumulative)", unit_scale=True, colour='blue'):
             if shard_token_count + len(tokens) > shard_size:
                 split = 'val' if shard_idx == 0 else 'train'
                 shard_save_path = os.path.join(shard_dir, f'{split}_shard_{shard_idx:04d}')
