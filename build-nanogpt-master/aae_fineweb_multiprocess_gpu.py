@@ -19,7 +19,8 @@ import multiprocessing as mp
 #%%
 # Constants
 tokenizer_name = "gpt2"
-shard_size = int(1e8) # 100M tokens per shard, total of 100 shards
+remote_name = "sample-10BT"
+shard_size = 100_000 # 100M tokens per shard, total of 100 shards
 shard_dir = "aae_token_shards_multiprocess"
 num_workers = max(1, mp.cpu_count()-1) 
 
@@ -29,10 +30,11 @@ os.makedirs(shard_dir, exist_ok=True)
 encoder = tiktoken.get_encoding(tokenizer_name)
 eot_token_id = encoder.eot_token # get gpt2 tokenizer eot token id
 print(eot_token_id)
+
 #%%
 # Load the dataset with streaming to avoid memory overflow
 
-dataset_iterator = load_dataset("HuggingFaceFW/fineweb-edu", split="train", name="sample-10BT", streaming=False)
+dataset_iterator = load_dataset("HuggingFaceFW/fineweb-edu", name=remote_name, split="train")
 
 #%%
 # create tokenization function
@@ -41,7 +43,8 @@ def tokenize(example: str, eot=eot_token_id):
     text = example['text']
     tokens = encoder.encode_ordinary(text)
     tokens.append(eot)
-    print('tokenizing')
+    print(f'tokenizing: {tokens[:10]}')
+    
     return tokens
 
 # test tokenize function
@@ -60,7 +63,7 @@ with mp.Pool(num_workers) as pool:
     shard_tokens = [eot_token_id] 
     shard_token_count = len(shard_tokens)
 
-    for tokens in pool.map(tokenize, dataset_iterator, chunksize=16):
+    for tokens in pool.map(tokenize, dataset_iterator, chunksize=2):
         # if adding more tokens goes over the shard size limit, save the shard and start a new shard
         if shard_token_count + len(tokens) > shard_size:
             shard_save_path = os.path.join(shard_dir, f'shard_{shard_idx:04d}')
