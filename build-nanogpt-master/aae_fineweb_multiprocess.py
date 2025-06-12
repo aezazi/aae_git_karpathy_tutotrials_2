@@ -98,7 +98,7 @@ def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=s
                 shard_token_count += len(tokens)
             
         if shard_token_count > 0:
-                shard_save_path = os.path.join(shard_dir, f'shard_{shard_idx:04d}')
+                shard_save_path = os.path.join(shard_dir, f'{split}_shard_{shard_idx:04d}')
                 shard_tokens_final = shard_tokens_buffer[:shard_token_count].astype(np.uint16)
                 np.save(shard_save_path, shard_tokens_final)
                 

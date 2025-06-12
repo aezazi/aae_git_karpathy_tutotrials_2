@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 import tiktoken
+import os
 
 class DataLoaderLite:
     def __init__(self, B, T):
@@ -81,6 +82,27 @@ class DataLoaderMultiGPU:
         y = y.cuda(non_blocking=True)
 
         return x, y
+    
+
+#%%
+#create dataloader for processing shards on multi gpu
+class DataLoaderShardMultiGPU:
+    def __init__(self, B, T , process_rank=0, num_processes=1, split=None, shard_dir='edu_fineweb10B'):
+        self.B = B
+        self.T = T
+        self.num_workers = num_processes
+        self.process_rank = process_rank
+        self.shard_dir = shard_dir
+        assert split in {'train', 'val'}, f'you must specify if the data is train or val'
+
+        # returns an unordered list of files in the shard directory
+        self.shard_files = os.listdir(shard_dir) 
+        # filter the shard files to only include those that match the split
+        self.shard_files = [file for file in self.shard_files if split in file]
+        self.shard_files.sort() 
+        # self.shards = [os.path.join(shard_dir, self.shard_files) for s in shards]
+   
+
 # %%
 # class to configure the optimizer
 

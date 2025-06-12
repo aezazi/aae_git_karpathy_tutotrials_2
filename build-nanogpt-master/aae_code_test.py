@@ -9,6 +9,7 @@ from torch.nn import functional as F
 import torch.optim as optim
 import matplotlib.pyplot as plt
 import numpy as np
+import aae_utils
 # %%
 """
 understand decorators. Decorators take a function as the argument, add some additional functionality to that function, and return the modified function with same name as the function.. In that sense, they are like a closure.
@@ -332,7 +333,7 @@ my_iterator = iter(my_list)
 
 
 # %%
-# experimenting with how to construct a numpy array that is exactly the size of 
+# experimenting with how to construct a numpy array that is exactly the size of the tokens processed. the intent is to create a buffer that can hold the tokens and then slice it to the exact size of the tokens processed. this way documents don't have to be split between seperate shards.
 tok_buffer = np.empty(20, dtype=np.uint16)
 tok_buffer[0] =256
 # print(type(tok_buffer[4]))
@@ -358,4 +359,14 @@ print(tok_final)
 
 
 # %%
+# testing the DataLoaderShardMultiGPU class from aae_utils.py
+from aae_utils import DataLoaderShardMultiGPU as loader
+l2 = loader(201, 1024, split='train', shard_dir='aae_token_shards_mp')
 
+# %%
+# l.shards.sort()
+l2.shard_files
+
+
+# %%
+# %%
