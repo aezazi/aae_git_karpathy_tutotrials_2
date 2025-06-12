@@ -74,7 +74,7 @@ def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=s
         d_start = time.time()
         
         # NOTE: that pool.map outputs a list of  tokens for each example in dataset_iterator  
-        for tokens  in tqdm(pool.imap(tokenize, dataset_iterator), total=len(dataset_iterator), desc=" Percent of datatset processed (cumulative)", unit_scale=True, colour='blue'):
+        for tokens  in tqdm(pool.imap(tokenize, dataset_iterator, chunksize=16), total=len(dataset_iterator), desc=" Percent of datatset processed (cumulative)", unit_scale=True, colour='blue'):
             if shard_token_count + len(tokens) > shard_size:
                 split = 'val' if shard_idx == 0 else 'train'
                 shard_save_path = os.path.join(shard_dir, f'{split}_shard_{shard_idx:04d}')
