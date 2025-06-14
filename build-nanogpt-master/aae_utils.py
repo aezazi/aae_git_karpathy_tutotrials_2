@@ -98,10 +98,11 @@ class DataLoaderShardMultiGPU:
 
         # returns an unordered list of file names in the shard directory. Note that these are just string file names, not the actual numpy arrays.
         self.shard_files = os.listdir(shard_dir) 
+
         # filter the shard file names to only include those that match the split and sort
         self.shard_files = [file for file in self.shard_files if split in file]
         self.shard_files.sort() 
-        # self.shards_ptt = [torch.from_numpy(file) for file in self.shard_files] # convert the shard files to tensors
+        
 
         # this is Karpathy's code. I don't understand why he does this. we already have the shard files in a sorted list and can just add the shard_dir to the file names to get the full path when loading as I have done in the load_tokens_convert_to_tensor method.
         # self.shards = [os.path.join(shard_dir, file) for file in self.shard_files]

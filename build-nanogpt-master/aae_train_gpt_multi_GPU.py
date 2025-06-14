@@ -263,8 +263,9 @@ from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 
+ddp = int(os.environ.get('RANK', -1)) != -1 # check if the script is being run under DDP. If RANK is set, then we are running under DDP. If not, then we are not running under DDP.
 if ddp:
-    
+    print('Running in Distributed Data Parallel (DDP) mode')
     # Note that LOCAL_RANK is the rank of the process on one given node (when using multiple nodes), while RANK is the rank of the process across all nodes (when using multiple nodes). When using a setup with just one node, LOCAL_RANK and RANK are the same. 
     init_process_group(backend='nccl') # initialize the process group for DDP
     ddp_rank = int(os.environ['RANK']) # get the rank of the current process
@@ -329,7 +330,6 @@ raw_model = model.module if ddp else model # get the raw model from the DDP wrap
 # NOTE: I moved the code for optimizer configuration to a separate file called aae_utils.py.
 from aae_utils import ConfigureOptimizer
 
-
 base_lr = 6e-4
 optimizer = ConfigureOptimizer(raw_model).create_optimizer(weight_decay=0.1, learning_rate=base_lr, device_type=device)
 
@@ -342,7 +342,7 @@ print(f'Optimizer initialized on GPU rank {ddp_rank}, device {device}')
 from aae_utils import DataLoaderMultiGPU
 
 # initialize the dataloader based on the device type. The batch size and sequence length are set based on the device type and my experiments.
-B = 128 # batch size
+B = 64 # batch size
 T = 1024 # sequence length
 
 train_loader = DataLoaderMultiGPU(B=B, T=T, process_rank = ddp_rank, num_processes=ddp_world_size)
@@ -365,13 +365,14 @@ if master_process:
 # NOTE: I moved the code for the scheduler to a separate aae_utils.py file.
 from aae_utils import CosineLearingRateScheduler
 
-training_steps = 50
+# 19,073 steps is ~1 epoch, if data is 10B tokens and batch size 0.5M tokens
+training_steps = 19073 
 
 # define the scheduler parameters
 T_max = training_steps # the number of iterations over which lr is reduced to the minimum
 max_lr = base_lr
 min_lr = max_lr * 0.1
-warm_up_steps = .1 * T_max 
+warm_up_steps = 715 
 restart = False # whether to use cosine annealing with restarts or not
 T_0 = T_max // 3 # if using restarts, the number of iterations over which lr is reduced to the minimum before restart
 T_mult = 2 # the factor by which T_0 is multiplied at each restart.
