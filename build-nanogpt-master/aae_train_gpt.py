@@ -24,6 +24,8 @@ else:
 print(f'type of device object: {type(device)}')
 print(f'device type as string: {device.type}')
 
+
+
 # %%
 # This is the configuration for the GPT model. It defines the hyperparameters for the model. The block size is the maximum sequence length, vocab size is the size of the vocabulary, n_layer is the number of transformer blocks, n_head is the number of attention heads, and n_embd is the embedding dimension. 
 """
@@ -44,6 +46,7 @@ config = GPTConfig()
 print(f'GPTConfig instantiated with block size: {config.block_size}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
 
 #%%
+# create attention block for the GPT model. 
 class CausalSelfAttention(nn.Module):
 
     def __init__(self, config):
@@ -292,17 +295,17 @@ print('Optimizer initialized successfully!')
 # %%
 # Instantiate the dataloader and load the data.
 # NOTE: I moved the code for the dataloader to a separate file called aae_utils.py. 
-from aae_utils import DataLoaderLite
+from aae_utils import DataLoaderShardMultiGPU as data_loader
 
 # initialize the dataloader based on the device type. The batch size and sequence length are set based on the device type and my experiments.
 
 # NOTE: using device.type to get device as string for if statements.
 if device.type == 'cuda':
-    train_loader = DataLoaderLite(B=16, T=1024)
+    train_loader = data_loader(B=64, T=1024, split='train')
 elif device.type == 'mps':
-    train_loader = DataLoaderLite(B=8, T=1024)
+    train_loader = data_loader(B=8, T=1024)
 else:
-    train_loader = DataLoaderLite(B=8, T=512)
+    train_loader = data_loader(B=8, T=512)
 
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
 effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
@@ -340,7 +343,7 @@ print('Scheduler initialized successfully!')
 #%%
 # Run the training loop.
 # if cuda or mps is not available, use just 2 accumulation steps. 
-accumulation_steps = 4
+# accumulation_steps = 4
 
 loss_list= []
 for step in range(training_steps):
@@ -376,7 +379,7 @@ for step in range(training_steps):
     t1 = time.time()
     dt = (t1 - t0) 
     tokens_per_sec = train_loader.B * train_loader.T * accumulation_steps/ dt
-    print(f"Step {step}, Loss: {loss_accum.item():.8f}, LR: {optimizer.param_groups[0]['lr']:.8f}, norm: {norm:.4f}, Time: {dt:.2f} sec, Tokens/s: {tokens_per_sec:.2f}")
+    print(f"Step {step}, Loss: {loss_accum.item():.8f}, LR: {optimizer.param_groups[0]['lr']:.8f}, norm: {norm:.4f}, Time: {dt:.2f} sec, Tokens/s: {tokens_per_sec:,.1f}")
     
     if step % 5 == 0:
         loss_list.append(loss_accum.item())
@@ -404,102 +407,6 @@ plt.show()
 
 #%%
 print(loss_list)
-# %%
-###################################################################################################
 
-# code below were building blocks to arrive at code above here. Also code to generate from huggingface pretrained weights
-
-###################################################################################################
-
-
-# %%
-# Set the number of sequences to generate and the maximum length of each sequence
-num_return_sequences = 5
-max_length = 30
-model.eval()
-model.to(device)
-
-# %%
-# encode the input text and convert it to a tensor
-enc = tiktoken.get_encoding("gpt2")
-tokens = enc.encode("Hello, I'm a language model,")
-tokens = torch.tensor(tokens, dtype=torch.long)
-print(tokens)
-tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
-x = tokens.to(device)
-
-
-# %%
-# generate the sequences
-torch.manual_seed(42)
-torch.mps.manual_seed(42)
-
-# while the size of the generated sequences is less than the maximum length, we will keep generating tokens
-while x.size(1) < max_length:
-    with torch.no_grad():
-        outputs = model(x)
-        logits = outputs[0][:, -1, :]  # get the logits for the last token
-        probs = F.softmax(logits, dim=-1)  # apply softmax to get probabilities
-        topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)  
-        ix = torch.multinomial(topk_probs, num_samples=1)  # sample from the top-k probabilities
-        xcol = torch.gather(topk_indices, -1, ix)  # get the sampled token
-        x = torch.cat((x, xcol), dim=1)  # append the sampled token to the input
-
-# %%
-# decode and print the generated sequences
-# Note that with the pretrained model, the output is ok. Without the pretrained model, the output is just random gibberish before the model is trained.
-
-for i in range(num_return_sequences):
-    tokens = x[i, :max_length].tolist()
-    decoded = enc.decode(tokens)
-    print('>', decoded)
-
-#%%
-#---------- the code above was for generating text with a pretrained model -----------------
-#---------------------code below is for training the model from scratch.--------------------
-
-# %%
-# load the text file for training
-with open('input.txt', 'r') as f:
-    text = f.read()
-
-text = text[:1000]  # truncate to 10k characters for faster training
-
-# encode the text and convert it to a tensor
-enc = tiktoken.get_encoding("gpt2")
-tokens = enc.encode(text)
-
-# define batch size and sequence length
-B, T = 4, 32  # batch size and sequence length
-
-# buffer for batching. the +1 is to have a target token for the last token in the input sequence
-buf = torch.tensor(tokens[:B*T + 1], dtype=torch.long)  
-x = buf[:-1].view(B, T)  # input sequence
-y = buf[1:].view(B, T)   # target sequence
-
-# print(x)
-# print(y)
-
-# %%
-model = GPT(GPTConfig())
-model.to(device)
-logits, loss = model(x.to(device), y.to(device))
-
-# %%
-# the loss here is  the loss before any training. A good test to see if the model is initialized correctly is to see if the loss is a number that makes sense. Before training, the probability of the model predicting any of the possible 50,257 tokens in the vocabulary is uniform. So the loss should be around -log(1/50257) = 10.9. (the negative log likelihood of any given token). If the loss is significantly different from this, then there is something wrong with the model initialization.
-print(loss)
-print(logits.shape)
-
-# %%
-model = GPT(GPTConfig())
-model.to(device)
-logits, loss = model(x.to(device), y.to(device))
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
-for i in range(50):
-    optimizer.zero_grad()
-    logits, loss = model(x.to(device), y.to(device))
-    loss.backward()
-    optimizer.step()
-    print(f"Step {i+1}, Loss: {loss.item()}")
 
 

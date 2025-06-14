@@ -16,10 +16,16 @@ assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devic
 
 # a simple way to check whether your script is being run under Distributed Data Parallel (DDP) — specifically when using torchrun. Note that I moved  this code to the top of the script so that I can immediately check if the script is running in DDP mode. Karpathy has it much later in the script, but I find it more convenient to have it at the top.
 ddp = int(os.environ.get('RANK', -1)) != -1
+print(f'Running in DDP mode: {ddp}')
+
 if ddp:
     master_process = int(os.environ['RANK']) == 0
     if master_process:
         print('Running in Distributed Data Parallel (DDP) mode')
+else:
+    master_process = True # if not using DDP, we are the master process
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f'Running in single process mode on {device} device')
 
 # %%
 # This is the configuration for the GPT model. It defines the hyperparameters for the model. The block size is the maximum sequence length, vocab size is the size of the vocabulary, n_layer is the number of transformer blocks, n_head is the number of attention heads, and n_embd is the embedding dimension. 
@@ -41,6 +47,7 @@ config = GPTConfig()
 
 if master_process:
     print(f'GPTConfig instantiated with block size: {config.block_size}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
+
 
 #%%
 class CausalSelfAttention(nn.Module):
@@ -263,7 +270,7 @@ from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 
-ddp = int(os.environ.get('RANK', -1)) != -1 # check if the script is being run under DDP. If RANK is set, then we are running under DDP. If not, then we are not running under DDP.
+# ddp = int(os.environ.get('RANK', -1)) != -1 # check if the script is being run under DDP. If RANK is set, then we are running under DDP. If not, then we are not running under DDP.
 if ddp:
     print('Running in Distributed Data Parallel (DDP) mode')
     # Note that LOCAL_RANK is the rank of the process on one given node (when using multiple nodes), while RANK is the rank of the process across all nodes (when using multiple nodes). When using a setup with just one node, LOCAL_RANK and RANK are the same. 
@@ -339,13 +346,13 @@ print(f'Optimizer initialized on GPU rank {ddp_rank}, device {device}')
 # %%
 # Instantiate the dataloader and load the data.
 # NOTE: I moved the code for the dataloader to a separate file called aae_utils.py. 
-from aae_utils import DataLoaderMultiGPU
+from aae_utils import DataLoaderShardMultiGPU
 
 # initialize the dataloader based on the device type. The batch size and sequence length are set based on the device type and my experiments.
 B = 64 # batch size
 T = 1024 # sequence length
 
-train_loader = DataLoaderMultiGPU(B=B, T=T, process_rank = ddp_rank, num_processes=ddp_world_size)
+train_loader = DataLoaderShardMultiGPU(B=B, T=T, process_rank = ddp_rank, num_processes=ddp_world_size, split='train')
 
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
 effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
