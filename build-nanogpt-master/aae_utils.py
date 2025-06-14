@@ -141,7 +141,7 @@ class DataLoaderShardMultiGPU:
         # if loading the next batch would go beyond the end of the current shard, move to the next shard
         if self.current_position + (B*T*self.num_processes + 1) > len(self.shard_tensor):
             # really clever code from Karpathy. If currently at the last shard, it produces the index of the next shard file in the list. If currently at last file in the shard file list, it sets the index for the next shard to 0. Very clever  way to loop back to the first file after reaching the end of the shard files list.
-            self.current_shard = (self.current_shard_idx + 1) % len(self.shard_files)
+            self.current_shard_idx = (self.current_shard_idx + 1) % len(self.shard_files)
 
             # capture the tokens at the end of the current shard that will not be used or seen. Note that in Karpathy's implementation, these tokens are just never used.
             remaining_tokens = self.shard_tensor[self.current_position:]
