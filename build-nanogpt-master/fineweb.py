@@ -53,7 +53,7 @@ nprocs = max(1, os.cpu_count()//2)
 print(f'num_workers: {nprocs}')
 
 import time
-d_start = time.time()
+
 
 with mp.Pool(nprocs) as pool:
     shard_index = 0
@@ -61,6 +61,7 @@ with mp.Pool(nprocs) as pool:
     all_tokens_np = np.empty((shard_size,), dtype=np.uint16)
     token_count = 0
     progress_bar = None
+    d_start = time.time()  # aae code to start timing for shard creation
     for tokens in pool.imap(tokenize, fw, chunksize=16):
 
         # is there enough space in the current shard for the new tokens?
@@ -73,7 +74,7 @@ with mp.Pool(nprocs) as pool:
                 progress_bar = tqdm(total=shard_size, unit="tokens", desc=f"Shard {shard_index}")
             progress_bar.update(len(tokens))
         else:
-            # measure time to create this shard
+            # aae code to measure time to create this shard
             d_end = time.time()
             dt = d_end - d_start
             d_start = d_end

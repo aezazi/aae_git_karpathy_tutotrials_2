@@ -94,6 +94,7 @@ class DataLoaderShardMultiGPU:
         self.num_processes = num_processes
         self.process_rank = process_rank
         self.shard_dir = shard_dir
+        self.remaining_tokens = []  # to capture the tokens at the end of the current shard that will not be used or seen
         assert split in {'train', 'val'}, f'you must specify if the data is train or val'
 
         # returns an unordered list of file names in the shard directory. Note that these are just string file names, not the actual numpy arrays.
@@ -140,11 +141,11 @@ class DataLoaderShardMultiGPU:
         # if loading the next batch would go beyond the end of the current shard, move to the next shard
         if self.current_position + (B*T*self.num_processes + 1) > len(self.shard_tensor):
             # really clever code from Karpathy. If currently at the last shard, it produces the index of the next shard file in the list. If currently at last file in the shard file list, it sets the index for the next shard to 0. Very clever  way to loop back to the first file after reaching the end of the shard files list.
-            self.current_shard = (self.current_shard + 1) % len(self.shard_files)
+            self.current_shard = (self.current_shard_idx + 1) % len(self.shard_files)
 
             # capture the tokens at the end of the current shard that will not be used or seen. Note that in Karpathy's implementation, these tokens are just never used.
-            remaining_tokens = self.tokens[self.current_position:]
-            remaining_tokens_count = len(remaining_tokens)
+            remaining_tokens = self.shard_tensor[self.current_position:]
+            self.remaining_tokens.append(len(remaining_tokens))
             
             # load the next shard
             self.shard_tensor =  self.load_tokens_convert_to_tensor(self.shard_files[self.current_shard_idx])  
@@ -155,7 +156,7 @@ class DataLoaderShardMultiGPU:
         x = x.cuda(non_blocking=True)
         y = y.cuda(non_blocking=True)
         
-        return x, y
+        return x, y, self.current_shard_idx, self.remaining_tokens
    
 
 # %%

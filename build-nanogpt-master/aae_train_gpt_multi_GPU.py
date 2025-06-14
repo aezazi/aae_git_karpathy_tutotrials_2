@@ -400,7 +400,7 @@ for step in range(training_steps):
     micro_steps = accumulation_steps_desired # set the number of mirco steps to accumulate gradients over
     for micro_step in range(micro_steps):
         # this is a gradient accumulation step. We accumulate gradients over desired accumalation steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
-        x, y = train_loader.next_batch()
+        x, y, shard_idx, tokens_abandoned = train_loader.next_batch()
         x, y = x.to(device), y.to(device) # move the data to the device. 
 
         # By default, ddp synchronizes the loss from each process after each micro step by taking an average of all the processes and making that average the loss for all the processes for that step. Its very inefficient to do this at each micro_step. So we want to only synchronize gradients among all the processes on the last micro step. See Karpathy's video tutorial at 2:57:00 for more details. The code below sets the require_backward_grad_sync attribute of the model to True only on the last micro step. 
@@ -436,7 +436,7 @@ for step in range(training_steps):
     tokens_processed = train_loader.B * train_loader.T * micro_steps * ddp_world_size
     tokens_per_sec = tokens_processed / dt
     if master_process:
-        print(f"Step {step}, Loss: {loss_accum.item()}, LR: {optimizer.param_groups[0]['lr']}, norm: {norm:.4f}, Time: {dt:.2f}sec, Tokens/sec: {tokens_per_sec:.2f}")
+        print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item()},  LR: {optimizer.param_groups[0]['lr']},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.1f}")
     
     if step % 5 == 0:
         loss_list.append(loss_accum.item())
