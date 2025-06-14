@@ -14,7 +14,7 @@ import numpy as np
 #%%
 assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
 
-# a simple way to check whether your script is being run under Distributed Data Parallel (DDP) — specifically when using torchrun. Note that I moved  this code to the top of the script so that I can immediately check if the script is running in DDP mode. Karpathy has it much later in the script, but I find it more convenient to have it at the top.
+# a simple way to check whether your script is being run under Distributed Data Parallel (DDP) — specifically when using torchrun with a cuda GPU. Note that you can be in DDP mode even with a single GPU when using torchrun. Note that I moved  this code to the top of the script so that I can immediately check if the script is running in DDP mode. Karpathy has it much later in the script.
 ddp = int(os.environ.get('RANK', -1)) != -1
 print(f'Running in DDP mode: {ddp}')
 
