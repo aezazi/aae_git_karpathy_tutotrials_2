@@ -16,7 +16,7 @@ import multiprocessing as mp
 #%%
 # Constants
 tokenizer_name = "gpt2"
-shard_size = 100_000_000
+shard_size = 100_000_000 # 100 million tokens per shard
 shard_dir = "aae_token_shards_mp"
 num_workers = max(1, os.cpu_count() // 2)
 
@@ -57,6 +57,7 @@ def tokenize(example, eot=eot_token_id):
 #     break
 
 # %%
+# NOTE: My approach is different from Karpathy's in that Karpathy splits documents between shards and compeletky fills each shard to the max size.I prefer to keep documents intact and only split them at the end of the document. If a shard is not completely filled, I slice off the portion that is populated so that the final numpy array is exactly shard_size tokens long. This assumes that shard_size is large enough tp accommodate the largest document in the dataset.
 
 def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=shard_dir):
     os.makedirs(shard_dir, exist_ok=True)
@@ -75,9 +76,14 @@ def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=s
         
         # NOTE: that pool.map outputs a list of  tokens for each example in dataset_iterator  
         for tokens  in tqdm(pool.imap(tokenize, dataset_iterator, chunksize=16), total=len(dataset_iterator), desc=" Percent of datatset processed (cumulative)", unit_scale=True, colour='blue'):
+            
+            assert len(tokens) <= shard_size, "the length of tokens for a document exceeds the shard size. Please increase the shard size or split the document into smaller chunks."
+
             if shard_token_count + len(tokens) > shard_size:
                 split = 'val' if shard_idx == 0 else 'train'
                 shard_save_path = os.path.join(shard_dir, f'{split}_shard_{shard_idx:04d}')
+
+                # if shard is not full, slice off the portion that is populated
                 shard_tokens_final = shard_tokens_buffer[:shard_token_count].astype(np.uint16)
                 np.save(shard_save_path, shard_tokens_final)
 
@@ -110,12 +116,13 @@ def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=s
 # %%
 if __name__ == '__main__':
     dataset_iterator = load_dataset("HuggingFaceFW/fineweb-edu", split="train", name="sample-10BT", streaming=False)
-    dataset_iterator_test = dataset_iterator.select(range(1000000))
+    dataset_iterator_test = dataset_iterator.select(range(1))  # Select a subset for testing
     create_shards(dataset_iterator, dataset_iterator_test)
 
-# %%
-# tokens = np.load("aae_token_shards_multiprocess_M2/shard_0000.npy")
+#  %%
+# import numpy as np
+# tokens = np.load("aae_token_shards_mp/train_shard_0001.npy")
 # print(type(tokens))
-# print(tokens[0])
+# print(tokens)
 # print(f'{len(tokens):,}')
 # %%

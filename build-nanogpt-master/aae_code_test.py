@@ -361,12 +361,44 @@ print(tok_final)
 # %%
 # testing the DataLoaderShardMultiGPU class from aae_utils.py
 from aae_utils import DataLoaderShardMultiGPU as loader
+
 l2 = loader(201, 1024, split='train', shard_dir='aae_token_shards_mp')
 
 # %%
+import numpy as np
 # l.shards.sort()
-l2.shard_files
-
+print(l2.shard_files)
+# print(type(l2.shards[0]))
+n = np.load(f'{l2.shard_dir}/{l2.shard_files[0]}')
+print(n.shape, n.dtype)
 
 # %%
+# this is the shard index for the 9th file in the list of shard files. really clever way to loop back to the first file after reaching the end of the shard files list
+print(len(l2.shard_files))
+
+98 % len(l2.shard_files) 
+# %%
+import torch
+def load_tokens(filename):
+    npt = np.load(filename)
+    # npt = npt.astype(np.int32) # added after video
+    ptt = torch.tensor(npt, dtype=torch.int32) # changed to int32 after video
+    return ptt
+ptt = load_tokens(f'{l2.shard_dir}/{l2.shard_files[0]}')
+ptt.dtype, ptt.shape, ptt[:10]
+# %%
+99 % len(l2.shard_files) # this is the shard index for the 9th file in the list of shard files
+# %%
+os.makedirs('test_dir', exist_ok=True)
+t = np.load(f'{l2.shard_dir}/{l2.shard_files[0]}')
+s_1 = t[:11]
+s_2 = t[10:22]
+s_3 = t[20:32]
+print(s_1)
+# %%
+import tiktoken
+enc = tiktoken.get_encoding("gpt2")
+tok = enc.encode_ordinary("Hello, world! This is a test of the tiktoken library.")
+print(tok)
+len(tok)
 # %%
