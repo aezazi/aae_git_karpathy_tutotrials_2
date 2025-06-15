@@ -359,7 +359,7 @@ T = 1024 # sequence length
 
 train_loader = DataLoaderShardMultiGPU(B=B, T=T, process_rank = ddp_rank, num_processes=ddp_world_size, split='train')
 
-val_loader = DataLoaderShardMultiGPU(B=B, T=T, process_rank = ddp_rank, num_processes=ddp_world_size, split='validation')
+val_loader = DataLoaderShardMultiGPU(B=B, T=T, process_rank = ddp_rank, num_processes=ddp_world_size, split='val')
 
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
 effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
@@ -406,7 +406,7 @@ for step in range(training_steps):
 
     # Every so often, put the model in validation mode and use the validation dataset to compute loss. This is to help us catch any over fitting issues. 
     # validate the model every 100 steps
-    if step % 250 == 0 and step > 0:
+    if step % 100 == 0 and step > 0:
         model.eval() # set the model to evaluation mode
         val_loader.reset() # reset the validation loader to the beginning of the validation dataset
         
@@ -428,11 +428,11 @@ for step in range(training_steps):
             # synchronize the validation loss across all gpu processes
             dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
         if master_process:
-            print(f"Validation Step {step},  shard_idx: {shard_idx},  Loss: {val_loss.item()},  LR: {optimizer.param_groups[0]['lr']}")
+            print(f"Validation Step {step},  shard_idx: {shard_idx},  Loss: {val_loss_accum.item():.4f},  LR: {optimizer.param_groups[0]['lr']}")
 
 # once in a while generate from the model (except step 0, which is noise)
     enc = tiktoken.get_encoding("gpt2")
-    if ((step > 0 and step % 250 == 0) or last_step) and (not use_compile):
+    if ((step > 0 and step % 250 == 0) or last_step):
         model.eval()
         num_return_sequences = 4
         max_length = 32
