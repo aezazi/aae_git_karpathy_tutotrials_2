@@ -1,6 +1,6 @@
 #%%
 """
-
+My implementation of the Karpathy's nanoGPT code for building a dataset from the fineweb-edu dataset.
 """
 
 # %%
