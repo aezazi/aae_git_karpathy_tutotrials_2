@@ -16,7 +16,7 @@ assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devic
 
 # a simple way to check whether your script is being run under Distributed Data Parallel (DDP) — specifically when using torchrun with a cuda GPU. Note that you can be in DDP mode even with a single GPU when using torchrun. Note that I moved  this code to the top of the script so that I can immediately check if the script is running in DDP mode. Karpathy has it much later in the script.
 ddp = int(os.environ.get('RANK', -1)) != -1
-print(f'Running in DDP mode: {ddp}')
+
 
 if ddp:
     master_process = int(os.environ['RANK']) == 0
@@ -270,10 +270,10 @@ from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 
-# ddp = int(os.environ.get('RANK', -1)) != -1 # check if the script is being run under DDP. If RANK is set, then we are running under DDP. If not, then we are not running under DDP.
+# Check if we are running in DDP mode. If so, we will initialize the process group and set the device for each process.
 if ddp:
     print('Running in Distributed Data Parallel (DDP) mode')
-    # Note that LOCAL_RANK is the rank of the process on one given node (when using multiple nodes), while RANK is the rank of the process across all nodes (when using multiple nodes). When using a setup with just one node, LOCAL_RANK and RANK are the same. 
+    # Note that LOCAL_RANK is the rank of the process on one given machine (when using multiple machine), while RANK is the rank of the process across all machines (when using multiple gpus on multiple machines). When using a setup with just one machine, LOCAL_RANK and RANK are the same. 
     init_process_group(backend='nccl') # initialize the process group for DDP
     ddp_rank = int(os.environ['RANK']) # get the rank of the current process
     ddp_local_rank = int(os.environ['LOCAL_RANK']) # get the local rank of the current process
@@ -319,7 +319,9 @@ model = GPT(GPTConfig())
 torch.set_float32_matmul_precision('high')
 model.to(device)
 
-model = torch.compile(model)
+use_compile = True # set to True to use torch.compile
+
+model = torch.compile(model) if use_compile else model 
 # model = torch.compile(model, backend='inductor', mode='default')
 
 # Check model is on which device. 
@@ -329,34 +331,39 @@ if ddp:
     # wrap the model in DDP if using DDP
     model = DDP(model, device_ids=[ddp_local_rank])
     print(f'Model wrapped in DDP on device: {device}')
-raw_model = model.module if ddp else model # get the raw model from the DDP wrapper. This is useful for accessing the model's parameters and methods directly.
+
+# get the raw model from the DDP wrapper. This is useful for accessing the model's parameters and methods directly. the raw_model is the actual model that we want to optimize. The DDP wrapper is just a wrapper that allows us to use distributed data parallelism.
+raw_model = model.module if ddp else model 
 
 
 #%%
-# Instantiate and create the optimizer.
+# Instantiate the optimizer.
 # NOTE: I moved the code for optimizer configuration to a separate file called aae_utils.py.
 from aae_utils import ConfigureOptimizer
 
 base_lr = 6e-4
-optimizer = ConfigureOptimizer(raw_model).create_optimizer(weight_decay=0.1, learning_rate=base_lr, device_type=device)
+# Note that we are using the raw model here, not the DDP wrapped model. This is because the DDP wrapper does not have the optimizer parameters. The raw model is the actual model that we want to optimize.
+optimizer = ConfigureOptimizer(raw_model).create_optimizer(weight_decay=0.1, learning_rate = base_lr, device_type=device)
 
 print(f'Optimizer initialized on GPU rank {ddp_rank}, device {device}')
 
 
 # %%
 # Instantiate the dataloader and load the data.
-# NOTE: I moved the code for the dataloader to a separate file called aae_utils.py. 
+# NOTE: I moved the code for the dataloader to a separate file  aae_utils.py. 
 from aae_utils import DataLoaderShardMultiGPU
 
-# initialize the dataloader based on the device type. The batch size and sequence length are set based on the device type and my experiments.
+# initialize the dataloader for both the traininf and validation data. Batch size has to be be customized to fit the gpu being used.
 B = 64 # batch size
 T = 1024 # sequence length
 
 train_loader = DataLoaderShardMultiGPU(B=B, T=T, process_rank = ddp_rank, num_processes=ddp_world_size, split='train')
 
+val_loader = DataLoaderShardMultiGPU(B=B, T=T, process_rank = ddp_rank, num_processes=ddp_world_size, split='validation')
+
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
 effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
-# effective_batch_size_desired =393216
+
 
 assert effective_batch_size_desired % (train_loader.B * train_loader.T * ddp_world_size) == 0, f"effective batch size {effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.T}"
 
@@ -379,7 +386,7 @@ training_steps = 19073
 T_max = training_steps # the number of iterations over which lr is reduced to the minimum
 max_lr = base_lr
 min_lr = max_lr * 0.1
-warm_up_steps = 715 
+warm_up_steps = 715 # from gpt2 paper. Karpathy syas we can be more aggresive.
 restart = False # whether to use cosine annealing with restarts or not
 T_0 = T_max // 3 # if using restarts, the number of iterations over which lr is reduced to the minimum before restart
 T_mult = 2 # the factor by which T_0 is multiplied at each restart.
@@ -387,7 +394,7 @@ T_mult = 2 # the factor by which T_0 is multiplied at each restart.
 # instantiate and create learning rate scheduler
 scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=T_max, restart=restart, warm_up_steps=warm_up_steps, max_lr=max_lr, min_lr=min_lr, T_mult=T_mult, T_0=T_0)
 
-print(f'Scheduler initialized successfully on GPU rank {ddp_rank}, of {ddp_world_size}')
+print(f'Scheduler initialized on GPU rank {ddp_rank}, of {ddp_world_size}')
 
 #%%
 # Run the training loop.
@@ -395,6 +402,73 @@ model.train() # set the model to training mode
 loss_list= []
 for step in range(training_steps):
     t0 = time.time()
+    last_step = (step == training_steps - 1)
+
+    # Every so often, put the model in validation mode and use the validation dataset to compute loss. This is to help us catch any over fitting issues. 
+    # validate the model every 100 steps
+    if step % 250 == 0 and step > 0:
+        model.eval() # set the model to evaluation mode
+        val_loader.reset() # reset the validation loader to the beginning of the validation dataset
+        
+        with torch.no_grad(): # no need to compute gradients for validation
+            val_loss_accum = 0.0
+            val_loss_steps = 20 # number of steps to accumulate validation loss over
+            for _ in range(val_loss_steps):
+                x, y, shard_idx, tokens_abandoned = val_loader.next_batch()
+                x, y = x.to(device), y.to(device)
+
+                # see training loop below for details on the use of autocast. 
+                with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                    logits, val_loss = model(x, y)
+                
+                val_loss = val_loss / val_loss_steps # divide the loss by the number of accumulation steps to get the average loss. This computes the averaage loss on one gpu.
+                val_loss_accum += val_loss.detach() # detach the loss from the computation graph to avoid memory leaks.
+
+        if ddp:
+            # synchronize the validation loss across all gpu processes
+            dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
+        if master_process:
+            print(f"Validation Step {step},  shard_idx: {shard_idx},  Loss: {val_loss.item()},  LR: {optimizer.param_groups[0]['lr']}")
+
+# once in a while generate from the model (except step 0, which is noise)
+    enc = tiktoken.get_encoding("gpt2")
+    if ((step > 0 and step % 250 == 0) or last_step) and (not use_compile):
+        model.eval()
+        num_return_sequences = 4
+        max_length = 32
+        tokens = enc.encode("Hello, I'm a language model,")
+        tokens = torch.tensor(tokens, dtype=torch.long)
+        tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
+        xgen = tokens.to(device)
+        sample_rng = torch.Generator(device=device)
+        sample_rng.manual_seed(42 + ddp_rank)
+        while xgen.size(1) < max_length:
+            # forward the model to get the logits
+            with torch.no_grad():
+                with torch.autocast(device_type=device, dtype=torch.bfloat16):
+                    logits, loss = model(xgen) # (B, T, vocab_size)
+                # take the logits at the last position
+                logits = logits[:, -1, :] # (B, vocab_size)
+                # get the probabilities
+                probs = F.softmax(logits, dim=-1)
+                # do top-k sampling of 50 (huggingface pipeline default)
+                # topk_probs here becomes (5, 50), topk_indices is (5, 50)
+                topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
+                # select a token from the top-k probabilities
+                # note: multinomial does not demand the input to sum to 1
+                ix = torch.multinomial(topk_probs, 1, generator=sample_rng) # (B, 1)
+                # gather the corresponding indices
+                xcol = torch.gather(topk_indices, -1, ix) # (B, 1)
+                # append to the sequence
+                xgen = torch.cat((xgen, xcol), dim=1)
+        # print the generated text
+        for i in range(num_return_sequences):
+            tokens = xgen[i, :max_length].tolist()
+            decoded = enc.decode(tokens)
+            print(f"rank {ddp_rank} sample {i}: {decoded}")
+
+    # training loop
+    model
     optimizer.zero_grad()
     loss_accum  = 0.0
     micro_steps = accumulation_steps_desired # set the number of mirco steps to accumulate gradients over

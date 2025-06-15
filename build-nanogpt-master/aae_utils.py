@@ -200,7 +200,7 @@ class ConfigureOptimizer:
 # %%
 # create learning rate scheduler class
 
-# This my implementation of the cosine learning rate scheduler and is different from Karpathy's implementation. I am using the Pytorch implementatons of cosine annealing schedures with and without out restart as well as my own code for an initial linear warm-up. the user has to option use cosine annealing with restarts or not, as well as the option to use a linear warmup or not with the warmup steps as a parameter
+# This my implementation of the cosine learning rate scheduler and is different from Karpathy's implementation. I am using the Pytorch implementatons of cosine annealing scheduler with and without out restart as well as my own code for an initial linear warm-up. the user has to option use cosine annealing with restarts or not, as well as the option to use a linear warmup or not with the warmup steps as a parameter
 
 class CosineLearingRateScheduler:
     def __init__(self, 
@@ -229,7 +229,6 @@ class CosineLearingRateScheduler:
             self.scheduler = CosineAnnealingLR(optimizer, T_max=self.T_max, 
                                                eta_min=self.min_lr)
      
-
     def set_lr(self, step):
         if step < self.warm_up_steps:
             # Linear warmup: scale up from 0 to max_lr
