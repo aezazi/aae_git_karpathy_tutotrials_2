@@ -120,6 +120,7 @@ if __name__ == '__main__':
     create_shards(dataset_iterator, dataset_iterator_test)
 
 #  %%
+# # code to inspect the saved shards
 # import numpy as np
 # tokens = np.load("aae_token_shards_mp/train_shard_0001.npy")
 # print(type(tokens))
