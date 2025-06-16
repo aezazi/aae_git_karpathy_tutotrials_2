@@ -577,7 +577,7 @@ for step in range(training_steps):
     if master_process:
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item()},  LR: {optimizer.param_groups[0]['lr']},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.1f}")
     
-    if step % 5 == 0:
+    if step % 10 == 0:
         loss_list.append(loss_accum.item())
     
 if ddp:
@@ -592,22 +592,22 @@ import sys; sys.exit(0) # exit the script after training. This is just for testi
 #%%
 # Plotting the learning rate schedule
 
-import matplotlib.pyplot as plt
-plt.figure(figsize=(100, 40))
-plt.plot(range(training_steps), scheduler.lrs, marker='o')
-plt.title('Learning Rate Schedule: Warmup + CosineAnnealingWarmRestarts')
-plt.xlabel('step')
-plt.ylabel('Learning Rate')
-plt.grid(True)
-plt.show()
+# import matplotlib.pyplot as plt
+# plt.figure(figsize=(100, 40))
+# plt.plot(range(training_steps), scheduler.lrs, marker='o')
+# plt.title('Learning Rate Schedule: Warmup + CosineAnnealingWarmRestarts')
+# plt.xlabel('step')
+# plt.ylabel('Learning Rate')
+# plt.grid(True)
+# plt.show()
 
-plt.figure(figsize=(100, 40))
-plt.plot(range(training_steps//5), loss_list, marker='o')
-plt.title('Loss vs Step')
-plt.xlabel('step')
-plt.ylabel('Loss')
-plt.grid(True)
-plt.show()
+# plt.figure(figsize=(100, 40))
+# plt.plot(range(training_steps//5), loss_list, marker='o')
+# plt.title('Loss vs Step')
+# plt.xlabel('step')
+# plt.ylabel('Loss')
+# plt.grid(True)
+# plt.show()
 
 #%%
 print(loss_list)
