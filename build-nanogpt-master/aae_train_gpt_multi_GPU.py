@@ -538,7 +538,8 @@ for step in range(training_steps):
             dist.all_reduce(num_correct_norm, op=dist.ReduceOp.SUM)
             num_total = num_total.item()
             num_correct_norm = num_correct_norm.item()
-        acc_norm = num_correct_norm / num_total
+        
+        acc_norm = round((num_correct_norm / num_total), 4) if num_total > 0 else 0.0
         
         if master_process:
             print(f"HellaSwag accuracy: {num_correct_norm}/{num_total}={acc_norm:.4f}")

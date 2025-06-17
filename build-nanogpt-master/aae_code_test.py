@@ -395,10 +395,49 @@ s_1 = t[:11]
 s_2 = t[10:22]
 s_3 = t[20:32]
 print(s_1)
+
 # %%
 import tiktoken
+import numpy as np
+from itertools import chain
+shard_list = []
 enc = tiktoken.get_encoding("gpt2")
-tok = enc.encode_ordinary("Hello, world! This is a test of the tiktoken library.")
-print(tok)
-len(tok)
+tok1 = enc.encode_ordinary("This is a test of the tiktoken")
+tok2 = enc.encode_ordinary("I want to fuck Lily")
+tok1.insert(0, 20566)
+
+print(tok1)
+print('-'*40)
+print(tok2)
+print('-'*40)
+shard_list.append(tok1)
+shard_list.append(tok2)
+print(shard_list)
+print('-'*40)
+
+# flat_list = list(chain.from_iterable(shard_list))
+shard_array = np.array(shard_list, dtype=object)
+print(shard_array)
+print('-'*40)
+
+np.save("shard_000.npy", shard_array)
+
+shard_array = np.fromiter((x for sublist in shard_list for x in sublist), dtype=int)
+loaded = np.load("shard_000.npy", allow_pickle=True)
+print(loaded)
+print('-'*40)
+np.random.shuffle(loaded) 
+print(loaded)
+print('-'*40)
+
+flat = np.fromiter((x for sublist in loaded for x in sublist), dtype=np.int32)
+
+flat
+
+
+
+
+
+
+
 # %%
