@@ -10,6 +10,7 @@ from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
 import numpy as np
+import csv
 
 #%%
 assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
@@ -430,12 +431,12 @@ print(f'Scheduler initialized on GPU rank {ddp_rank}, of {ddp_world_size}')
 # Run the training loop.
 model.train() # set the model to training mode
 loss_list= []
+hellaswag_list = []
 for step in range(training_steps):
     t0 = time.time()
     last_step = (step == training_steps - 1)
 
     # Every so often, put the model in validation mode and use the validation dataset to compute loss. This is to help us catch any over fitting issues. 
-    # validate the model every 100 steps
     if step % 100 == 0 and step > 0:
         model.eval() # set the model to evaluation mode
         val_loader.reset() # reset the validation loader to the beginning of the validation dataset
@@ -498,7 +499,7 @@ for step in range(training_steps):
             decoded = enc.decode(tokens)
             print(f"rank {ddp_rank} sample {i}: {decoded}")
 
-    # once in a while evaluate hellaswag
+    # once in a while evaluate hellaswag. code lifted from Karpathy unchanged.
     if ((step > 0 and step % 250 == 0) or last_step):
         num_correct_norm = 0
         num_total = 0
@@ -530,9 +531,11 @@ for step in range(training_steps):
             print(f"HellaSwag accuracy: {num_correct_norm}/{num_total}={acc_norm:.4f}")
             with open(log_file, "a") as f:
                 f.write(f"{step} hella {acc_norm:.4f}\n")
+        
+        hellaswag_list.append((step, acc_norm))
 
 
-    # training loop
+    # Main training loop
     model
     optimizer.zero_grad()
     loss_accum  = 0.0
@@ -578,10 +581,23 @@ for step in range(training_steps):
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item()},  LR: {optimizer.param_groups[0]['lr']},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.1f}")
     
     if step % 10 == 0:
-        loss_list.append(loss_accum.item())
-    
+        loss_list.append((step,loss_accum.item()))
+
+
 if ddp:
     destroy_process_group()
+
+with open('train_loss.csv','wb') as out:
+    csv_out=csv.writer(out)
+    csv_out.writerow(['step','loss'])
+    for row in loss_list:
+        csv_out.writerow(row)
+
+with open('hellaswag_eval.csv','wb') as out:
+    csv_out=csv.writer(out)
+    csv_out.writerow(['step','hellaswag_accuracy'])
+    for row in hellaswag_list:
+        csv_out.writerow(row)
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
 
