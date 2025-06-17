@@ -360,16 +360,13 @@ with open(hella_loss_file, "w") as f: # open for writing to clear the file
 
 # if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
 
-
 model = GPT(GPTConfig())
 
 torch.set_float32_matmul_precision('high')
 model.to(device)
 
 use_compile = True # set to True to use torch.compile
-
 model = torch.compile(model) if use_compile else model 
-# model = torch.compile(model, backend='inductor', mode='default')
 
 # Check model is on which device. 
 print(f'model and parameters are on device: {next(model.parameters()).device}')
@@ -400,7 +397,7 @@ print(f'Optimizer initialized on GPU rank {ddp_rank}, device {device}')
 # NOTE: I moved the code for the dataloader to a separate file  aae_utils.py. 
 from aae_utils import DataLoaderShardMultiGPU
 
-# initialize the dataloader for both the traininf and validation data. Batch size has to be be customized to fit the gpu being used.
+# initialize the dataloader for both the training and validation data. Batch size has to be be customized to fit the gpu being used.
 B = 64 # batch size
 T = 1024 # sequence length
 
@@ -427,7 +424,7 @@ if master_process:
 from aae_utils import CosineLearingRateScheduler
 
 # 19,073 steps is ~1 epoch, if data is 10B tokens and batch size 0.5M tokens
-training_steps = 2000 
+training_steps = 19703
 
 # define the scheduler parameters
 T_max = training_steps # the number of iterations over which lr is reduced to the minimum
@@ -440,16 +437,13 @@ T_mult = 2 # the factor by which T_0 is multiplied at each restart.
 
 # instantiate and create learning rate scheduler
 scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=T_max, restart=restart, warm_up_steps=warm_up_steps, max_lr=max_lr, min_lr=min_lr, T_mult=T_mult, T_0=T_0)
-
 print(f'Scheduler initialized on GPU rank {ddp_rank}, of {ddp_world_size}')
-
 
 
 #%%
 # Run the training loop.
 model.train() # set the model to training mode
-loss_list= []
-hellaswag_list = []
+
 for step in range(training_steps):
     t0 = time.time()
     last_step = (step == training_steps - 1)
@@ -554,9 +548,6 @@ for step in range(training_steps):
             with open(hella_loss_file, "a") as f:
                 csv_out = csv.writer(f)
                 csv_out.writerow([step, acc_norm])
-        
-        # hellaswag_list.append((step, acc_norm))
-
 
     # Main training loop
     model
@@ -603,28 +594,16 @@ for step in range(training_steps):
     if master_process:
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item()},  LR: {optimizer.param_groups[0]['lr']},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.1f}")
     
-    if step % 10 == 0:
-        with open(train_loss_file, "a") as f:
-            csv_out = csv.writer(f)
-            csv_out.writerow([step, f'{loss_accum.item():.7f}']) # write the step and loss to the csv file
+        if step % 10 == 0:
+            with open(train_loss_file, "a") as f:
+                csv_out = csv.writer(f)
+                csv_out.writerow([step, f'{loss_accum.item():.7f}']) # write the step and loss to the csv file
             
-    loss_list.append((step,loss_accum.item()))
-
-
+   
 if ddp:
     destroy_process_group()
 
-with open('train_loss.csv','wb') as out:
-    csv_out=csv.writer(out)
-    csv_out.writerow(['step','loss'])
-    for row in loss_list:
-        csv_out.writerow(row)
 
-with open('hellaswag_eval.csv','wb') as out:
-    csv_out=csv.writer(out)
-    csv_out.writerow(['step','hellaswag_accuracy'])
-    for row in hellaswag_list:
-        csv_out.writerow(row)
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
 
