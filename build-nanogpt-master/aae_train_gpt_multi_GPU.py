@@ -49,12 +49,6 @@ config = GPTConfig()
 if master_process:
     print(f'GPTConfig instantiated with block size: {config.block_size}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
 
-# create the log directory we will write checkpoints to and log to
-log_dir = "log"
-os.makedirs(log_dir, exist_ok=True)
-log_file = os.path.join(log_dir, f"log.txt")
-with open(log_file, "w") as f: # open for writing to clear the file
-    pass
 
 #%%
 # helper function for HellaSwag eval
@@ -337,6 +331,30 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed(42) # set the random seed for cuda for reproducibility
 
 
+#%%
+# create log files to store training loss and hellaswag eval results.
+
+log_dir = "log"
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, f"log.txt")
+with open(log_file, "w") as f: # open for writing to clear the file
+    pass
+
+# I added the logs for training loss and hellaswag eval results to csv files.
+loss_dir = "loss"
+os.makedirs(loss_dir, exist_ok=True)
+train_loss_file = os.path.join(loss_dir, f"train_loss.csv")
+with open(train_loss_file, "w") as f: # open for writing to clear the file
+    csv_out = csv.writer(f)
+    csv_out.writerow(['step', 'train_loss']) # write the header row
+
+hella_loss_dir = "hella_loss"
+os.makedirs(hella_loss_dir, exist_ok=True)
+hella_loss_file = os.path.join(hella_loss_dir, f"hellaswag_eval.csv")
+with open(hella_loss_file, "w") as f: # open for writing to clear the file
+    csv_out = csv.writer(f)
+    csv_out.writerow(['step', 'hellaswag_accuracy']) # write the header row
+
 # %%
 #Instantiate the model and implement torch.compile if cuda is available.
 
@@ -361,7 +379,7 @@ if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
     print(f'Model wrapped in DDP on device: {device}')
 
-# get the raw model from the DDP wrapper. This is useful for accessing the model's parameters and methods directly. the raw_model is the actual model that we want to optimize. The DDP wrapper is just a wrapper that allows us to use distributed data parallelism.
+# get the raw model from the DDP wrapper. This is useful for accessing the model's parameters and methods directly. the raw_model is the actual model that we want to optimize. The DDP is just a wrapper that allows us to use distributed data parallelism.
 raw_model = model.module if ddp else model 
 
 
@@ -409,13 +427,13 @@ if master_process:
 from aae_utils import CosineLearingRateScheduler
 
 # 19,073 steps is ~1 epoch, if data is 10B tokens and batch size 0.5M tokens
-training_steps = 19073 
+training_steps = 2000 
 
 # define the scheduler parameters
 T_max = training_steps # the number of iterations over which lr is reduced to the minimum
 max_lr = base_lr
 min_lr = max_lr * 0.1
-warm_up_steps = 715 # from gpt2 paper. Karpathy syas we can be more aggresive.
+warm_up_steps = 300 # from gpt2 paper. Karpathy syas we can be more aggresive.
 restart = False # whether to use cosine annealing with restarts or not
 T_0 = T_max // 3 # if using restarts, the number of iterations over which lr is reduced to the minimum before restart
 T_mult = 2 # the factor by which T_0 is multiplied at each restart.
@@ -527,12 +545,17 @@ for step in range(training_steps):
             num_total = num_total.item()
             num_correct_norm = num_correct_norm.item()
         acc_norm = num_correct_norm / num_total
+        
         if master_process:
             print(f"HellaSwag accuracy: {num_correct_norm}/{num_total}={acc_norm:.4f}")
             with open(log_file, "a") as f:
                 f.write(f"{step} hella {acc_norm:.4f}\n")
+
+            with open(hella_loss_file, "a") as f:
+                csv_out = csv.writer(f)
+                csv_out.writerow([step, acc_norm])
         
-        hellaswag_list.append((step, acc_norm))
+        # hellaswag_list.append((step, acc_norm))
 
 
     # Main training loop
@@ -581,7 +604,11 @@ for step in range(training_steps):
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item()},  LR: {optimizer.param_groups[0]['lr']},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.1f}")
     
     if step % 10 == 0:
-        loss_list.append((step,loss_accum.item()))
+        with open(train_loss_file, "a") as f:
+            csv_out = csv.writer(f)
+            csv_out.writerow([step, f'{loss_accum.item():.7f}']) # write the step and loss to the csv file
+            
+    loss_list.append((step,loss_accum.item()))
 
 
 if ddp:
