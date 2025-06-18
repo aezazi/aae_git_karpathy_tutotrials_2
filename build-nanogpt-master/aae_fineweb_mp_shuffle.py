@@ -108,7 +108,7 @@ if __name__ == '__main__':
 # print(f'{len(array_of_lists[0]):,}')
 # print('-' * 40)
 
-# flat_array = np.fromiter((token for token_list in array_of_lists for token in token_list), dtype=int)
+# flat_array = np.fromiter((token for token_list in array_of_lists for token in token_list), dtype=np.uint16)
 # print(flat_array[:20])
-# print(f'{len(flat_array):,} tokens in the flat array')
+# print(f'{len(flat_array):,} tokens in the flat array with dtype {flat_array.dtype}')
 # %%
