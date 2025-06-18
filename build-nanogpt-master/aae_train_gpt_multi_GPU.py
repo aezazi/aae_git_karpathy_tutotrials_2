@@ -52,7 +52,7 @@ if master_process:
 
 #%%
 # helper function for HellaSwag eval
-# takes tokens, mask, and logits, returns the index of the completion with the lowest loss
+# takes tokens, mask, and logits, returns the index of the completion with the lowest loss. Code lifted from Karpathy's tutorial.
 
 def get_most_likely_row(tokens, mask, logits):
     # evaluate the autoregressive loss at all positions
@@ -79,7 +79,7 @@ class CausalSelfAttention(nn.Module):
         super().__init__()
         assert config.n_embd % config.n_head == 0 
 
-        # key, query, value, projections for all heads, but in a batch. The output of the linear layer is 3 times the size of the input. I'm not what the multiplication by 3 is for. presumably because we later divide the output of the linear layer into 3 parts for q, k, v
+        # key, query, value, projections for all heads, but in a batch. The output of the linear layer is 3 times the size of the input. I'm not sure what the multiplication by 3 is for. presumably because we later divide the output of the linear layer into 3 parts for q, k, v
 
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd)
         # output projection
@@ -433,7 +433,7 @@ min_lr = max_lr * 0.1
 warm_up_steps = 300 # from gpt2 paper. Karpathy syas we can be more aggresive.
 restart = False # whether to use cosine annealing with restarts or not
 T_0 = T_max // 3 # if using restarts, the number of iterations over which lr is reduced to the minimum before restart
-T_mult = 2 # the factor by which T_0 is multiplied at each restart.
+T_mult = 3 # the factor by which T_0 is multiplied at each restart.
 
 # instantiate and create learning rate scheduler
 scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=T_max, restart=restart, warm_up_steps=warm_up_steps, max_lr=max_lr, min_lr=min_lr, T_mult=T_mult, T_0=T_0)
