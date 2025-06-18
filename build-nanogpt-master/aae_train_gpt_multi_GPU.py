@@ -424,7 +424,7 @@ if master_process:
 from aae_utils import CosineLearingRateScheduler
 
 # 19,073 steps is ~1 epoch, if data is 10B tokens and batch size 0.5M tokens
-training_steps = 19703
+training_steps = 19699
 
 # define the scheduler parameters
 T_max = training_steps # the number of iterations over which lr is reduced to the minimum
@@ -432,7 +432,7 @@ max_lr = base_lr
 min_lr = max_lr * 0.1
 warm_up_steps = 300 # from gpt2 paper. Karpathy syas we can be more aggresive.
 restart = False # whether to use cosine annealing with restarts or not
-T_0 = T_max // 3 # if using restarts, the number of iterations over which lr is reduced to the minimum before restart
+T_0 = T_max // 4 # if using restarts, the number of iterations over which lr is reduced to the minimum before restart
 T_mult = 3 # the factor by which T_0 is multiplied at each restart.
 
 # instantiate and create learning rate scheduler
