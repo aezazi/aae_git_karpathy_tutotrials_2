@@ -397,14 +397,20 @@ s_3 = t[20:32]
 print(s_1)
 
 # %%
+# experimenting with methods to save and load data list of lists and arrays to keep each document separate and intact so as to enabale data shuffling when loading the data. 
 import tiktoken
 import numpy as np
 from itertools import chain
 shard_list = []
 enc = tiktoken.get_encoding("gpt2")
+eot = enc.eot_token
 tok1 = enc.encode_ordinary("This is a test of the tiktoken")
+tok1 = np.array(tok1, dtype=np.uint16)
 tok2 = enc.encode_ordinary("I want to fuck Lily")
-tok1.insert(0, 20566)
+tok2 = np.array(tok2, dtype=np.uint16)
+tok3 = enc.encode_ordinary("I am getting old")
+tok3 = np.array(tok3, dtype=np.uint16)
+# tok1.insert(0, 20566)
 
 print(tok1)
 print('-'*40)
@@ -412,32 +418,38 @@ print(tok2)
 print('-'*40)
 shard_list.append(tok1)
 shard_list.append(tok2)
+shard_list.append(tok3)
+print(f'list of arrays of tokens')
 print(shard_list)
+print(type(shard_list[0]))
 print('-'*40)
 
-# flat_list = list(chain.from_iterable(shard_list))
 shard_array = np.array(shard_list, dtype=object)
 print(shard_array)
 print('-'*40)
 
 np.save("shard_000.npy", shard_array)
 
-shard_array = np.fromiter((x for sublist in shard_list for x in sublist), dtype=int)
+
 loaded = np.load("shard_000.npy", allow_pickle=True)
+print(f'loading and printing from saved object')
 print(loaded)
 print('-'*40)
 np.random.shuffle(loaded) 
+print(f'loaded 0:\n{loaded[0]}')
+print(f'shuffled list of arrays')
 print(loaded)
 print('-'*40)
+
+loaded[0] = np.concatenate(([eot], loaded[0]))
 
 flat = np.fromiter((x for sublist in loaded for x in sublist), dtype=np.int32)
 
 flat
 
 
-
-
-
-
+# %%
+t = np.concatenate(([eot], tok1))
+t
 
 # %%

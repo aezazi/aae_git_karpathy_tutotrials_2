@@ -31,6 +31,7 @@ def tokenize(example, eot=eot_token_id):
     text = example['text']
     tokens = encoder.encode_ordinary(text)
     tokens.append(eot)
+    tokens = np.array(tokens, dtype=np.uint16)
     # print('tokeninzing')
     return tokens
 
@@ -97,17 +98,17 @@ if __name__ == '__main__':
     create_shards(dataset_iterator, dataset_iterator_test)
 
 #  %%
-# code to inspect the saved shards
+# # code to inspect the saved shards
 # import numpy as np
 # array_of_lists = np.load("aae_token_shards_mp/val_shard_0000.npy", allow_pickle=True)
-# array_of_lists[0].insert(0, eot_token_id) 
+# array_of_lists[0] = np.concatenate(([eot_token_id], array_of_lists[0]))  # Add eot token at the beginning of the first list
 # print(type(array_of_lists))
 # print('-' * 40)
-# print(array_of_lists)
+# print(array_of_lists[:5])
 # print(f'{len(array_of_lists[0]):,}')
 # print('-' * 40)
 
 # flat_array = np.fromiter((token for token_list in array_of_lists for token in token_list), dtype=int)
-# print(flat_array)
+# print(flat_array[:20])
 # print(f'{len(flat_array):,} tokens in the flat array')
 # %%
