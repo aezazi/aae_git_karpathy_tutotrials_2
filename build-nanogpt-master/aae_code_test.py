@@ -456,7 +456,7 @@ t
 import pandas as pd
 import matplotlib.pyplot as plt
 
-df1 = pd.read_csv('hella_loss/hellaswag_eval_base.csv')
+df1 = pd.read_csv('hella_loss/hellaswag_eval_restart.csv')
 df1
 plt.figure(figsize=(10, 7))
 
@@ -469,7 +469,7 @@ plt.tight_layout() # Adjust layout to prevent labels from overlapping
 plt.show()
 
 plt.figure(figsize=(10, 8))
-df2 = pd.read_csv('loss/train_loss_base.csv')
+df2 = pd.read_csv('loss/train_loss_restart.csv')
 plt.plot(df2['step'], df2['train_loss'])
 plt.xlabel('Step')
 plt.ylabel('Train Loss')
