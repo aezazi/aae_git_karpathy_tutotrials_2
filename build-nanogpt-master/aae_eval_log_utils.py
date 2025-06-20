@@ -39,7 +39,6 @@ class CreateLogFiles:
                 csv_out.writerow([step, f'{loss_accum.item():.7f}']) # write the step and loss to the csv file
 
         
-
 class HellaSwag:
     def __init__(self, model=None, device='cuda', ddp_world_size=1, ddp_rank=0, hella_accu_file='hella_eval.csv', step=0, ):
         self.model = model

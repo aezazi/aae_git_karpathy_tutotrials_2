@@ -404,9 +404,9 @@ for step in range(training_steps):
             print(f"rank {ddp_rank} sample {i}: {decoded}")
 
     # once in a while evaluate hellaswag. instatiate hellaswag from aae_eval_log_utils file
-    if ((step > 0 and step % 50 == 0) or last_step):
+    if ((step > 0 and step % 150 == 0) or last_step):
         hella_acc = eval_log.HellaSwag(model=model, device=device, ddp_world_size=ddp_world_size, ddp_rank=ddp_rank)
-        hella_acc.log_hella_accu(step, log_file=logging.hella_accu_file)
+        hella_acc.log_hella_accu(step=step, log_file=logging.hella_accu_file)
       
         
     # Main training loop
