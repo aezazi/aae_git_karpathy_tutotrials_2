@@ -403,15 +403,12 @@ for step in range(training_steps):
             decoded = enc.decode(tokens)
             print(f"rank {ddp_rank} sample {i}: {decoded}")
 
-    # once in a while evaluate hellaswag. code lifted from Karpathy unchanged.
-    # instatiate hellaswag from utils file
-    hella_acc = eval_log.HellaSwag(model=model, device=device, ddp_world_size=ddp_world_size, ddp_rank=ddp_rank)
-    
-    if ((step > 0 and step % 20 == 0) or last_step):
+    # once in a while evaluate hellaswag. instatiate hellaswag from aae_eval_log_utils file
+    if ((step > 0 and step % 50 == 0) or last_step):
+        hella_acc = eval_log.HellaSwag(model=model, device=device, ddp_world_size=ddp_world_size, ddp_rank=ddp_rank)
         hella_acc.log_hella_accu(step, log_file=logging.hella_accu_file)
       
         
-
     # Main training loop
     model.train()
     optimizer.zero_grad()
@@ -456,7 +453,6 @@ for step in range(training_steps):
     tokens_per_sec = tokens_processed / dt
     if master_process:
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item()},  LR: {optimizer.param_groups[0]['lr']},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.1f}")
-    
         if step % 10 == 0:
             logging.log_training_loss(step=step, loss_accum=loss_accum)
             
@@ -464,10 +460,8 @@ for step in range(training_steps):
 if ddp:
     destroy_process_group()
 
-
-
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
 
-# torchrun --standalone --nproc_per_node=4 aae_train_gpt_multi_GPU_v2.py
+# torchrun --standalone --nproc_per_node=4 aae_train_GPU_v2.py
 
 

@@ -110,11 +110,35 @@ class HellaSwag:
    
 
 class validation_check:
-    def __init__(self, model=None, val_loader=None, ddp=True, rank=None):
+    def __init__(self, model=None, device = "cuda", val_loader=None, rank=None, ddp=True, ddp_rank=1, step=0):
         self.model = model
         self.val_loader = val_loader
         self.ddp = ddp
         self.rank = rank
+        self.device = device
+        self.master_process = ddp_rank == 0
 
 
-        pass
+        if step % 100 == 0 and step > 0:
+            self.model.eval() # set the model to evaluation mode
+            self.val_loader.reset() # reset the validation loader to the beginning of the validation dataset
+            
+            with torch.no_grad(): # no need to compute gradients for validation
+                val_loss_accum = 0.0
+                val_loss_steps = 20 # number of steps to accumulate validation loss over
+                for _ in range(val_loss_steps):
+                    x, y, shard_idx, tokens_abandoned = val_loader.next_batch()
+                    x, y = x.to(device), y.to(device)
+
+                    # see training loop below for details on the use of autocast. 
+                    with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                        logits, val_loss = model(x, y)
+                    
+                    val_loss = val_loss / val_loss_steps # divide the loss by the number of accumulation steps to get the average loss. This computes the averaage loss on one gpu.
+                    val_loss_accum += val_loss.detach() # detach the loss from the computation graph to avoid memory leaks.
+
+        if ddp:
+            # synchronize the validation loss across all gpu processes
+            dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
+        # if self.master_process:
+        #     print(f"Validation Step {step},  shard_idx: {shard_idx},  Loss: {val_loss_accum.item():.4f},  LR: {optimizer.param_groups[0]['lr']}")
