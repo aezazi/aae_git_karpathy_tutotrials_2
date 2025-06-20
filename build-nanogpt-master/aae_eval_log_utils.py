@@ -7,6 +7,9 @@ import os
 import numpy as np
 from hellaswag import render_example, iterate_examples
 import csv
+from torch.distributed import init_process_group, destroy_process_group
+from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed as dist
 
 
 class CreateLogFiles:
@@ -38,14 +41,15 @@ class CreateLogFiles:
         
 
 class HellaSwag:
-    def __init__(self, model=None, device='cuda', ddp_world_size=1, ddp_rank=0, log_file='log.txt', hella_loss_file='hella_loss.csv', step=0):
+    def __init__(self, model=None, device='cuda', ddp_world_size=1, ddp_rank=0, hella_accu_file='hella_eval.csv', step=0, ):
         self.model = model
         self.device = device
         self.ddp_world_size = ddp_world_size
         self.ddp_rank = ddp_rank
-        self.log_file = log_file
+        self.log_hella_accufile = hella_accu_file
+        self.master_process = ddp_rank == 0
 
-    def get_most_likely_row(tokens, mask, logits):
+    def get_most_likely_row(self,tokens=None, mask=None, logits=None):
     # evaluate the autoregressive loss at all positions
         shift_logits = (logits[..., :-1, :]).contiguous()
         shift_tokens = (tokens[..., 1:]).contiguous()
@@ -64,43 +68,43 @@ class HellaSwag:
         pred_norm = avg_loss.argmin().item()
         return pred_norm  
 
-#     def compute_accuracy(self, model, dataloader, device):
-#         num_correct_norm = 0
-#         num_total = 0
-#         for i, example in enumerate(iterate_examples("val")):
-#             # only process examples where i % ddp_world_size == ddp_rank
-#             if i % ddp_world_size != ddp_rank:
-#                 continue
-#             # render the example into tokens and labels
-#             _, tokens, mask, label = render_example(example)
-#             tokens = tokens.to(device)
-#             mask = mask.to(device)
-#             # get the logits
-#             with torch.no_grad():
-#                 with torch.autocast(device_type=device, dtype=torch.bfloat16):
-#                     logits, loss = model(tokens)
-#                 pred_norm = get_most_likely_row(tokens, mask, logits)
-#             num_total += 1
-#             num_correct_norm += int(pred_norm == label)
-#         # reduce the stats across all processes
-#         if ddp:
-#             num_total = torch.tensor(num_total, dtype=torch.long, device=device)
-#             num_correct_norm = torch.tensor(num_correct_norm, dtype=torch.long, device=device)
-#             dist.all_reduce(num_total, op=dist.ReduceOp.SUM)
-#             dist.all_reduce(num_correct_norm, op=dist.ReduceOp.SUM)
-#             num_total = num_total.item()
-#             num_correct_norm = num_correct_norm.item()
+    def compute_accuracy(self, ddp=True):
+        num_correct_norm = 0
+        num_total = 0
+        for i, example in enumerate(iterate_examples("val")):
+            # only process examples where i % ddp_world_size == ddp_rank
+            if i % self.ddp_world_size != self.ddp_rank:
+                continue
+            # render the example into tokens and labels
+            _, tokens, mask, label = render_example(example)
+            tokens = tokens.to(self.device)
+            mask = mask.to(self.device)
+            # get the logits
+            with torch.no_grad():
+                with torch.autocast(device_type=self.device, dtype=torch.bfloat16):
+                    logits, loss = self.model(tokens)
+                pred_norm = self.get_most_likely_row(tokens, mask, logits)
+            num_total += 1
+            num_correct_norm += int(pred_norm == label)
+        # reduce the stats across all processes
+        if ddp:
+            num_total = torch.tensor(num_total, dtype=torch.long, device=self.device)
+            num_correct_norm = torch.tensor(num_correct_norm, dtype=torch.long, device=self.device)
+            dist.all_reduce(num_total, op=dist.ReduceOp.SUM)
+            dist.all_reduce(num_correct_norm, op=dist.ReduceOp.SUM)
+            self.num_total = num_total.item()
+            self.num_correct_norm = num_correct_norm.item()
         
-#         acc_norm = round((num_correct_norm / num_total), 4) if num_total > 0 else 0.0
+        self.acc_norm = round((self.num_correct_norm / self.num_total), 4) if self.num_total > 0 else 0.0
         
-#         if master_process:
-#             print(f"HellaSwag accuracy: {num_correct_norm}/{num_total}={acc_norm:.4f}")
-#             with open(log_file, "a") as f:
-#                 f.write(f"{step} hella {acc_norm:.4f}\n")
-
-#             with open(hella_loss_file, "a") as f:
-#                 csv_out = csv.writer(f)
-#                 csv_out.writerow([step, acc_norm])
+    def log_hella_accu(self, step=1, log_file=None):
+        self.compute_accuracy(ddp=True)
+        if self.master_process:
+            print(f"HellaSwag accuracy: {self.num_correct_norm}/{self.num_total}={self.acc_norm:.4f}")
+        
+            with open(log_file, "a") as f:
+                csv_out = csv.writer(f)
+                csv_out.writerow([step, self.acc_norm])
 
 #%%
    

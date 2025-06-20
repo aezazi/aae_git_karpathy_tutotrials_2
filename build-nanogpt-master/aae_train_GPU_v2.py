@@ -282,7 +282,7 @@ print(f'Optimizer initialized on GPU rank {ddp_rank}, device {device}')
 # %%
 # Instantiate the dataloader and load the data.
 # NOTE: I moved the code for the dataloader to a separate file  aae_utils.py. 
-from aae_utils import DataLoaderShardMultiGPU
+from aae_dataloader_util import DataLoaderShardMultiGPU
 
 # initialize the dataloader for both the training and validation data. Batch size has to be be customized to fit the gpu being used.
 B = 64 # batch size
@@ -407,34 +407,9 @@ for step in range(training_steps):
     # instatiate hellaswag from utils file
     hella_acc = eval_log.HellaSwag(model=model, device=device, ddp_world_size=ddp_world_size, ddp_rank=ddp_rank)
     
-    if ((step > 0 and step % 250 == 0) or last_step):
-        num_correct_norm = 0
-        num_total = 0
-        for i, example in enumerate(iterate_examples("val")):
-            # only process examples where i % ddp_world_size == ddp_rank
-            if i % ddp_world_size != ddp_rank:
-                continue
-            # render the example into tokens and labels
-            _, tokens, mask, label = render_example(example)
-            tokens = tokens.to(device)
-            mask = mask.to(device)
-            # get the logits
-            with torch.no_grad():
-                with torch.autocast(device_type=device, dtype=torch.bfloat16):
-                    logits, loss = model(tokens)
-                pred_norm = hella_acc.get_most_likely_row(tokens, mask, logits)
-            num_total += 1
-            num_correct_norm += int(pred_norm == label)
-        # reduce the stats across all processes
-        if ddp:
-            num_total = torch.tensor(num_total, dtype=torch.long, device=device)
-            num_correct_norm = torch.tensor(num_correct_norm, dtype=torch.long, device=device)
-            dist.all_reduce(num_total, op=dist.ReduceOp.SUM)
-            dist.all_reduce(num_correct_norm, op=dist.ReduceOp.SUM)
-            num_total = num_total.item()
-            num_correct_norm = num_correct_norm.item()
-        
-        acc_norm = round((num_correct_norm / num_total), 4) if num_total > 0 else 0.0
+    if ((step > 0 and step % 20 == 0) or last_step):
+        hella_acc.log_hella_accu(step, log_file=logging.hella_accu_file)
+      
         
 
     # Main training loop
@@ -492,5 +467,7 @@ if ddp:
 
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
+
+# torchrun --standalone --nproc_per_node=4 aae_train_gpt_multi_GPU_v2.py
 
 
