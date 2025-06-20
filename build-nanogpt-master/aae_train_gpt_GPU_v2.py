@@ -311,7 +311,7 @@ if master_process:
 from aae_utils import CosineLearingRateScheduler
 
 # 19,073 steps is ~1 epoch, if data is 10B tokens and batch size 0.5M tokens
-training_steps = 19699
+training_steps = 19703
 
 # define the scheduler parameters
 T_max = training_steps # the number of iterations over which lr is reduced to the minimum
@@ -330,7 +330,7 @@ print(f'Scheduler initialized on GPU rank {ddp_rank}, of {ddp_world_size}')
 # create log files to store training loss and hellaswag eval results.
 import aae_eval_log_utils as eval_log
 logging = eval_log.CreateLogFiles()
-logging.train_loss_file
+
 
 #%%
 # Run the training loop.
@@ -404,6 +404,9 @@ for step in range(training_steps):
             print(f"rank {ddp_rank} sample {i}: {decoded}")
 
     # once in a while evaluate hellaswag. code lifted from Karpathy unchanged.
+    # instatiate hellaswag from utils file
+    hella_acc = eval_log.HellaSwag(model=model, device=device, ddp_world_size=ddp_world_size, ddp_rank=ddp_rank)
+    
     if ((step > 0 and step % 250 == 0) or last_step):
         num_correct_norm = 0
         num_total = 0
@@ -419,7 +422,7 @@ for step in range(training_steps):
             with torch.no_grad():
                 with torch.autocast(device_type=device, dtype=torch.bfloat16):
                     logits, loss = model(tokens)
-                pred_norm = get_most_likely_row(tokens, mask, logits)
+                pred_norm = hella_acc.get_most_likely_row(tokens, mask, logits)
             num_total += 1
             num_correct_norm += int(pred_norm == label)
         # reduce the stats across all processes
@@ -433,17 +436,9 @@ for step in range(training_steps):
         
         acc_norm = round((num_correct_norm / num_total), 4) if num_total > 0 else 0.0
         
-        if master_process:
-            print(f"HellaSwag accuracy: {num_correct_norm}/{num_total}={acc_norm:.4f}")
-            with open(log_file, "a") as f:
-                f.write(f"{step} hella {acc_norm:.4f}\n")
-
-            with open(hella_loss_file, "a") as f:
-                csv_out = csv.writer(f)
-                csv_out.writerow([step, acc_norm])
 
     # Main training loop
-    model
+    model.train()
     optimizer.zero_grad()
     loss_accum  = 0.0
     micro_steps = accumulation_steps_desired # set the number of mirco steps to accumulate gradients over
@@ -488,9 +483,7 @@ for step in range(training_steps):
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item()},  LR: {optimizer.param_groups[0]['lr']},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.1f}")
     
         if step % 10 == 0:
-            with open(train_loss_file, "a") as f:
-                csv_out = csv.writer(f)
-                csv_out.writerow([step, f'{loss_accum.item():.7f}']) # write the step and loss to the csv file
+            logging.log_training_loss(step=step, loss_accum=loss_accum)
             
    
 if ddp:
@@ -500,29 +493,4 @@ if ddp:
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
 
-#%%
-# DDP launch for e.g. 4 GPUs:
-# torchrun --standalone --nproc_per_node=4 aae_train_gpt_multi_GPU.py
 
-#%%
-# Plotting the learning rate schedule
-
-# import matplotlib.pyplot as plt
-# plt.figure(figsize=(100, 40))
-# plt.plot(range(training_steps), scheduler.lrs, marker='o')
-# plt.title('Learning Rate Schedule: Warmup + CosineAnnealingWarmRestarts')
-# plt.xlabel('step')
-# plt.ylabel('Learning Rate')
-# plt.grid(True)
-# plt.show()
-
-# plt.figure(figsize=(100, 40))
-# plt.plot(range(training_steps//5), loss_list, marker='o')
-# plt.title('Loss vs Step')
-# plt.xlabel('step')
-# plt.ylabel('Loss')
-# plt.grid(True)
-# plt.show()
-
-#%%
-print(loss_list)

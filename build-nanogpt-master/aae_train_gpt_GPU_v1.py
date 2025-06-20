@@ -395,7 +395,7 @@ print(f'Optimizer initialized on GPU rank {ddp_rank}, device {device}')
 # %%
 # Instantiate the dataloader and load the data.
 # NOTE: I moved the code for the dataloader to a separate file  aae_utils.py. 
-from aae_utils import DataLoaderShardMultiGPU
+from aae_dataloader_util import DataLoaderShardMultiGPU
 
 # initialize the dataloader for both the training and validation data. Batch size has to be be customized to fit the gpu being used.
 B = 64 # batch size
@@ -424,13 +424,13 @@ if master_process:
 from aae_utils import CosineLearingRateScheduler
 
 # 19,073 steps is ~1 epoch, if data is 10B tokens and batch size 0.5M tokens
-training_steps = 19699
+training_steps = 19703
 
 # define the scheduler parameters
 T_max = training_steps # the number of iterations over which lr is reduced to the minimum
 max_lr = base_lr
 min_lr = max_lr * 0.1
-warm_up_steps = 300 # from gpt2 paper. Karpathy syas we can be more aggresive.
+warm_up_steps = 300 # from gpt2 paper. Karpathy says we can be more aggresive.
 restart = False # whether to use cosine annealing with restarts or not
 T_0 = T_max // 4 # if using restarts, the number of iterations over which lr is reduced to the minimum before restart
 T_mult = 3 # the factor by which T_0 is multiplied at each restart.

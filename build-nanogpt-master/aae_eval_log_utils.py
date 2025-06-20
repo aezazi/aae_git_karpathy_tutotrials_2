@@ -29,35 +29,40 @@ class CreateLogFiles:
         with open(self.hella_accu_file, "w") as f: # open for writing to clear the file
             csv_out = csv.writer(f)
             csv_out.writerow(['step', 'hellaswag_accuracy']) # write the header row
+    
+    def log_training_loss(self, step=None, loss_accum=0):
+        with open(self.train_loss_file, "a") as f:
+                csv_out = csv.writer(f)
+                csv_out.writerow([step, f'{loss_accum.item():.7f}']) # write the step and loss to the csv file
 
         
 
-# class HellaSwag:
-#     def __init__(self, model, device, ddp_world_size=1, ddp_rank=0, log_file='log.txt', hella_loss_file='hella_loss.csv', step=0):
-#         self.model = model
-#         self.device = device
-#         self.ddp_world_size = ddp_world_size
-#         self.ddp_rank = ddp_rank
-#         self.log_file = log_file
+class HellaSwag:
+    def __init__(self, model=None, device='cuda', ddp_world_size=1, ddp_rank=0, log_file='log.txt', hella_loss_file='hella_loss.csv', step=0):
+        self.model = model
+        self.device = device
+        self.ddp_world_size = ddp_world_size
+        self.ddp_rank = ddp_rank
+        self.log_file = log_file
 
-#     def get_most_likely_row(tokens, mask, logits):
-#     # evaluate the autoregressive loss at all positions
-#         shift_logits = (logits[..., :-1, :]).contiguous()
-#         shift_tokens = (tokens[..., 1:]).contiguous()
-#         flat_shift_logits = shift_logits.view(-1, shift_logits.size(-1))
-#         flat_shift_tokens = shift_tokens.view(-1)
-#         shift_losses = F.cross_entropy(flat_shift_logits, flat_shift_tokens, reduction='none')
-#         shift_losses = shift_losses.view(tokens.size(0), -1)
-#         # now get the average loss just for the completion region (where mask == 1), in each row
-#         shift_mask = (mask[..., 1:]).contiguous() # we must shift mask, so we start at the last prompt token
-#         masked_shift_losses = shift_losses * shift_mask
-#         # sum and divide by the number of 1s in the mask
-#         sum_loss = masked_shift_losses.sum(dim=1)
-#         avg_loss = sum_loss / shift_mask.sum(dim=1)
-#         # now we have a loss for each of the 4 completions
-#         # the one with the lowest loss should be the most likely
-#         pred_norm = avg_loss.argmin().item()
-#         return pred_norm  
+    def get_most_likely_row(tokens, mask, logits):
+    # evaluate the autoregressive loss at all positions
+        shift_logits = (logits[..., :-1, :]).contiguous()
+        shift_tokens = (tokens[..., 1:]).contiguous()
+        flat_shift_logits = shift_logits.view(-1, shift_logits.size(-1))
+        flat_shift_tokens = shift_tokens.view(-1)
+        shift_losses = F.cross_entropy(flat_shift_logits, flat_shift_tokens, reduction='none')
+        shift_losses = shift_losses.view(tokens.size(0), -1)
+        # now get the average loss just for the completion region (where mask == 1), in each row
+        shift_mask = (mask[..., 1:]).contiguous() # we must shift mask, so we start at the last prompt token
+        masked_shift_losses = shift_losses * shift_mask
+        # sum and divide by the number of 1s in the mask
+        sum_loss = masked_shift_losses.sum(dim=1)
+        avg_loss = sum_loss / shift_mask.sum(dim=1)
+        # now we have a loss for each of the 4 completions
+        # the one with the lowest loss should be the most likely
+        pred_norm = avg_loss.argmin().item()
+        return pred_norm  
 
 #     def compute_accuracy(self, model, dataloader, device):
 #         num_correct_norm = 0
@@ -98,27 +103,7 @@ class CreateLogFiles:
 #                 csv_out.writerow([step, acc_norm])
 
 #%%
-    # helper function for HellaSwag eval
-    # takes tokens, mask, and logits, returns the index of the completion with the lowest loss. Code lifted from Karpathy's tutorial.
-
-    # def get_most_likely_row(tokens, mask, logits):
-    #     # evaluate the autoregressive loss at all positions
-    #     shift_logits = (logits[..., :-1, :]).contiguous()
-    #     shift_tokens = (tokens[..., 1:]).contiguous()
-    #     flat_shift_logits = shift_logits.view(-1, shift_logits.size(-1))
-    #     flat_shift_tokens = shift_tokens.view(-1)
-    #     shift_losses = F.cross_entropy(flat_shift_logits, flat_shift_tokens, reduction='none')
-    #     shift_losses = shift_losses.view(tokens.size(0), -1)
-    #     # now get the average loss just for the completion region (where mask == 1), in each row
-    #     shift_mask = (mask[..., 1:]).contiguous() # we must shift mask, so we start at the last prompt token
-    #     masked_shift_losses = shift_losses * shift_mask
-    #     # sum and divide by the number of 1s in the mask
-    #     sum_loss = masked_shift_losses.sum(dim=1)
-    #     avg_loss = sum_loss / shift_mask.sum(dim=1)
-    #     # now we have a loss for each of the 4 completions
-    #     # the one with the lowest loss should be the most likely
-    #     pred_norm = avg_loss.argmin().item()
-    #     return pred_norm
+   
 
 class validation_check:
     def __init__(self, model=None, val_loader=None, ddp=True, rank=None):
