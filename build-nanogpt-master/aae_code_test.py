@@ -452,6 +452,27 @@ flat
 t = np.concatenate(([eot], tok1))
 t
 
+#%%
+from dataclasses import dataclass
+@dataclass
+class LogParamConfig:
+    ddp = 2
+    ddp_world_size =5
+    # ddp_local_rank = ddp_local_rank
+    ddp_rank = 1
+    model = 'model'
+    device = 'cuda'
+
+td = LogParamConfig()
+
+class TestData():
+    def __init__(self, de):
+        self.ddp = de.ddp
+        # self.model = kwargs.model
+td1 = TestData(td)
+td1.ddp
+
+
 # %%
 import pandas as pd
 import matplotlib.pyplot as plt

@@ -13,12 +13,11 @@ import torch.distributed as dist
 
 
 class CreateLogFiles:
-    def __init__(self, loss_dir="train_loss", hella_accu_dir="hella_accuracy", learn_rate_dir = 'learn_rate_sched'):
-        self.loss_dir = loss_dir
-        self.hella_accur_dir = hella_accu_dir
-        self.learn_rate_dir = learn_rate_dir
+    def __init__(self, log_params=None):
+        self.loss_dir = log_params.loss_dir
+        self.hella_accur_dir = log_params.hella_accu_dir
+        self.learn_rate_dir = log_params.learn_rate_dir
 
-    
         # create traing loss log directory
         os.makedirs(self.loss_dir, exist_ok=True)
         self.train_loss_file = os.path.join(self.loss_dir, f"train_loss.csv")
@@ -34,25 +33,19 @@ class CreateLogFiles:
             csv_out.writerow(['step', 'hellaswag_accuracy']) # write the header row
  
 
-class TrainLoss(CreateLogFiles):
-    def __init__(self, train_loss_file=None, step=None, loss_accum=0):
-        self.step = step
-        self.loss_accum = loss_accum
-        self.train_loss_file = train_loss_file
-    
-    def log_training_loss(self):
-        with open(self.train_loss_file, "a") as f:
+class TrainLoss():
+    def log_training_loss(self, step, loss_accum=None,  train_loss_file=None):
+        with open(train_loss_file, "a") as f:
                 csv_out = csv.writer(f)
-                csv_out.writerow([self.step, f'{self.loss_accum.item():.7f}']) # write the step and loss to the csv file
+                csv_out.writerow([step, f'{loss_accum.item():.7f}']) # write the step and loss to the csv file
 
 class HellaSwag:
-    def __init__(self, model=None, device='cuda', ddp_world_size=1, ddp_rank=0, hella_accu_file='hella_eval.csv', step=0, ):
-        self.model = model
-        self.device = device
-        self.ddp_world_size = ddp_world_size
-        self.ddp_rank = ddp_rank
-        self.log_hella_accufile = hella_accu_file
-        self.master_process = ddp_rank == 0
+    def __init__(self, log_params):
+        self.model = log_params.model
+        self.device = log_params.device
+        self.ddp_world_size = log_params.ddp_world_size
+        self.ddp_rank = log_params.ddp_rank
+        self.master_process = log_params.ddp_rank == 0
 
     def get_most_likely_row(self,tokens=None, mask=None, logits=None):
     # evaluate the autoregressive loss at all positions
@@ -114,20 +107,20 @@ class HellaSwag:
 #%%
    
 
-class validation_check:
-    def __init__(self, model=None, device = "cuda", optimizer=None, val_loader=None, ddp=True, ddp_rank=1, step=0):
+class Validation:
+    def __init__(self, model=None, device = "cuda", optimizer=None, val_loader=None, ddp=True, ddp_rank=1):
         self.model = model
         self.val_loader = val_loader
         self.ddp = ddp
         self.rank = ddp_rank
         self.device = device
         self.optimizer = optimizer
-        self.step = step
         self.master_process = ddp_rank == 0
 
-    def check_validation_loss(self):
+    def check_validation_loss(self, step = None):
         self.model.eval() # set the model to evaluation mode
         self.val_loader.reset() # reset the validation loader to the beginning of the validation dataset
+        self.step = step
         
         with torch.no_grad(): # no need to compute gradients for validation
             val_loss_accum = 0.0

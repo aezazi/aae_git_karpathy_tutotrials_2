@@ -340,7 +340,29 @@ print(f'\nScheduler initialized on GPU rank {ddp_rank}, of {ddp_world_size}\n')
 #%%
 # create log files to store training loss and hellaswag eval results. Note that I moved all logging, eval, and test generation code to aae_eval_log_utils.py
 import aae_eval_log_utils as eval_log
-log_files = eval_log.CreateLogFiles()
+
+@dataclass
+class LogParamsConfig:
+    ddp = ddp
+    ddp_world_size = ddp_world_size
+    # ddp_local_rank = ddp_local_rank
+    ddp_rank = ddp_rank
+    model = model
+    device = device
+    loss_dir = "train_loss"
+    hella_accu_dir="hella_accuracy"
+    learn_rate_dir = 'learn_rate_sched'
+
+log_params = LogParamsConfig()
+
+log_files = eval_log.CreateLogFiles(log_params=log_params)
+
+train_loss_logger = eval_log.TrainLoss()
+
+hellaswag_logger = eval_log.HellaSwag(log_params=log_params)
+
+validation_checker = eval_log.Validation(model=log_params.model, device=device, optimizer=optimizer, val_loader=val_loader, ddp=ddp, ddp_rank=ddp_rank)
+
 
 
 #%%
@@ -353,17 +375,18 @@ for step in range(training_steps):
 
     # Every so often, put the model in validation mode and use the validation dataset to compute loss. This is to help us catch any over fitting issues. 
     if step % 200 == 0 and step > 0:
-        eval_log.validation_check(model=model, device=device, optimizer=optimizer, val_loader=val_loader, ddp=ddp, ddp_rank=ddp_rank, step=step).check_validation_loss()
+        validation_checker.check_validation_loss(step)
 
     
-    # once in a while generate from the model (except step 0, which is noise). I lifted this code from Karpathy unchanged.
+    # once in a while generate from the model (except step 0, which is noise).
     if ((step > 0 and step % 250 == 0) or last_step):
         eval_log.GenerateSample(model=model, device=device, ddp_rank=ddp_rank).generate(context="Hello, I'm a language model,", max_length=32)
        
 
-    # once in a while evaluate hellaswag. instatiate hellaswag from aae_eval_log_utils file
+    # once in a while evaluate hellaswag.
     if ((step > 0 and step % 125 == 0) or last_step):
         hella_acc = eval_log.HellaSwag(model=model, device=device, ddp_world_size=ddp_world_size, ddp_rank=ddp_rank)
+
         hella_acc.log_hella_accu(step=step, log_file=log_files.hella_accu_file)
       
         
@@ -413,7 +436,7 @@ for step in range(training_steps):
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.8f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
         
         if step % 10 == 0:
-            eval_log.TrainLoss(train_loss_file=log_files.train_loss_file, step=step, loss_accum=loss_accum).log_training_loss()
+            train_loss_logger.log_training_loss(step=step, loss_accum=loss_accum, train_loss_file=log_files.train_loss_file)
             
 if ddp:
     destroy_process_group()
