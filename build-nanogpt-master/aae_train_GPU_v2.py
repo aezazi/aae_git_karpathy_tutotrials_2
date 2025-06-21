@@ -349,6 +349,9 @@ class LogParamsConfig:
     ddp_rank = ddp_rank
     model = model
     device = device
+    encoder = tiktoken.get_encoding('gpt2')
+    optimizer = optimizer
+    val_loader = val_loader
     loss_dir = "train_loss"
     hella_accu_dir="hella_accuracy"
     learn_rate_dir = 'learn_rate_sched'
@@ -359,9 +362,13 @@ log_files = eval_log.CreateLogFiles(log_params=log_params)
 
 train_loss_logger = eval_log.TrainLoss()
 
+learning_rate_logger = eval_log.LearningRate()
+
 hellaswag_logger = eval_log.HellaSwag(log_params=log_params)
 
-validation_checker = eval_log.Validation(model=log_params.model, device=device, optimizer=optimizer, val_loader=val_loader, ddp=ddp, ddp_rank=ddp_rank)
+validation_checker = eval_log.Validation(log_params=log_params)
+
+sample_generator = eval_log.GenerateSample(log_params=log_params)
 
 
 
@@ -373,23 +380,21 @@ for step in range(training_steps):
     t0 = time.time()
     last_step = (step == training_steps - 1)
 
-    # Every so often, put the model in validation mode and use the validation dataset to compute loss. This is to help us catch any over fitting issues. 
-    if step % 200 == 0 and step > 0:
-        validation_checker.check_validation_loss(step)
+    # once in a while evaluate hellaswag.
+    if ((step > 0 and step % 250 == 0) or last_step):
+        hellaswag_logger.log_hella_accu(step=step, log_file=log_files.hella_accu_file)
 
+    # Every so often, put the model in validation mode and use the validation dataset to compute loss. This is to help us catch any over fitting issues. 
+    if step % 250 == 0 and step > 0:
+        val_loss = validation_checker.check_validation_loss(step)
+        if master_process:
+            print(f"\nValidation at Step {step},  shard_idx: {shard_idx},  Loss: {val_loss:.4f},  LR: {optimizer.param_groups[0]['lr']:.7f}\n")
     
     # once in a while generate from the model (except step 0, which is noise).
-    if ((step > 0 and step % 250 == 0) or last_step):
-        eval_log.GenerateSample(model=model, device=device, ddp_rank=ddp_rank).generate(context="Hello, I'm a language model,", max_length=32)
+    if ((step > 0 and step % 500 == 0) or last_step):
+        sample_generator.generate(context="Hello, I'm a language model,", sample_max_length=32)
        
 
-    # once in a while evaluate hellaswag.
-    if ((step > 0 and step % 125 == 0) or last_step):
-        hella_acc = eval_log.HellaSwag(model=model, device=device, ddp_world_size=ddp_world_size, ddp_rank=ddp_rank)
-
-        hella_acc.log_hella_accu(step=step, log_file=log_files.hella_accu_file)
-      
-        
     # Main training loop
     model.train()
     optimizer.zero_grad()
@@ -433,10 +438,13 @@ for step in range(training_steps):
     tokens_processed = train_loader.B * train_loader.T * micro_steps * ddp_world_size
     tokens_per_sec = tokens_processed / dt
     if master_process:
-        print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.8f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
         
-        if step % 10 == 0:
+        if ((step > 0 and step % 10 == 0) or last_step):
+            print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
+
             train_loss_logger.log_training_loss(step=step, loss_accum=loss_accum, train_loss_file=log_files.train_loss_file)
+
+            learning_rate_logger.log_learning_rate(step=step, lr=optimizer.param_groups[0]['lr'], lr_file=log_files.lr_file)
             
 if ddp:
     destroy_process_group()

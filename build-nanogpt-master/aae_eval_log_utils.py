@@ -25,28 +25,42 @@ class CreateLogFiles:
             csv_out = csv.writer(f)
             csv_out.writerow(['step', 'train_loss']) # write the header row
 
-        # create traing loss log directory
+        # create hellaswag accuracy log directory
         os.makedirs(self.hella_accur_dir, exist_ok=True)
         self.hella_accu_file = os.path.join(self.hella_accur_dir, f"hellaswag_eval.csv")
         with open(self.hella_accu_file, "w") as f: # open for writing to clear the file
             csv_out = csv.writer(f)
             csv_out.writerow(['step', 'hellaswag_accuracy']) # write the header row
+
+        # create learning rate log directory
+        os.makedirs(self.learn_rate_dir, exist_ok=True)
+        self.lr_file = os.path.join(self.learn_rate_dir, f"learning_rate.csv")
+        with open(self.lr_file, "w") as f: # open for writing to clear the file
+            csv_out = csv.writer(f)
+            csv_out.writerow(['step', 'learning_rate']) # write the header row
  
 
 class TrainLoss():
-    def log_training_loss(self, step, loss_accum=None,  train_loss_file=None):
+    def log_training_loss(self, step=None, loss_accum=None,  train_loss_file=None):
         with open(train_loss_file, "a") as f:
                 csv_out = csv.writer(f)
                 csv_out.writerow([step, f'{loss_accum.item():.7f}']) # write the step and loss to the csv file
+
+class LearningRate():
+    def log_learning_rate(self, step=None, lr=None, lr_file=None):
+        with open(lr_file, "a") as f:
+                csv_out = csv.writer(f)
+                csv_out.writerow([step, f'{lr:.7f}'])
 
 class HellaSwag:
     def __init__(self, log_params):
         self.model = log_params.model
         self.device = log_params.device
+        self.ddp = log_params.ddp
         self.ddp_world_size = log_params.ddp_world_size
         self.ddp_rank = log_params.ddp_rank
         self.master_process = log_params.ddp_rank == 0
-
+        
     def get_most_likely_row(self,tokens=None, mask=None, logits=None):
     # evaluate the autoregressive loss at all positions
         shift_logits = (logits[..., :-1, :]).contiguous()
@@ -66,7 +80,7 @@ class HellaSwag:
         pred_norm = avg_loss.argmin().item()
         return pred_norm  
 
-    def compute_accuracy(self, ddp=True):
+    def compute_accuracy(self):
         num_correct_norm = 0
         num_total = 0
         for i, example in enumerate(iterate_examples("val")):
@@ -85,7 +99,7 @@ class HellaSwag:
             num_total += 1
             num_correct_norm += int(pred_norm == label)
         # reduce the stats across all processes
-        if ddp:
+        if self.ddp:
             num_total = torch.tensor(num_total, dtype=torch.long, device=self.device)
             num_correct_norm = torch.tensor(num_correct_norm, dtype=torch.long, device=self.device)
             dist.all_reduce(num_total, op=dist.ReduceOp.SUM)
@@ -96,7 +110,7 @@ class HellaSwag:
         self.acc_norm = round((self.num_correct_norm / self.num_total), 4) if self.num_total > 0 else 0.0
         
     def log_hella_accu(self, step=1, log_file=None):
-        self.compute_accuracy(ddp=True)
+        self.compute_accuracy()
         if self.master_process:
             print(f"\nHellaSwag accuracy: {self.num_correct_norm}/{self.num_total}={self.acc_norm:.4f}\n")
         
@@ -108,19 +122,19 @@ class HellaSwag:
    
 
 class Validation:
-    def __init__(self, model=None, device = "cuda", optimizer=None, val_loader=None, ddp=True, ddp_rank=1):
-        self.model = model
-        self.val_loader = val_loader
-        self.ddp = ddp
-        self.rank = ddp_rank
-        self.device = device
-        self.optimizer = optimizer
-        self.master_process = ddp_rank == 0
+    def __init__(self, log_params=None):
+        self.model = log_params.model
+        self.val_loader = log_params.val_loader
+        self.ddp = log_params.ddp
+        self.rank = log_params.ddp_rank
+        self.device = log_params.device
+        self.optimizer = log_params.optimizer
+        self.master_process = log_params.ddp_rank == 0
 
     def check_validation_loss(self, step = None):
         self.model.eval() # set the model to evaluation mode
         self.val_loader.reset() # reset the validation loader to the beginning of the validation dataset
-        self.step = step
+        # self.step = step
         
         with torch.no_grad(): # no need to compute gradients for validation
             val_loss_accum = 0.0
@@ -140,20 +154,20 @@ class Validation:
             # synchronize the validation loss across all gpu processes
             dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
         
-        if self.master_process:
-            print(f"\nValidation at Step {self.step},  shard_idx: {shard_idx},  Loss: {val_loss_accum.item():.4f},  LR: {self.optimizer.param_groups[0]['lr']:.7f}\n")
-
+        return val_loss_accum
+        
+        
 class GenerateSample:
-    def __init__(self, model=None, device=None, ddp_rank=None):
-        self.model = model
-        self.device = device
-        self.ddp_rank = ddp_rank
-        self.enc = tiktoken.get_encoding('gpt2')
+    def __init__(self, log_params):
+        self.model = log_params.model
+        self.device = log_params.device
+        self.ddp_rank = log_params.ddp_rank
+        self.enc = log_params.encoder
 
-    def generate(self, context="Hello, I'm a language model,", max_length=32):  
+    def generate(self, context="Hello, I'm a language model,", sample_max_length=32):  
         self.model.eval()
         self.num_return_sequences = 4
-        self.max_length = max_length
+        # self.max_length = sample_max_length
         self.tokens = self.enc.encode(context)
         self.tokens = torch.tensor(self.tokens, dtype=torch.long)
         self.tokens = self.tokens.unsqueeze(0).repeat(self.num_return_sequences, 1)
@@ -161,7 +175,7 @@ class GenerateSample:
         self.sample_rng = torch.Generator(device=self.device)
         self.sample_rng.manual_seed(42 + self.ddp_rank)
 
-        while self.xgen.size(1) < max_length:
+        while self.xgen.size(1) < sample_max_length:
             # forward the model to get the logits
             with torch.no_grad():
                 with torch.autocast(device_type=self.device, dtype=torch.bfloat16):
@@ -182,6 +196,6 @@ class GenerateSample:
                 self.xgen = torch.cat((self.xgen, xcol), dim=1)
         # print the generated text
         for i in range(self.num_return_sequences):
-            self.tokens = self.xgen[i, :max_length].tolist()
+            self.tokens = self.xgen[i, :sample_max_length].tolist()
             decoded = self.enc.decode(self.tokens)
             print(f"\nrank {self.ddp_rank} sample {i}: {decoded}")
