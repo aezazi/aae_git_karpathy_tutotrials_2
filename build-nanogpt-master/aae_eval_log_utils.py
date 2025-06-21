@@ -32,13 +32,19 @@ class CreateLogFiles:
         with open(self.hella_accu_file, "w") as f: # open for writing to clear the file
             csv_out = csv.writer(f)
             csv_out.writerow(['step', 'hellaswag_accuracy']) # write the header row
+ 
+
+class TrainLoss(CreateLogFiles):
+    def __init__(self, train_loss_file=None, step=None, loss_accum=0):
+        self.step = step
+        self.loss_accum = loss_accum
+        self.train_loss_file = train_loss_file
     
-    def log_training_loss(self, step=None, loss_accum=0):
+    def log_training_loss(self):
         with open(self.train_loss_file, "a") as f:
                 csv_out = csv.writer(f)
-                csv_out.writerow([step, f'{loss_accum.item():.7f}']) # write the step and loss to the csv file
+                csv_out.writerow([self.step, f'{self.loss_accum.item():.7f}']) # write the step and loss to the csv file
 
-        
 class HellaSwag:
     def __init__(self, model=None, device='cuda', ddp_world_size=1, ddp_rank=0, hella_accu_file='hella_eval.csv', step=0, ):
         self.model = model
@@ -116,6 +122,7 @@ class validation_check:
         self.rank = ddp_rank
         self.device = device
         self.optimizer = optimizer
+        self.step = step
         self.master_process = ddp_rank == 0
 
     def check_validation_loss(self):
@@ -141,4 +148,4 @@ class validation_check:
             dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
         
         if self.master_process:
-            print(f"Validation at Step {self.step},  shard_idx: {shard_idx},  Loss: {val_loss_accum.item():.4f},  LR: {self.self.optimizer.param_groups[0]['lr']:.7f}")
+            print(f"Validation at Step {self.step},  shard_idx: {shard_idx},  Loss: {val_loss_accum.item():.4f},  LR: {self.optimizer.param_groups[0]['lr']:.7f}")

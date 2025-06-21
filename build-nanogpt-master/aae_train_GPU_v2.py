@@ -34,7 +34,6 @@ config = GPTConfig()
 print(f'GPTConfig instantiated with block size: {config.block_size}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
 
 
-
 #%%
 class CausalSelfAttention(nn.Module):
 
@@ -343,7 +342,7 @@ print(f'Scheduler initialized on GPU rank {ddp_rank}, of {ddp_world_size}')
 #%%
 # create log files to store training loss and hellaswag eval results. Note that I moved all logging, eval, and test generation code to aae_eval_log_utils.py
 import aae_eval_log_utils as eval_log
-logging = eval_log.CreateLogFiles()
+log_files = eval_log.CreateLogFiles()
 
 
 #%%
@@ -355,31 +354,9 @@ for step in range(training_steps):
     last_step = (step == training_steps - 1)
 
     # Every so often, put the model in validation mode and use the validation dataset to compute loss. This is to help us catch any over fitting issues. 
-    if step % 100 == 0 and step > 0:
+    if step % 10 == 0 and step > 0:
         
-        eval_log.validation_check(model=model, device=device, optimizer=optimizer, val_loader=val_loader, ddp=ddp, rank=ddp_rank, step=step)
-        # model.eval() # set the model to evaluation mode
-        # val_loader.reset() # reset the validation loader to the beginning of the validation dataset
-        
-        # with torch.no_grad(): # no need to compute gradients for validation
-        #     val_loss_accum = 0.0
-        #     val_loss_steps = 20 # number of steps to accumulate validation loss over
-        #     for _ in range(val_loss_steps):
-        #         x, y, shard_idx, tokens_abandoned = val_loader.next_batch()
-        #         x, y = x.to(device), y.to(device)
-
-        #         # see training loop below for details on the use of autocast. 
-        #         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-        #             logits, val_loss = model(x, y)
-                
-        #         val_loss = val_loss / val_loss_steps # divide the loss by the number of accumulation steps to get the average loss. This computes the averaage loss on one gpu.
-        #         val_loss_accum += val_loss.detach() # detach the loss from the computation graph to avoid memory leaks.
-
-        # if ddp:
-        #     # synchronize the validation loss across all gpu processes
-        #     dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
-        # if master_process:
-        #     print(f"Validation Step {step},  shard_idx: {shard_idx},  Loss: {val_loss_accum.item():.4f},  LR: {optimizer.param_groups[0]['lr']}")
+        eval_log.validation_check(model=model, device=device, optimizer=optimizer, val_loader=val_loader, ddp=ddp, ddp_rank=ddp_rank, step=step).check_validation_loss()
 
     
     # once in a while generate from the model (except step 0, which is noise). I lifted this code from Karpathy unchanged.
@@ -422,7 +399,7 @@ for step in range(training_steps):
     # once in a while evaluate hellaswag. instatiate hellaswag from aae_eval_log_utils file
     if ((step > 0 and step % 150 == 0) or last_step):
         hella_acc = eval_log.HellaSwag(model=model, device=device, ddp_world_size=ddp_world_size, ddp_rank=ddp_rank)
-        hella_acc.log_hella_accu(step=step, log_file=logging.hella_accu_file)
+        hella_acc.log_hella_accu(step=step, log_file=log_files.hella_accu_file)
       
         
     # Main training loop
@@ -468,11 +445,11 @@ for step in range(training_steps):
     tokens_processed = train_loader.B * train_loader.T * micro_steps * ddp_world_size
     tokens_per_sec = tokens_processed / dt
     if master_process:
-        print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item()},  LR: {optimizer.param_groups[0]['lr']},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.1f}")
+        print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.8f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
+        
         if step % 10 == 0:
-            logging.log_training_loss(step=step, loss_accum=loss_accum)
+            eval_log.TrainLoss(train_loss_file=log_files.train_loss_file, step=step, loss_accum=loss_accum).log_training_loss()
             
-   
 if ddp:
     destroy_process_group()
 
