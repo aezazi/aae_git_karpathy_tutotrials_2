@@ -31,7 +31,7 @@ class GPTConfig:
 # instantiate and check the config
 config = GPTConfig()
 
-print(f'GPTConfig instantiated with block size: {config.block_size}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
+print(f'\nGPTConfig instantiated with block size: {config.block_size}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
 
 
 #%%
@@ -210,7 +210,7 @@ import torch.distributed as dist
 ddp = int(os.environ.get('RANK', -1)) != -1
 
 if ddp:
-    print('Running in Distributed Data Parallel (DDP) mode')
+    print(f'\nRunning in Distributed Data Parallel (DDP) mode')
     # Note that LOCAL_RANK is the rank of the process on one given machine (when using multiple machine), while RANK is the rank of the process across all machines (when using multiple gpus on multiple machines). When using a setup with just one machine, LOCAL_RANK and RANK are the same. 
     init_process_group(backend='nccl') # initialize the process group for DDP
     ddp_rank = int(os.environ['RANK']) # get the rank of the current process
@@ -238,7 +238,7 @@ else:
     else:
         device = torch.device('cpu')
         
-    print(f"using device: {device}")
+    print(f"\nusing device: {device}")
 
 torch.manual_seed(42) # set the random seed for reproducibility
 if torch.cuda.is_available():
@@ -261,7 +261,7 @@ model = torch.compile(model) if use_compile else model
 if ddp:
     
     model = DDP(model, device_ids=[ddp_local_rank])
-    print(f'Model wrapped in DDP on device: {device}')
+    print(f'\nModel wrapped in DDP on device: {device}')
 
 # get the raw model from the DDP wrapper. This is useful for accessing the model's parameters and methods directly. the raw_model is the actual model that we want to optimize. The DDP is just a wrapper that allows us to use distributed data parallelism.
 raw_model = model.module if ddp else model 
@@ -277,7 +277,7 @@ base_lr = 6e-4
 # Note that we are using the raw model here, not the DDP wrapped model. This is because the DDP wrapper does not have the optimizer parameters. The raw model is the actual model that we want to optimize.
 optimizer = ConfigureOptimizer(raw_model).create_optimizer(weight_decay=0.1, learning_rate = base_lr, device_type=device)
 
-print(f'Optimizer initialized on GPU rank {ddp_rank}, device {device}')
+print(f'\nOptimizer initialized on GPU rank {ddp_rank}, device {device}')
 
 
 # %%
@@ -286,7 +286,7 @@ print(f'Optimizer initialized on GPU rank {ddp_rank}, device {device}')
 # NOTE: I moved the code for the dataloader to a separate file  aae_dataloader_til.py. 
 from aae_dataloader_utils import DataLoaderShardMultiGPU
 
-# initialize the dataloader for both the training and validation data. Batch size has to be be customized to fit the gpu being used.
+# initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
 B = 64 # batch size
 T = 1024 # sequence length
 
@@ -304,12 +304,11 @@ assert effective_batch_size_desired % (train_loader.B * train_loader.T * ddp_wor
 accumulation_steps_desired = effective_batch_size_desired // (train_loader.B * train_loader.T * ddp_world_size) 
 
 if master_process:
-    print(f"effective batch size desired: {effective_batch_size_desired}")
+    print(f"\neffective batch size desired: {effective_batch_size_desired}")
     print(f"accumulation steps desired: {accumulation_steps_desired}")
 
 #%%
 # Instantiate the learning rate scheduler 
-
 # NOTE: I moved the code for the scheduler to a separate aae_utils.py file.
 from aae_utils import CosineLearingRateScheduler
 
@@ -324,8 +323,8 @@ max_lr = base_lr # max learning rate
 min_lr = max_lr * 0.1 # min learning rate
 
 # modified from gpt paper per AK suggestion to be more aggresive with startup steps than paper
-
 warm_up_steps = 300 
+
 # whether to use cosine annealing with restarts or not
 restart = False 
 
@@ -336,8 +335,7 @@ T_mult = 3 # the factor by which T_0 is multiplied at each restart.
 
 # instantiate and create learning rate scheduler
 scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=T_max, restart=restart, warm_up_steps=warm_up_steps, max_lr=max_lr, min_lr=min_lr, T_mult=T_mult, T_0=T_0)
-
-print(f'Scheduler initialized on GPU rank {ddp_rank}, of {ddp_world_size}')
+print(f'\nScheduler initialized on GPU rank {ddp_rank}, of {ddp_world_size}\n')
 
 #%%
 # create log files to store training loss and hellaswag eval results. Note that I moved all logging, eval, and test generation code to aae_eval_log_utils.py
@@ -354,50 +352,17 @@ for step in range(training_steps):
     last_step = (step == training_steps - 1)
 
     # Every so often, put the model in validation mode and use the validation dataset to compute loss. This is to help us catch any over fitting issues. 
-    if step % 10 == 0 and step > 0:
-        
+    if step % 200 == 0 and step > 0:
         eval_log.validation_check(model=model, device=device, optimizer=optimizer, val_loader=val_loader, ddp=ddp, ddp_rank=ddp_rank, step=step).check_validation_loss()
 
     
     # once in a while generate from the model (except step 0, which is noise). I lifted this code from Karpathy unchanged.
-    enc = tiktoken.get_encoding("gpt2")
     if ((step > 0 and step % 250 == 0) or last_step):
-        model.eval()
-        num_return_sequences = 4
-        max_length = 32
-        tokens = enc.encode("Hello, I'm a language model,")
-        tokens = torch.tensor(tokens, dtype=torch.long)
-        tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
-        xgen = tokens.to(device)
-        sample_rng = torch.Generator(device=device)
-        sample_rng.manual_seed(42 + ddp_rank)
-        while xgen.size(1) < max_length:
-            # forward the model to get the logits
-            with torch.no_grad():
-                with torch.autocast(device_type=device, dtype=torch.bfloat16):
-                    logits, loss = model(xgen) # (B, T, vocab_size)
-                # take the logits at the last position
-                logits = logits[:, -1, :] # (B, vocab_size)
-                # get the probabilities
-                probs = F.softmax(logits, dim=-1)
-                # do top-k sampling of 50 (huggingface pipeline default)
-                # topk_probs here becomes (5, 50), topk_indices is (5, 50)
-                topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
-                # select a token from the top-k probabilities
-                # note: multinomial does not demand the input to sum to 1
-                ix = torch.multinomial(topk_probs, 1, generator=sample_rng) # (B, 1)
-                # gather the corresponding indices
-                xcol = torch.gather(topk_indices, -1, ix) # (B, 1)
-                # append to the sequence
-                xgen = torch.cat((xgen, xcol), dim=1)
-        # print the generated text
-        for i in range(num_return_sequences):
-            tokens = xgen[i, :max_length].tolist()
-            decoded = enc.decode(tokens)
-            print(f"rank {ddp_rank} sample {i}: {decoded}")
+        eval_log.GenerateSample(model=model, device=device, ddp_rank=ddp_rank).generate(context="Hello, I'm a language model,", max_length=32)
+       
 
     # once in a while evaluate hellaswag. instatiate hellaswag from aae_eval_log_utils file
-    if ((step > 0 and step % 150 == 0) or last_step):
+    if ((step > 0 and step % 125 == 0) or last_step):
         hella_acc = eval_log.HellaSwag(model=model, device=device, ddp_world_size=ddp_world_size, ddp_rank=ddp_rank)
         hella_acc.log_hella_accu(step=step, log_file=log_files.hella_accu_file)
       

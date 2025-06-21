@@ -105,7 +105,7 @@ class HellaSwag:
     def log_hella_accu(self, step=1, log_file=None):
         self.compute_accuracy(ddp=True)
         if self.master_process:
-            print(f"HellaSwag accuracy: {self.num_correct_norm}/{self.num_total}={self.acc_norm:.4f}")
+            print(f"\nHellaSwag accuracy: {self.num_correct_norm}/{self.num_total}={self.acc_norm:.4f}\n")
         
             with open(log_file, "a") as f:
                 csv_out = csv.writer(f)
@@ -148,35 +148,31 @@ class validation_check:
             dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
         
         if self.master_process:
-            print(f"Validation at Step {self.step},  shard_idx: {shard_idx},  Loss: {val_loss_accum.item():.4f},  LR: {self.optimizer.param_groups[0]['lr']:.7f}")
+            print(f"\nValidation at Step {self.step},  shard_idx: {shard_idx},  Loss: {val_loss_accum.item():.4f},  LR: {self.optimizer.param_groups[0]['lr']:.7f}\n")
 
 class GenerateSample:
-    def __init__(self, model, device, ddp_rank):
+    def __init__(self, model=None, device=None, ddp_rank=None):
         self.model = model
         self.device = device
         self.ddp_rank = ddp_rank
         self.enc = tiktoken.get_encoding('gpt2')
 
-        
-        
     def generate(self, context="Hello, I'm a language model,", max_length=32):  
-
-        self.mode.eval()
+        self.model.eval()
         self.num_return_sequences = 4
         self.max_length = max_length
         self.tokens = self.enc.encode(context)
-        self.tokens = torch.tensor(tokens, dtype=torch.long)
+        self.tokens = torch.tensor(self.tokens, dtype=torch.long)
         self.tokens = self.tokens.unsqueeze(0).repeat(self.num_return_sequences, 1)
-        self.xgen = tokens.to(self.device)
+        self.xgen = self.tokens.to(self.device)
         self.sample_rng = torch.Generator(device=self.device)
         self.sample_rng.manual_seed(42 + self.ddp_rank)
 
-
-        while xgen.size(1) < max_length:
+        while self.xgen.size(1) < max_length:
             # forward the model to get the logits
             with torch.no_grad():
                 with torch.autocast(device_type=self.device, dtype=torch.bfloat16):
-                    logits, loss = self.model(xgen) # (B, T, vocab_size)
+                    logits, loss = self.model(self.xgen) # (B, T, vocab_size)
                 # take the logits at the last position
                 logits = logits[:, -1, :] # (B, vocab_size)
                 # get the probabilities
@@ -190,9 +186,9 @@ class GenerateSample:
                 # gather the corresponding indices
                 xcol = torch.gather(topk_indices, -1, ix) # (B, 1)
                 # append to the sequence
-                xgen = torch.cat((xgen, xcol), dim=1)
+                self.xgen = torch.cat((self.xgen, xcol), dim=1)
         # print the generated text
         for i in range(self.num_return_sequences):
-            tokens = xgen[i, :max_length].tolist()
-            decoded = self.enc.decode(tokens)
-            print(f"rank {self.ddp_rank} sample {i}: {decoded}")
+            self.tokens = self.xgen[i, :max_length].tolist()
+            decoded = self.enc.decode(self.tokens)
+            print(f"\nrank {self.ddp_rank} sample {i}: {decoded}")
