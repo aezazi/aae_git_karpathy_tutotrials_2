@@ -18,7 +18,6 @@ assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devic
 # a simple way to check whether your script is being run under Distributed Data Parallel (DDP) — specifically when using torchrun with a cuda GPU. Note that you can be in DDP mode even with a single GPU when using torchrun. Note that I moved  this code to the top of the script so that I can immediately check if the script is running in DDP mode. Karpathy has it much later in the script.
 ddp = int(os.environ.get('RANK', -1)) != -1
 
-
 if ddp:
     master_process = int(os.environ['RANK']) == 0
     if master_process:
@@ -257,7 +256,7 @@ if ddp:
     torch.cuda.set_device(device) # set the device for the current process
 
     # the master process will perform logging and saving checkpoints.
-    master_process = ddp_rank == 0 
+    master_process = (ddp_rank == 0)
 
 else:
     # if not using DDP, just use the default device
@@ -283,12 +282,6 @@ if torch.cuda.is_available():
 
 #%%
 # create log files to store training loss and hellaswag eval results.
-
-log_dir = "log"
-os.makedirs(log_dir, exist_ok=True)
-log_file = os.path.join(log_dir, f"log.txt")
-with open(log_file, "w") as f: # open for writing to clear the file
-    pass
 
 # I added the logs for training loss and hellaswag eval results to csv files.
 loss_dir = "loss"
@@ -344,8 +337,8 @@ print(f'Optimizer initialized on GPU rank {ddp_rank}, device {device}')
 
 # %%
 # Instantiate the dataloader and load the data.
-# NOTE: I moved the code for the dataloader to a separate file  aae_utils.py. 
-from aae_dataloader_util import DataLoaderShardMultiGPU
+# NOTE: I moved the code for the dataloader to a separate file  aae_dataloader_utils.py. 
+from aae_dataloader_utils import DataLoaderShardMultiGPU
 
 # initialize the dataloader for both the training and validation data. Batch size has to be be customized to fit the gpu being used.
 B = 64 # batch size
@@ -493,8 +486,6 @@ for step in range(training_steps):
         
         if master_process:
             print(f"HellaSwag accuracy: {num_correct_norm}/{num_total}={acc_norm:.4f}")
-            with open(log_file, "a") as f:
-                f.write(f"{step} hella {acc_norm:.4f}\n")
 
             with open(hella_loss_file, "a") as f:
                 csv_out = csv.writer(f)

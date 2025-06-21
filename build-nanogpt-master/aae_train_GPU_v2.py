@@ -13,7 +13,6 @@ import csv
 #%%
 assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
 
-
 # %%
 # This is the configuration for the GPT model. It defines the hyperparameters for the model. The block size is the maximum sequence length, vocab size is the size of the vocabulary, n_layer is the number of transformer blocks, n_head is the number of attention heads, and n_embd is the embedding dimension. 
 """
@@ -224,22 +223,23 @@ if ddp:
     torch.cuda.set_device(device) # set the device for the current process
 
     # the master process will perform logging and saving checkpoints.
-    master_process = ddp_rank == 0 
+    master_process = (ddp_rank == 0)
 
-elif torch.cuda.is_available():
-    # if not using DDP, just use the default device
-    device = torch.device('cuda')
-    ddp_rank = 0
-    ddp_local_rank = 0
-    ddp_world_size = 1
-    master_process = True
+# if not using DDP, just use the next best availabel option
+else: 
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+        ddp_rank = 0
+        ddp_local_rank = 0
+        ddp_world_size = 1
+        master_process = True
 
-elif torch.backends.mps.is_available():
-    device = torch.device('mps')
-else:
-    device = torch.device('cpu')
-    
-print(f"using device: {device}")
+    elif torch.backends.mps.is_available():
+        device = torch.device('mps')
+    else:
+        device = torch.device('cpu')
+        
+    print(f"using device: {device}")
 
 torch.manual_seed(42) # set the random seed for reproducibility
 if torch.cuda.is_available():
@@ -258,8 +258,9 @@ model.to(device)
 use_compile = True # set to True to use torch.compile
 model = torch.compile(model) if use_compile else model 
 
+# wrap the model in DDP if using DDP
 if ddp:
-    # wrap the model in DDP if using DDP
+    
     model = DDP(model, device_ids=[ddp_local_rank])
     print(f'Model wrapped in DDP on device: {device}')
 
@@ -273,6 +274,7 @@ raw_model = model.module if ddp else model
 from aae_utils import ConfigureOptimizer
 
 base_lr = 6e-4
+
 # Note that we are using the raw model here, not the DDP wrapped model. This is because the DDP wrapper does not have the optimizer parameters. The raw model is the actual model that we want to optimize.
 optimizer = ConfigureOptimizer(raw_model).create_optimizer(weight_decay=0.1, learning_rate = base_lr, device_type=device)
 
@@ -281,8 +283,9 @@ print(f'Optimizer initialized on GPU rank {ddp_rank}, device {device}')
 
 # %%
 # Instantiate the dataloader and load the data.
-# NOTE: I moved the code for the dataloader to a separate file  aae_utils.py. 
-from aae_dataloader_util import DataLoaderShardMultiGPU
+
+# NOTE: I moved the code for the dataloader to a separate file  aae_dataloader_til.py. 
+from aae_dataloader_utils import DataLoaderShardMultiGPU
 
 # initialize the dataloader for both the training and validation data. Batch size has to be be customized to fit the gpu being used.
 B = 64 # batch size
@@ -306,7 +309,8 @@ if master_process:
     print(f"accumulation steps desired: {accumulation_steps_desired}")
 
 #%%
-# create the learning rate scheduler 
+# Instantiate the learning rate scheduler 
+
 # NOTE: I moved the code for the scheduler to a separate aae_utils.py file.
 from aae_utils import CosineLearingRateScheduler
 
@@ -314,20 +318,30 @@ from aae_utils import CosineLearingRateScheduler
 training_steps = 19703
 
 # define the scheduler parameters
-T_max = training_steps # the number of iterations over which lr is reduced to the minimum
-max_lr = base_lr
-min_lr = max_lr * 0.1
-warm_up_steps = 300 # from gpt2 paper. Karpathy syas we can be more aggresive.
-restart = False # whether to use cosine annealing with restarts or not
-T_0 = T_max // 4 # if using restarts, the number of iterations over which lr is reduced to the minimum before restart
+# the number of iterations over which lr is reduced to the minimum
+T_max = training_steps 
+
+max_lr = base_lr # max learning rate
+min_lr = max_lr * 0.1 # min learning rate
+
+# modified from gpt paper per AK suggestion to be more aggresive with startup steps than paper
+
+warm_up_steps = 300 
+# whether to use cosine annealing with restarts or not
+restart = False 
+
+# if using restarts, the number of iterations over which lr is reduced to the minimum before restart
+T_0 = T_max // 4 
+
 T_mult = 3 # the factor by which T_0 is multiplied at each restart.
 
 # instantiate and create learning rate scheduler
 scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=T_max, restart=restart, warm_up_steps=warm_up_steps, max_lr=max_lr, min_lr=min_lr, T_mult=T_mult, T_0=T_0)
+
 print(f'Scheduler initialized on GPU rank {ddp_rank}, of {ddp_world_size}')
 
 #%%
-# create log files to store training loss and hellaswag eval results.
+# create log files to store training loss and hellaswag eval results. Note that I moved all logging, eval, and test generation code to aae_eval_log_utils.py
 import aae_eval_log_utils as eval_log
 logging = eval_log.CreateLogFiles()
 
@@ -342,28 +356,30 @@ for step in range(training_steps):
 
     # Every so often, put the model in validation mode and use the validation dataset to compute loss. This is to help us catch any over fitting issues. 
     if step % 100 == 0 and step > 0:
-        model.eval() # set the model to evaluation mode
-        val_loader.reset() # reset the validation loader to the beginning of the validation dataset
         
-        with torch.no_grad(): # no need to compute gradients for validation
-            val_loss_accum = 0.0
-            val_loss_steps = 20 # number of steps to accumulate validation loss over
-            for _ in range(val_loss_steps):
-                x, y, shard_idx, tokens_abandoned = val_loader.next_batch()
-                x, y = x.to(device), y.to(device)
+        eval_log.validation_check(model=model, device=device, optimizer=optimizer, val_loader=val_loader, ddp=ddp, rank=ddp_rank, step=step)
+        # model.eval() # set the model to evaluation mode
+        # val_loader.reset() # reset the validation loader to the beginning of the validation dataset
+        
+        # with torch.no_grad(): # no need to compute gradients for validation
+        #     val_loss_accum = 0.0
+        #     val_loss_steps = 20 # number of steps to accumulate validation loss over
+        #     for _ in range(val_loss_steps):
+        #         x, y, shard_idx, tokens_abandoned = val_loader.next_batch()
+        #         x, y = x.to(device), y.to(device)
 
-                # see training loop below for details on the use of autocast. 
-                with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-                    logits, val_loss = model(x, y)
+        #         # see training loop below for details on the use of autocast. 
+        #         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+        #             logits, val_loss = model(x, y)
                 
-                val_loss = val_loss / val_loss_steps # divide the loss by the number of accumulation steps to get the average loss. This computes the averaage loss on one gpu.
-                val_loss_accum += val_loss.detach() # detach the loss from the computation graph to avoid memory leaks.
+        #         val_loss = val_loss / val_loss_steps # divide the loss by the number of accumulation steps to get the average loss. This computes the averaage loss on one gpu.
+        #         val_loss_accum += val_loss.detach() # detach the loss from the computation graph to avoid memory leaks.
 
-        if ddp:
-            # synchronize the validation loss across all gpu processes
-            dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
-        if master_process:
-            print(f"Validation Step {step},  shard_idx: {shard_idx},  Loss: {val_loss_accum.item():.4f},  LR: {optimizer.param_groups[0]['lr']}")
+        # if ddp:
+        #     # synchronize the validation loss across all gpu processes
+        #     dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
+        # if master_process:
+        #     print(f"Validation Step {step},  shard_idx: {shard_idx},  Loss: {val_loss_accum.item():.4f},  LR: {optimizer.param_groups[0]['lr']}")
 
     
     # once in a while generate from the model (except step 0, which is noise). I lifted this code from Karpathy unchanged.
