@@ -341,51 +341,28 @@ print(f'\nScheduler initialized on GPU rank {ddp_rank}, of {ddp_world_size}\n')
 # create log files, loggers, and evaluators to store training loss, learning rate, validation loss, hellaswag eval results, and generate sample text.
 import aae_eval_log_utils as eval_log_utils
 
-@dataclass
-class LogParamsConfig:
-    ddp: bool = ddp
-    ddp_world_size: int = ddp_world_size
+log_params = eval_log_utils.LogParamsFilesConfig(
+    ddp = ddp,
+    ddp_world_size = ddp_world_size,
     # ddp_local_rank = ddp_local_rank
-    ddp_rank: int = ddp_rank
-    model: object = model
-    device: str = device
-    encoder = tiktoken.get_encoding('gpt2')
-    optimizer: object = optimizer
-    val_loader: object = val_loader
-    loss_dir: str = "train_loss"
-    hella_accu_dir: str ="hella_accuracy"
-    learn_rate_dir: str = 'learn_rate_sched'
-    train_loss_file: str = "train_loss.csv"
-    hella_accu_file: str = "hellaswag_eval.csv"
-    lr_file: str = "learning_rate.csv"
-    step: int = 0
-    shard_idx: int = 0
-    loss_accum: float = 0.0
-    lr: float = 0.0
+    ddp_rank = ddp_rank,
+    model = model,
+    device = device,
+    encoder = tiktoken.get_encoding('gpt2'),
+    optimizer = optimizer,
+    val_loader = val_loader,
+    loss_dir = "train_loss",
+    hella_accu_dir ="hella_accuracy",
+    learn_rate_dirr = 'learn_rate_sched',
+    train_loss_file = "train_loss.csv",
+    hella_accu_file = "hellaswag_eval.csv",
+    lr_filer = "learning_rate.csv",
+    step = 0,
+    shard_idx = 0,
+    loss_accum = 0.0,
+    lr = 0.0
+)
 
-    def create_log_file(self):
-        os.makedirs(self.loss_dir, exist_ok=True)
-        print('here')
-        print(os.path.join(self.loss_dir, self.train_loss_file))
-        print('here2')
-        self.train_loss_file = os.path.join(self.loss_dir, self.train_loss_file)
-        print('here3')
-        print(self.train_loss_file)
-        
-
-
-log_params = LogParamsConfig()
-log_params.create_log_file()
-print('here4')
-print(log_params.train_loss_file)
-# log_params.create_log_file()
-# print(log_params.train_loss_file)
-
-# eval_log_utils.CreateLogFiles(log_params=log_params)
-
-# log_params.train_loss_file = log_files.train_loss_file
-# log_params.hella_accu_file = log_files.hella_accu_file
-# log_params.lr_file = log_files.lr_file
 
 sample_generator = eval_log_utils.GenerateSample(log_params=log_params)
 

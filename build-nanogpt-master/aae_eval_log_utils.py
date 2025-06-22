@@ -10,17 +10,31 @@ import csv
 from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
+from dataclasses import dataclass
 
+@dataclass
+class LogParamsFilesConfig:
+    ddp: bool 
+    ddp_world_size: int 
+    # ddp_local_rank = ddp_local_ran
+    ddp_rank: int 
+    model: object 
+    device: str
+    encoder: object
+    optimizer: object 
+    val_loader: object 
+    loss_dir: str
+    hella_accu_dir: str
+    learn_rate_dir: str
+    train_loss_file: str
+    hella_accu_file: str 
+    lr_file: str
+    step: int
+    shard_idx: int
+    loss_accum: float 
+    lr: float
 
-class CreateLogFiles:
-    def __init__(self, log_params=None):
-        self.loss_dir = log_params.loss_dir
-        self.hella_accur_dir = log_params.hella_accu_dir
-        self.learn_rate_dir = log_params.learn_rate_dir
-        self.hella_accu_file = log_params.hella_accu_file
-        self.train_loss_file = log_params.train_loss_file
-        self.lr_file = log_params.lr_file
-
+    def __post_init__(self):
         # create traing loss log directory
         os.makedirs(self.loss_dir, exist_ok=True)
         self.train_loss_file = os.path.join(self.loss_dir, self.train_loss_file)

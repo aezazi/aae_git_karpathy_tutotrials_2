@@ -454,26 +454,39 @@ t
 
 #%%
 from dataclasses import dataclass
+import os
+import csv
 @dataclass
 class LogParamConfig:
-    ddp: int = 2
+    # def __init__(self):
+    #     pass
+    ddp: int 
     ddp_world_size: int =5
     # ddp_local_rank = ddp_local_rank
     ddp_rank: int = 1
     model: object = 'model'
     device: str = 'cuda'
+    loss_dir = 'test_dir'
+    loss_file = 'test_file.csv'
 
-td = LogParamConfig()
+    def __post_init__(self):
+        os.makedirs(self.loss_dir, exist_ok=True)
+        print('here')
+        print(os.path.join(self.loss_dir, self.loss_file))
+        print('here2')
+        self.loss_file = os.path.join(self.loss_dir, self.loss_file)
+        print('here3')
+        print(self.loss_file)
 
-class TestData(LogParamConfig):
-    def __init__(self, name=None):
-        super().__init__()
-        self.name = name
-        
-        # self.model = kwargs.model
-td1 = TestData('alex')
-td1.name
+        with open(self.loss_file, "w") as f: # open for writing to clear the file
+            csv_out = csv.writer(f)
+            csv_out.writerow(['step', 'train_loss']) # write the header row
 
+#%%
+t = LogParamConfig(ddp=34)
+# t.make_file()
+print(t.loss_file)
+t.ddp
 
 # %%
 import pandas as pd
