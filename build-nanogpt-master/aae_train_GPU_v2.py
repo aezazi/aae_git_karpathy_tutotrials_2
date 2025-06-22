@@ -338,37 +338,37 @@ scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=T_max, restart
 print(f'\nScheduler initialized on GPU rank {ddp_rank}, of {ddp_world_size}\n')
 
 #%%
-# create log files to store training loss and hellaswag eval results. Note that I moved all logging, eval, and test generation code to aae_eval_log_utils.py
-import aae_eval_log_utils as eval_log
+# create log files, loggers, and evaluators to store training loss, learning rate, validation loss, hellaswag eval results, and generate sample text.
+import aae_eval_log_utils as eval_log_utils
 
 @dataclass
 class LogParamsConfig:
-    ddp = ddp
-    ddp_world_size = ddp_world_size
+    ddp: bool = ddp
+    ddp_world_size: int = ddp_world_size
     # ddp_local_rank = ddp_local_rank
-    ddp_rank = ddp_rank
-    model = model
-    device = device
+    ddp_rank: int = ddp_rank
+    model: object = model
+    device: str = device
     encoder = tiktoken.get_encoding('gpt2')
-    optimizer = optimizer
-    val_loader = val_loader
-    loss_dir = "train_loss"
-    hella_accu_dir="hella_accuracy"
-    learn_rate_dir = 'learn_rate_sched'
+    optimizer: object = optimizer
+    val_loader: object = val_loader
+    loss_dir: str = "train_loss"
+    hella_accu_dir: str ="hella_accuracy"
+    learn_rate_dir: str = 'learn_rate_sched'
 
 log_params = LogParamsConfig()
 
-log_files = eval_log.CreateLogFiles(log_params=log_params)
+log_files = eval_log_utils.CreateLogFiles(log_params=log_params)
 
-train_loss_logger = eval_log.TrainLoss()
+train_loss_logger = eval_log_utils.TrainLoss()
 
-learning_rate_logger = eval_log.LearningRate()
+learning_rate_logger = eval_log_utils.LearningRate()
 
-hellaswag_logger = eval_log.HellaSwag(log_params=log_params)
+hellaswag_logger = eval_log_utils.HellaSwag(log_params=log_params)
 
-validation_checker = eval_log.Validation(log_params=log_params)
+validation_checker = eval_log_utils.Validation(log_params=log_params)
 
-sample_generator = eval_log.GenerateSample(log_params=log_params)
+sample_generator = eval_log_utils.GenerateSample(log_params=log_params)
 
 
 
@@ -380,18 +380,18 @@ for step in range(training_steps):
     t0 = time.time()
     last_step = (step == training_steps - 1)
 
-    # once in a while evaluate hellaswag.
+    # every x steps evaluate hellaswag.
     if ((step > 0 and step % 250 == 0) or last_step):
         hellaswag_logger.log_hella_accu(step=step, log_file=log_files.hella_accu_file)
 
-    # Every so often, put the model in validation mode and use the validation dataset to compute loss. This is to help us catch any over fitting issues. 
+    # Every x steps, put the model in validation mode and use the validation dataset to compute loss. This is to help us catch any over fitting issues. 
     if step % 250 == 0 and step > 0:
         val_loss = validation_checker.check_validation_loss(step)
         if master_process:
             print(f"\nValidation at Step {step},  shard_idx: {shard_idx},  Loss: {val_loss:.4f},  LR: {optimizer.param_groups[0]['lr']:.7f}\n")
     
-    # once in a while generate from the model (except step 0, which is noise).
-    if ((step > 0 and step % 500 == 0) or last_step):
+    # every x steps generate from the model.
+    if ((step % 500 == 0 and step > 0) or last_step):
         sample_generator.generate(context="Hello, I'm a language model,", sample_max_length=32)
        
 

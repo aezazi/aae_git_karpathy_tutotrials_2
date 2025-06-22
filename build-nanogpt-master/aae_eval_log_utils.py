@@ -119,8 +119,6 @@ class HellaSwag:
                 csv_out.writerow([step, self.acc_norm])
 
 #%%
-   
-
 class Validation:
     def __init__(self, log_params=None):
         self.model = log_params.model

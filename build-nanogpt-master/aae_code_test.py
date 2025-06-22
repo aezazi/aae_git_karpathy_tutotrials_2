@@ -456,21 +456,23 @@ t
 from dataclasses import dataclass
 @dataclass
 class LogParamConfig:
-    ddp = 2
-    ddp_world_size =5
+    ddp: int = 2
+    ddp_world_size: int =5
     # ddp_local_rank = ddp_local_rank
-    ddp_rank = 1
-    model = 'model'
-    device = 'cuda'
+    ddp_rank: int = 1
+    model: object = 'model'
+    device: str = 'cuda'
 
 td = LogParamConfig()
 
-class TestData():
-    def __init__(self, de):
-        self.ddp = de.ddp
+class TestData(LogParamConfig):
+    def __init__(self, name=None):
+        super().__init__()
+        self.name = name
+        
         # self.model = kwargs.model
-td1 = TestData(td)
-td1.ddp
+td1 = TestData('alex')
+td1.name
 
 
 # %%
