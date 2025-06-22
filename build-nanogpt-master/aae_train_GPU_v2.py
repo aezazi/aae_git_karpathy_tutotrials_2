@@ -344,28 +344,24 @@ import aae_eval_log_utils as eval_log_utils
 log_params = eval_log_utils.LogParamsFilesConfig(
     ddp = ddp,
     ddp_world_size = ddp_world_size,
-    # ddp_local_rank = ddp_local_rank
     ddp_rank = ddp_rank,
+    # ddp_local_rank = ddp_local_rank
     model = model,
     device = device,
     encoder = tiktoken.get_encoding('gpt2'),
-    optimizer = optimizer,
+    # optimizer = optimizer,
     val_loader = val_loader,
     loss_dir = "train_loss",
     hella_accu_dir ="hella_accuracy",
-    learn_rate_dirr = 'learn_rate_sched',
+    learn_rate_dir = 'learn_rate_sched',
     train_loss_file = "train_loss.csv",
     hella_accu_file = "hellaswag_eval.csv",
-    lr_filer = "learning_rate.csv",
+    lr_file = "learning_rate.csv",
     step = 0,
     shard_idx = 0,
     loss_accum = 0.0,
     lr = 0.0
 )
-
-
-sample_generator = eval_log_utils.GenerateSample(log_params=log_params)
-
 
 
 #%%
@@ -419,12 +415,8 @@ for step in range(training_steps):
     tokens_processed = train_loader.B * train_loader.T * micro_steps * ddp_world_size
     tokens_per_sec = tokens_processed / dt
     
-    # every x steps, print processing stats, update log_params, and log traing loss and learning rate to file
-    if master_process and (step % 5 == 0 or last_step):
-        
-        # print processing stats
-        print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
-
+    # update log_params, log traing loss and learning rate to file, print processing stats.
+    if master_process:
         # update log_params
         log_params.step = step
         log_params.shard_idx = shard_idx
@@ -435,18 +427,20 @@ for step in range(training_steps):
         eval_log_utils.TrainLoss(log_params=log_params).log_training_loss()
         eval_log_utils.LearningRate(log_params=log_params).log_learning_rate()
 
+        # print processing stats
+        print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
 
-    # every x steps evaluate hellaswag.
-    if ((step > 0 and step % 15 == 0) or last_step):
+    # every x steps evaluate, print, and log hellaswag.
+    if ((step > 0 and step % 250 == 0) or last_step):
         eval_log_utils.HellaSwag(log_params=log_params).log_print_hella_accuracy()
 
     # Every x steps, put the model in validation mode and use the validation dataset to compute loss. This is to help us catch any over fitting issues. 
-    if step % 20 == 0 and step > 0:
+    if step % 250 == 0 and step > 0:
         eval_log_utils.Validation(log_params=log_params).check_validation_loss()
     
     # every x steps generate from the model.
     if ((step % 500 == 0 and step > 0) or last_step):
-        sample_generator.generate(context="Hello, I'm a language model,", sample_max_length=32)
+        eval_log_utils.GenerateSample(log_params=log_params).generate(context="Hello, I'm a language model,", sample_max_length=32)
 
 if ddp:
     destroy_process_group()

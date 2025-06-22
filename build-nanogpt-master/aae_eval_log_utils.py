@@ -16,12 +16,12 @@ from dataclasses import dataclass
 class LogParamsFilesConfig:
     ddp: bool 
     ddp_world_size: int 
-    # ddp_local_rank = ddp_local_ran
     ddp_rank: int 
+    # ddp_local_rank: int
     model: object 
     device: str
     encoder: object
-    optimizer: object 
+    # optimizer: object 
     val_loader: object 
     loss_dir: str
     hella_accu_dir: str
@@ -43,8 +43,8 @@ class LogParamsFilesConfig:
             csv_out.writerow(['step', 'train_loss']) # write the header row
 
         # create hellaswag accuracy log directory
-        os.makedirs(self.hella_accur_dir, exist_ok=True)
-        self.hella_accu_file = os.path.join(self.hella_accur_dir, self.hella_accu_file)
+        os.makedirs(self.hella_accu_dir, exist_ok=True)
+        self.hella_accu_file = os.path.join(self.hella_accu_dir, self.hella_accu_file)
         with open(self.hella_accu_file, "w") as f: # open for writing to clear the file
             csv_out = csv.writer(f)
             csv_out.writerow(['step', 'hellaswag_accuracy']) # write the header row
@@ -143,7 +143,7 @@ class HellaSwag:
     def log_print_hella_accuracy(self):
         self.compute_accuracy()
         if self.master_process:
-            print(f"\nStep: {self.step},   HellaSwag accuracy: {self.num_correct_norm}/{self.num_total}={self.acc_norm:.4f}\n")
+            print(f"\nHellaSwag accuracy at Step {self.step}: {self.num_correct_norm}/{self.num_total}={self.acc_norm:.4f}\n")
         
             with open(self.log_file, "a") as f:
                 csv_out = csv.writer(f)
@@ -155,9 +155,7 @@ class Validation:
         self.model = log_params.model
         self.val_loader = log_params.val_loader
         self.ddp = log_params.ddp
-        self.rank = log_params.ddp_rank
         self.device = log_params.device
-        self.optimizer = log_params.optimizer
         self.master_process = log_params.ddp_rank == 0
         self.step = log_params.step
         self.shard_idx = log_params.shard_idx
@@ -175,7 +173,7 @@ class Validation:
                 x, y, shard_idx, tokens_abandoned = self.val_loader.next_batch()
                 x, y = x.to(self.device), y.to(self.device)
 
-                # see training loop below for details on the use of autocast. 
+                # see training loop for details on the use of autocast. 
                 with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
                     logits, val_loss = self.model(x, y)
                 
@@ -186,7 +184,7 @@ class Validation:
             # synchronize the validation loss across all gpu processes
             dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
             if self.master_process:
-                print(f"\nValidation at Step {self.step},  shard_idx: {self.shard_idx},  Loss: {val_loss_accum:.4f},  LR: {self.lr}\n")
+                print(f"\nValidation loss  at Step {self.step},  shard_idx: {self.shard_idx},  Loss: {val_loss_accum:.4f},  LR: {self.lr:.7f}\n")
          
 class GenerateSample:
     def __init__(self, log_params):
@@ -229,4 +227,4 @@ class GenerateSample:
         for i in range(self.num_return_sequences):
             self.tokens = self.xgen[i, :sample_max_length].tolist()
             decoded = self.enc.decode(self.tokens)
-            print(f"\nrank {self.ddp_rank} sample {i}: {decoded}")
+            print(f"\nrank {self.ddp_rank} sample {i}: {decoded}\n")
