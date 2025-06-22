@@ -41,16 +41,29 @@ class CreateLogFiles:
  
 
 class TrainLoss():
+    def __init__(self, log_params):
+        self.step = log_params.step
+        self.loss_accum = log_params.loss_accum
+        self.train_loss_file = log_params.train_loss_file
+        self.master_process = log_params.ddp_rank == 0
+    
     def log_training_loss(self, step=None, loss_accum=None,  train_loss_file=None):
+
         with open(train_loss_file, "a") as f:
                 csv_out = csv.writer(f)
                 csv_out.writerow([step, f'{loss_accum.item():.7f}']) # write the step and loss to the csv file
 
 class LearningRate():
-    def log_learning_rate(self, step=None, lr=None, lr_file=None):
-        with open(lr_file, "a") as f:
+    def __init__(self, log_params):
+        self.step = log_params.step
+        self.lr = log_params.lr
+        self.lr_file = log_params.lr_file
+        self.master_process = log_params.ddp_rank == 0
+
+    def log_learning_rate(self):
+        with open(self.lr_file, "a") as f:
                 csv_out = csv.writer(f)
-                csv_out.writerow([step, f'{lr:.7f}'])
+                csv_out.writerow([self.step, f'{self.lr:.7f}'])
 
 class HellaSwag:
     def __init__(self, log_params):

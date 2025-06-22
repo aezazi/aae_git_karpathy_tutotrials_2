@@ -355,10 +355,20 @@ class LogParamsConfig:
     loss_dir: str = "train_loss"
     hella_accu_dir: str ="hella_accuracy"
     learn_rate_dir: str = 'learn_rate_sched'
+    train_loss_file: str = None
+    hella_accu_file: str = None
+    lr_file: str = None
+    step: int = 0
+    shard_idx: int = 0
+    loss_accum: float = 0.0
+    lr: float = 0.0
 
 log_params = LogParamsConfig()
 
 log_files = eval_log_utils.CreateLogFiles(log_params=log_params)
+log_params.train_loss_file = log_files.train_loss_file
+log_params.hella_accu_file = log_files.hella_accu_file
+log_params.lr_file = log_files.lr_file
 
 train_loss_logger = eval_log_utils.TrainLoss()
 
@@ -445,7 +455,13 @@ for step in range(training_steps):
             train_loss_logger.log_training_loss(step=step, loss_accum=loss_accum, train_loss_file=log_files.train_loss_file)
 
             learning_rate_logger.log_learning_rate(step=step, lr=optimizer.param_groups[0]['lr'], lr_file=log_files.lr_file)
-            
+
+    log_params.step = step
+    log_params.shard_idx = shard_idx
+    log_params.loss_accum = loss_accum.item()
+    log_params.lr = optimizer.param_groups[0]['lr']
+
+
 if ddp:
     destroy_process_group()
 
