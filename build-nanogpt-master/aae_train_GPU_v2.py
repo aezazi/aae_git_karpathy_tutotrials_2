@@ -355,28 +355,37 @@ class LogParamsConfig:
     loss_dir: str = "train_loss"
     hella_accu_dir: str ="hella_accuracy"
     learn_rate_dir: str = 'learn_rate_sched'
-    train_loss_file: str = None
-    hella_accu_file: str = None
-    lr_file: str = None
+    train_loss_file: str = "train_loss.csv"
+    hella_accu_file: str = "hellaswag_eval.csv"
+    lr_file: str = "learning_rate.csv"
     step: int = 0
     shard_idx: int = 0
     loss_accum: float = 0.0
     lr: float = 0.0
 
+    def create_log_file(self):
+        os.makedirs(self.loss_dir, exist_ok=True)
+        print('here')
+        print(os.path.join(self.loss_dir, self.train_loss_file))
+        print('here2')
+        self.train_loss_file = os.path.join(self.loss_dir, self.train_loss_file)
+        print('here3')
+        print(self.train_loss_file)
+        
+
+
 log_params = LogParamsConfig()
+log_params.create_log_file()
+print('here4')
+print(log_params.train_loss_file)
+# log_params.create_log_file()
+# print(log_params.train_loss_file)
 
-log_files = eval_log_utils.CreateLogFiles(log_params=log_params)
-log_params.train_loss_file = log_files.train_loss_file
-log_params.hella_accu_file = log_files.hella_accu_file
-log_params.lr_file = log_files.lr_file
+# eval_log_utils.CreateLogFiles(log_params=log_params)
 
-train_loss_logger = eval_log_utils.TrainLoss()
-
-learning_rate_logger = eval_log_utils.LearningRate()
-
-hellaswag_logger = eval_log_utils.HellaSwag(log_params=log_params)
-
-validation_checker = eval_log_utils.Validation(log_params=log_params)
+# log_params.train_loss_file = log_files.train_loss_file
+# log_params.hella_accu_file = log_files.hella_accu_file
+# log_params.lr_file = log_files.lr_file
 
 sample_generator = eval_log_utils.GenerateSample(log_params=log_params)
 
@@ -389,21 +398,6 @@ model.train() # set the model to training mode
 for step in range(training_steps):
     t0 = time.time()
     last_step = (step == training_steps - 1)
-
-    # every x steps evaluate hellaswag.
-    if ((step > 0 and step % 250 == 0) or last_step):
-        hellaswag_logger.log_hella_accu(step=step, log_file=log_files.hella_accu_file)
-
-    # Every x steps, put the model in validation mode and use the validation dataset to compute loss. This is to help us catch any over fitting issues. 
-    if step % 250 == 0 and step > 0:
-        val_loss = validation_checker.check_validation_loss(step)
-        if master_process:
-            print(f"\nValidation at Step {step},  shard_idx: {shard_idx},  Loss: {val_loss:.4f},  LR: {optimizer.param_groups[0]['lr']:.7f}\n")
-    
-    # every x steps generate from the model.
-    if ((step % 500 == 0 and step > 0) or last_step):
-        sample_generator.generate(context="Hello, I'm a language model,", sample_max_length=32)
-       
 
     # Main training loop
     model.train()
@@ -447,20 +441,35 @@ for step in range(training_steps):
     dt = (t1 - t0)
     tokens_processed = train_loader.B * train_loader.T * micro_steps * ddp_world_size
     tokens_per_sec = tokens_processed / dt
-    if master_process:
+    
+    # every x steps, print processing stats, update log_params, and log traing loss and learning rate to file
+    if master_process and (step % 5 == 0 or last_step):
         
-        if ((step > 0 and step % 10 == 0) or last_step):
-            print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
+        # print processing stats
+        print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
 
-            train_loss_logger.log_training_loss(step=step, loss_accum=loss_accum, train_loss_file=log_files.train_loss_file)
+        # update log_params
+        log_params.step = step
+        log_params.shard_idx = shard_idx
+        log_params.loss_accum = round(loss_accum.item(), 7)
+        log_params.lr = round(optimizer.param_groups[0]['lr'], 7)
 
-            learning_rate_logger.log_learning_rate(step=step, lr=optimizer.param_groups[0]['lr'], lr_file=log_files.lr_file)
+        #log training loss and learning rate to file
+        eval_log_utils.TrainLoss(log_params=log_params).log_training_loss()
+        eval_log_utils.LearningRate(log_params=log_params).log_learning_rate()
 
-    log_params.step = step
-    log_params.shard_idx = shard_idx
-    log_params.loss_accum = loss_accum.item()
-    log_params.lr = optimizer.param_groups[0]['lr']
 
+    # every x steps evaluate hellaswag.
+    if ((step > 0 and step % 15 == 0) or last_step):
+        eval_log_utils.HellaSwag(log_params=log_params).log_print_hella_accuracy()
+
+    # Every x steps, put the model in validation mode and use the validation dataset to compute loss. This is to help us catch any over fitting issues. 
+    if step % 20 == 0 and step > 0:
+        eval_log_utils.Validation(log_params=log_params).check_validation_loss()
+    
+    # every x steps generate from the model.
+    if ((step % 500 == 0 and step > 0) or last_step):
+        sample_generator.generate(context="Hello, I'm a language model,", sample_max_length=32)
 
 if ddp:
     destroy_process_group()

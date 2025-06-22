@@ -17,24 +17,27 @@ class CreateLogFiles:
         self.loss_dir = log_params.loss_dir
         self.hella_accur_dir = log_params.hella_accu_dir
         self.learn_rate_dir = log_params.learn_rate_dir
+        self.hella_accu_file = log_params.hella_accu_file
+        self.train_loss_file = log_params.train_loss_file
+        self.lr_file = log_params.lr_file
 
         # create traing loss log directory
         os.makedirs(self.loss_dir, exist_ok=True)
-        self.train_loss_file = os.path.join(self.loss_dir, f"train_loss.csv")
+        self.train_loss_file = os.path.join(self.loss_dir, self.train_loss_file)
         with open(self.train_loss_file, "w") as f: # open for writing to clear the file
             csv_out = csv.writer(f)
             csv_out.writerow(['step', 'train_loss']) # write the header row
 
         # create hellaswag accuracy log directory
         os.makedirs(self.hella_accur_dir, exist_ok=True)
-        self.hella_accu_file = os.path.join(self.hella_accur_dir, f"hellaswag_eval.csv")
+        self.hella_accu_file = os.path.join(self.hella_accur_dir, self.hella_accu_file)
         with open(self.hella_accu_file, "w") as f: # open for writing to clear the file
             csv_out = csv.writer(f)
             csv_out.writerow(['step', 'hellaswag_accuracy']) # write the header row
 
         # create learning rate log directory
         os.makedirs(self.learn_rate_dir, exist_ok=True)
-        self.lr_file = os.path.join(self.learn_rate_dir, f"learning_rate.csv")
+        self.lr_file = os.path.join(self.learn_rate_dir, self.lr_file)
         with open(self.lr_file, "w") as f: # open for writing to clear the file
             csv_out = csv.writer(f)
             csv_out.writerow(['step', 'learning_rate']) # write the header row
@@ -47,11 +50,10 @@ class TrainLoss():
         self.train_loss_file = log_params.train_loss_file
         self.master_process = log_params.ddp_rank == 0
     
-    def log_training_loss(self, step=None, loss_accum=None,  train_loss_file=None):
-
-        with open(train_loss_file, "a") as f:
+    def log_training_loss(self):
+        with open(self.train_loss_file, "a") as f:
                 csv_out = csv.writer(f)
-                csv_out.writerow([step, f'{loss_accum.item():.7f}']) # write the step and loss to the csv file
+                csv_out.writerow([self.step, self.loss_accum]) # write the step and loss to the csv file
 
 class LearningRate():
     def __init__(self, log_params):
@@ -73,6 +75,8 @@ class HellaSwag:
         self.ddp_world_size = log_params.ddp_world_size
         self.ddp_rank = log_params.ddp_rank
         self.master_process = log_params.ddp_rank == 0
+        self.step = log_params.step
+        self.log_file = log_params.hella_accu_file
         
     def get_most_likely_row(self,tokens=None, mask=None, logits=None):
     # evaluate the autoregressive loss at all positions
@@ -122,14 +126,14 @@ class HellaSwag:
         
         self.acc_norm = round((self.num_correct_norm / self.num_total), 4) if self.num_total > 0 else 0.0
         
-    def log_hella_accu(self, step=1, log_file=None):
+    def log_print_hella_accuracy(self):
         self.compute_accuracy()
         if self.master_process:
-            print(f"\nHellaSwag accuracy: {self.num_correct_norm}/{self.num_total}={self.acc_norm:.4f}\n")
+            print(f"\nStep: {self.step},   HellaSwag accuracy: {self.num_correct_norm}/{self.num_total}={self.acc_norm:.4f}\n")
         
-            with open(log_file, "a") as f:
+            with open(self.log_file, "a") as f:
                 csv_out = csv.writer(f)
-                csv_out.writerow([step, self.acc_norm])
+                csv_out.writerow([self.step, self.acc_norm])
 
 #%%
 class Validation:
@@ -141,8 +145,11 @@ class Validation:
         self.device = log_params.device
         self.optimizer = log_params.optimizer
         self.master_process = log_params.ddp_rank == 0
+        self.step = log_params.step
+        self.shard_idx = log_params.shard_idx
+        self.lr = log_params.lr
 
-    def check_validation_loss(self, step = None):
+    def check_validation_loss(self):
         self.model.eval() # set the model to evaluation mode
         self.val_loader.reset() # reset the validation loader to the beginning of the validation dataset
         # self.step = step
@@ -164,10 +171,9 @@ class Validation:
         if self.ddp:
             # synchronize the validation loss across all gpu processes
             dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
-        
-        return val_loss_accum
-        
-        
+            if self.master_process:
+                print(f"\nValidation at Step {self.step},  shard_idx: {self.shard_idx},  Loss: {val_loss_accum:.4f},  LR: {self.lr}\n")
+         
 class GenerateSample:
     def __init__(self, log_params):
         self.model = log_params.model
