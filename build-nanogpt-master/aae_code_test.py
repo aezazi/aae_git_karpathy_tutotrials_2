@@ -406,7 +406,7 @@ enc = tiktoken.get_encoding("gpt2")
 eot = enc.eot_token
 tok1 = enc.encode_ordinary("This is a test of the tiktoken")
 tok1 = np.array(tok1, dtype=np.uint16)
-tok2 = enc.encode_ordinary("I want to fuck Lily")
+tok2 = enc.encode_ordinary("I want to go swimming")
 tok2 = np.array(tok2, dtype=np.uint16)
 tok3 = enc.encode_ordinary("I am getting old")
 tok3 = np.array(tok3, dtype=np.uint16)
@@ -513,9 +513,145 @@ plt.title('Train Loss Over Steps')
 # plt.xticks(rotation=45) # Rotate x-axis labels for better readability
 plt.tight_layout() # Adjust layout to prevent labels from overlapping
 plt.show()
-# %%
-res1 = 19703//4
-res2 =  res1 * 3
-res1 + res2
 
+
+# %%
+#experimenting for most effiecient method to story numpy arrays (tokenized docs) in a shard that sloows for shuffling of each array wihin the shard
+array1 = np.array([1, 2, 3, 4, 5])
+array2 = np.array([10, 20, 30, 40, 50])
+array3 = np.array([0.1, 0.2, 0.3, 0.4, 0.5])
+
+l = [array1, array2, array3]
+
+
+shard_array = np.array(l, dtype=object) 
+np.save('multiple_arrays', shard_array)
+
+# %%
+array_of_lists = np.load("multiple_arrays.npy", allow_pickle=True)
+print(array_of_lists)
+print(type(array_of_lists[0]))
+np.random.shuffle(array_of_lists)
+print(array_of_lists)
+len(array_of_lists)
+
+# %%
+# understanding rotary embeddings
+x = np.array([0,1,2,3,4,5,6,7,8,9,10,11])
+x1 = x[::2]
+x2 = x[1::2]
+print(x1)
+print(x2)
+
+# %%
+seq_length = 5
+def get_rotary_embeddings(seq_len, dim, device):
+    """Generate rotary frequencies."""
+    theta = 10000 ** (-torch.arange(0, dim, 2, dtype=torch.float32, device=device) / dim)
+    print(f'theta shape: {theta.shape} which is dim/2\n {theta}')
+    print('-'*50)
+    position = torch.arange(seq_len, dtype=torch.float32, device=device)
+    print(f'position shape: {position.shape} which is sequence length\n{position}')
+    print('-'*50)
+    freqs = torch.einsum("i,j->ij", position, theta)  # [seq_len, dim/2]
+    print(f'freqs: \n{freqs}')
+    print('-'*50)
+    freqs_outer = torch.outer(position, theta)
+    print(f'freqs_outer: \n{torch.round(freqs_outer, decimals=4)}')
+    print('-'*50)
+    print(torch.allclose(freqs,freqs_outer))
+
+
+    freqs_cos = freqs.cos()  # [seq_len, dim/2]
+    print(f'freqs_shape: {freqs_cos.shape}')
+    freqs_sin = freqs.sin()
+    # return freqs_cos, freqs_sin
+
+get_rotary_embeddings(seq_length, len(x), 'mps')
+
+# %%
+# rotrary position embedding compute theta. exploring two approaches
+print(f'formula from paper for computing theta:/nθi = 10000−2(i−1)/d, i ∈ [1, 2, ..., d/2]\n')
+
+i_paper = np.arange(1, 13).reshape(1,-1)
+d = i_paper.shape[1]
+i_paper_for_theta = i_paper[:(d//2)]
+print(f'i_paper using 1 based indexing:\n{i_paper}')
+
+print(f'd dimension size: {d}')
+print('-'*50)
+theta_1 = 10_000 ** (-2*(i_paper_for_theta-1)/d)
+print(f'theta using 1 based indexing and the formula from the paper:\n{theta_1}')
+
+print('-'*50)
+i = np.arange(0,12)
+print(f' i using  the common pracitce 0 based indexing :\n{i}')
+
+print(f'i_commom_practice_for theta:')
+print(np.arange(0, d, 2))
+theta_2 = 10000 ** (-np.arange(0, d, 2) / d)
+print(f'theta using 0 based indexing and the common practice formula:\n theta = 10000^(-2i/dim)')
+print(theta_2)
+print(f'\nNote that that two approaches yield exactly the same result')
+
+
+
+# %%
+# rotary position encoding compute position x theta matrix
+seq_length = 5
+position = np.arange(seq_length).reshape(1,-1)
+print(f'position vector:\n{position}\n')
+
+# the position x theta matrix is the outer product of (position, theta). It multiplies each position index by each theta resultin in a (seq_lenght x dim/2) matrix. dim/2 is the lenght of the theta vector. this matrix is known as the frequency
+print('the position x theta matrix is the outer product of (position, theta) which is \nmatmul(position, theta_tranpose)\n')
+
+theta_2 = theta_2.reshape(1,-1)
+print(theta_2.shape)
+
+frequency = np.outer(position, theta_2)
+frequency.shape
+
+
+
+# %%
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Embedding dimension (must be even)
+dim = 8
+num_pairs = dim // 2
+
+# Positions to visualize
+positions = [0, 1, 2, 10, 50]
+colors = ['black', 'red', 'blue', 'green', 'purple']
+
+# Compute θ[i] = 10000^{-2i/dim}
+i = np.arange(num_pairs)  # 0, 1, ..., dim/2 - 1
+theta = 10000 ** (-2 * i / dim)
+
+# Plot
+fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+
+for pos, color in zip(positions, colors):
+    angle = theta * pos
+    cos_vals = np.cos(angle)
+    sin_vals = np.sin(angle)
+
+    axs[0].plot(i, cos_vals, label=f'pos={pos}', color=color)
+    axs[1].plot(i, sin_vals, label=f'pos={pos}', color=color)
+
+# Configure plots
+axs[0].set_title('cos(θᵢ × position)')
+axs[1].set_title('sin(θᵢ × position)')
+
+for ax in axs:
+    ax.set_xlabel('Dimension pair index (i)')
+    ax.set_ylabel('Value')
+    ax.set_xticks(i)
+    ax.grid(True)
+    ax.legend()
+
+plt.suptitle('RoPE: Rotation Angles Across Dimensions')
+plt.tight_layout()
+plt.show()
 # %%

@@ -1,6 +1,6 @@
 #%%
 """
-My implementation of the Karpathy's nanoGPT code for building a dataset from the fineweb-edu dataset.
+My implementation of the Karpathy's nanoGPT code for building a dataset from the fineweb-edu dataset. This implementtion is designed to allow shuffling. Each shard contains compelete example documents (Karpathy splits documents between shards). Each document is a tokenized numpy array with the EOT token appended to end. Each shard is a numpy array. Each document is placed in the shard array as a separate numpy object. This will allow the order of the shards as well as the order of the documents within each shard to be shuffled when loading. See aae_dataloader_utils.py
 """
 
 # %%
@@ -17,7 +17,7 @@ import multiprocessing as mp
 # Constants
 tokenizer_name = "gpt2"
 shard_size = 100_000_000 # 100 million tokens per shard
-shard_dir = "aae_token_shards_mp"
+shard_dir = "aae_edu_fineweb10B_shuffle"
 num_workers = max(1, os.cpu_count() // 2)
 
 #%%
@@ -37,7 +37,6 @@ def tokenize(example, eot=eot_token_id):
 
 
 # %%
-# NOTE: My approach is different from Karpathy's in that Karpathy splits documents between shards and compeletky fills each shard to the max size.I prefer to keep documents intact and only split them at the end of the document. If a shard is not completely filled, I slice off the portion that is populated so that the final numpy array is exactly shard_size tokens long. This assumes that shard_size is large enough tp accommodate the largest document in the dataset.
 
 def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=shard_dir):
     os.makedirs(shard_dir, exist_ok=True)
@@ -47,6 +46,7 @@ def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=s
 
         shard_idx = 0
         shard_token_count = 0
+        total_token_count = 0
         shard_list = []
 
         d_start = time.time()
@@ -60,7 +60,7 @@ def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=s
                 split = 'val' if shard_idx == 0 else 'train'
                 shard_save_path = os.path.join(shard_dir, f'{split}_shard_{shard_idx:04d}')
 
-                # Convert shard_list (list of lists) to a numpy array of list objects
+                # Convert shard_list (list of numpy arrays) to a numpy array of numpy array objects
                 shard_array = np.array(shard_list, dtype=object) 
                 np.save(shard_save_path, shard_array)
 
@@ -69,7 +69,7 @@ def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=s
                 dt = d_end - d_start
                 d_start = d_end
 
-                print(f'saved to {shard_save_path} with {shard_token_count:,} tokens | time to create shard: {dt:.2f} sec | {shard_token_count / dt:,.0f} tokens/sec \n')
+                print(f'saved to {shard_save_path} with {shard_token_count:,} tokens | time to create shard: {dt:.2f} sec | {shard_token_count / dt:,.0f} tokens/sec  | total tokens: {total_token_count:,}\n')
 
                 # start new shard
                 shard_idx += 1
@@ -79,6 +79,7 @@ def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=s
             else:
                 shard_list.append(tokens)
                 shard_token_count += len(tokens)
+                total_token_count += len(tokens)
             
         if shard_token_count > 0:
                 split = 'val' if shard_idx == 0 else 'train'
@@ -88,7 +89,7 @@ def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=s
                 
                 d_end = time.time()
                 dt = d_end - d_start
-                print(f'saved to {shard_save_path} with {shard_token_count:,} tokens | time to create shard: {dt:.2f} sec | {shard_token_count / dt:,.0f} tokens/sec \n')
+                print(f'saved to {shard_save_path} with {shard_token_count:,} tokens | time to create shard: {dt:.2f} sec | {shard_token_count / dt:,.0f} tokens/sec | total tokens: {total_token_count:,}\n')
 
      
 # %%
@@ -98,15 +99,17 @@ if __name__ == '__main__':
     create_shards(dataset_iterator, dataset_iterator_test)
 
 #  %%
-# # code to inspect the saved shards
-# import numpy as np
-# array_of_lists = np.load("aae_token_shards_mp/val_shard_0000.npy", allow_pickle=True)
-# array_of_lists[0] = np.concatenate(([eot_token_id], array_of_lists[0]))  # Add eot token at the beginning of the first list
-# print(type(array_of_lists))
-# print('-' * 40)
-# print(array_of_lists[:5])
-# print(f'{len(array_of_lists[0]):,}')
-# print('-' * 40)
+# code to inspect the saved shards
+import numpy as np
+array_of_lists = np.load("aae_token_shards_mp/val_shard_0000.npy", allow_pickle=True)
+print(len(array_of_lists))
+array_of_lists[0] = np.concatenate(([eot_token_id], array_of_lists[0]))  # Add eot token at the beginning of the first list
+print(type(array_of_lists))
+print(type(array_of_lists[1]))
+print('-' * 40)
+print(array_of_lists[0])
+print(f'{len(array_of_lists[0]):,}')
+print('-' * 40)
 
 # flat_array = np.fromiter((token for token_list in array_of_lists for token in token_list), dtype=np.uint16)
 # print(flat_array[:20])
