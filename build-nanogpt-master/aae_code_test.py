@@ -359,42 +359,42 @@ print(tok_final)
 
 
 # %%
-# testing the DataLoaderShardMultiGPU class from aae_utils.py
-from aae_utils import DataLoaderShardMultiGPU as loader
+# # testing the DataLoaderShardMultiGPU class from aae_utils.py
+# from aae_dataloader_utils import DataLoaderMultiGPU as loader
 
-l2 = loader(201, 1024, split='train', shard_dir='aae_token_shards_mp')
+# l2 = loader(201, 1024, split='train', shard_dir='aae_edu_fineweb10B_shuffle')
 
-# %%
-import numpy as np
-# l.shards.sort()
-print(l2.shard_files)
-# print(type(l2.shards[0]))
-n = np.load(f'{l2.shard_dir}/{l2.shard_files[0]}')
-print(n.shape, n.dtype)
+# # %%
+# import numpy as np
+# # l.shards.sort()
+# print(l2.shard_files)
+# # print(type(l2.shards[0]))
+# n = np.load(f'{l2.shard_dir}/{l2.shard_files[0]}')
+# print(n.shape, n.dtype)
 
-# %%
-# this is the shard index for the 9th file in the list of shard files. really clever way to loop back to the first file after reaching the end of the shard files list
-print(len(l2.shard_files))
+# # %%
+# # this is the shard index for the 9th file in the list of shard files. really clever way to loop back to the first file after reaching the end of the shard files list
+# print(len(l2.shard_files))
 
-98 % len(l2.shard_files) 
-# %%
-import torch
-def load_tokens(filename):
-    npt = np.load(filename)
-    # npt = npt.astype(np.int32) # added after video
-    ptt = torch.tensor(npt, dtype=torch.int32) # changed to int32 after video
-    return ptt
-ptt = load_tokens(f'{l2.shard_dir}/{l2.shard_files[0]}')
-ptt.dtype, ptt.shape, ptt[:10]
-# %%
-99 % len(l2.shard_files) # this is the shard index for the 9th file in the list of shard files
-# %%
-os.makedirs('test_dir', exist_ok=True)
-t = np.load(f'{l2.shard_dir}/{l2.shard_files[0]}')
-s_1 = t[:11]
-s_2 = t[10:22]
-s_3 = t[20:32]
-print(s_1)
+# 98 % len(l2.shard_files) 
+# # %%
+# import torch
+# def load_tokens(filename):
+#     npt = np.load(filename)
+#     # npt = npt.astype(np.int32) # added after video
+#     ptt = torch.tensor(npt, dtype=torch.int32) # changed to int32 after video
+#     return ptt
+# ptt = load_tokens(f'{l2.shard_dir}/{l2.shard_files[0]}')
+# ptt.dtype, ptt.shape, ptt[:10]
+# # %%
+# 99 % len(l2.shard_files) # this is the shard index for the 9th file in the list of shard files
+# # %%
+# os.makedirs('test_dir', exist_ok=True)
+# t = np.load(f'{l2.shard_dir}/{l2.shard_files[0]}')
+# s_1 = t[:11]
+# s_2 = t[10:22]
+# s_3 = t[20:32]
+# print(s_1)
 
 # %%
 # experimenting with methods to save and load data list of lists and arrays to keep each document separate and intact so as to enabale data shuffling when loading the data. 
@@ -516,7 +516,8 @@ plt.show()
 
 
 # %%
-#experimenting for most effiecient method to story numpy arrays (tokenized docs) in a shard that sloows for shuffling of each array wihin the shard
+import numpy as np
+#experimenting for most effiecient method to store numpy arrays (tokenized docs) in a shard that allows shuffling of each array wihin the shard
 array1 = np.array([1, 2, 3, 4, 5])
 array2 = np.array([10, 20, 30, 40, 50])
 array3 = np.array([0.1, 0.2, 0.3, 0.4, 0.5])
@@ -527,7 +528,6 @@ l = [array1, array2, array3]
 shard_array = np.array(l, dtype=object) 
 np.save('multiple_arrays', shard_array)
 
-# %%
 array_of_lists = np.load("multiple_arrays.npy", allow_pickle=True)
 print(array_of_lists)
 print(type(array_of_lists[0]))
@@ -536,40 +536,10 @@ print(array_of_lists)
 len(array_of_lists)
 
 # %%
+
+
+# %%
 # understanding rotary embeddings
-x = np.array([0,1,2,3,4,5,6,7,8,9,10,11])
-x1 = x[::2]
-x2 = x[1::2]
-print(x1)
-print(x2)
-
-# %%
-seq_length = 5
-def get_rotary_embeddings(seq_len, dim, device):
-    """Generate rotary frequencies."""
-    theta = 10000 ** (-torch.arange(0, dim, 2, dtype=torch.float32, device=device) / dim)
-    print(f'theta shape: {theta.shape} which is dim/2\n {theta}')
-    print('-'*50)
-    position = torch.arange(seq_len, dtype=torch.float32, device=device)
-    print(f'position shape: {position.shape} which is sequence length\n{position}')
-    print('-'*50)
-    freqs = torch.einsum("i,j->ij", position, theta)  # [seq_len, dim/2]
-    print(f'freqs: \n{freqs}')
-    print('-'*50)
-    freqs_outer = torch.outer(position, theta)
-    print(f'freqs_outer: \n{torch.round(freqs_outer, decimals=4)}')
-    print('-'*50)
-    print(torch.allclose(freqs,freqs_outer))
-
-
-    freqs_cos = freqs.cos()  # [seq_len, dim/2]
-    print(f'freqs_shape: {freqs_cos.shape}')
-    freqs_sin = freqs.sin()
-    # return freqs_cos, freqs_sin
-
-get_rotary_embeddings(seq_length, len(x), 'mps')
-
-# %%
 # rotrary position embedding compute theta. exploring two approaches
 print(f'formula from paper for computing theta:/nθi = 10000−2(i−1)/d, i ∈ [1, 2, ..., d/2]\n')
 
@@ -597,7 +567,7 @@ print(f'\nNote that that two approaches yield exactly the same result')
 
 
 # %%
-# rotary position encoding compute position x theta matrix
+# rotary position encoding compute position,theta matrix
 seq_length = 5
 position = np.arange(seq_length).reshape(1,-1)
 print(f'position vector:\n{position}\n')
@@ -608,50 +578,127 @@ print('the position x theta matrix is the outer product of (position, theta) whi
 theta_2 = theta_2.reshape(1,-1)
 print(theta_2.shape)
 
-frequency = np.outer(position, theta_2)
-frequency.shape
+freq = np.outer(position, theta_2) # compute freq matrix using outer product
 
+freq_2 = np.matmul(position.T, theta_2) #alternative method for computing freq
+
+print(np.allclose(freq, freq_2)) # both are equivalent, outer probably more efficient
+
+print(freq_2)
+
+
+
+#%%
+import torch
+# Settings
+
+batch_size = 2
+seq_len = 5
+num_heads = 3
+head_dim = 6  # must be even
+assert head_dim % 2 == 0
+
+# Input tensor: [B, S, H, D]
+x = torch.arange(180).reshape(batch_size, seq_len, num_heads, head_dim)
+
+# Compute rotary angles
+inv_freq = 1.0 / (10000 ** (torch.arange(0, head_dim, 2).float() / head_dim))
+pos = torch.arange(seq_len, dtype=torch.float)
+angles = torch.outer(pos, inv_freq)  # [seq_len, dim /2]
+
+
+# Apply sin and cos to angles and use unsqueeze to add dimensions to match number of dimensions of input vector 
+sin = angles.sin().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
+cos = angles.cos().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
+
+
+x1 = x[:, :, :, : :2]
+x2 = x[:, :, :, 1: :2]
+# print(x1)
+
+# Apply rotation. Note that the elementwise multiplication broadcasts the sin and cos values into batch and num_heads dimensions
+x1_rot = x1 * cos - x2 * sin #[B, S, num_heads,  head_dim/2]
+x2_rot = x1 * sin + x2 * cos #[B, S, num_heads,  head_dim/2]
+print(f' \nshape x1_rot: {x1_rot.shape}')
+
+# Stack into [B, S, head_num, head_dim/2, 2] the dim=-1 adds a new dimension to the end of [B, S, H, head_dim/2] and stacks each corresponding element from dim=1 of [seq_length, dim/2] from the x_rotated_even and x_rotated_odd vectors into that new third dimension
+x_rot = torch.stack([x1_rot, x2_rot], dim=-1) #[B, S, H, head_dim/2, 2]
+# print(x_rot)
+
+# flatten last two dims back to [B, S, H, head_dim]
+x_rot = x_rot.flatten(start_dim=3, end_dim=-1) 
+# print(x_rot)
+# print(x_test)
+# print(torch.allclose(x_rot, x_test))
+
+print("Original shape:", x)
+print("After RoPE:", x_rot)
+
+# %%
+# explore multidim slicing
+v = torch.arange(180).reshape(batch_size, seq_len, num_heads, head_dim)# [seq_len, dim]
+s1 = v[:, :, :, : :2]
+s2 = v[:, :, :, 1: :2]
+print(s1)
+print(s2)
 
 
 # %%
-import numpy as np
-import matplotlib.pyplot as plt
+# Test RotaryPosEmbed class
+from aae_utils import RotaryPosEmbed 
+x = torch.arange(180).reshape(batch_size, seq_len, num_heads, head_dim)
+rotation = RotaryPosEmbed(seq_len=5, head_dim=6)
+x_rot2 = rotation.apply_rotation(x)
+print(x_rot2)
+print(torch.allclose(x_rot, x_rot2))
 
-# Embedding dimension (must be even)
-dim = 8
-num_pairs = dim // 2
 
-# Positions to visualize
-positions = [0, 1, 2, 10, 50]
-colors = ['black', 'red', 'blue', 'green', 'purple']
+# %%
+# exploring chunking shapes
+qkv = torch.randint(10, (3,4, 15))
+print(qkv.shape)
+q, k, v = qkv.chunk(3, dim=-1)
+print(q.shape)
 
-# Compute θ[i] = 10000^{-2i/dim}
-i = np.arange(num_pairs)  # 0, 1, ..., dim/2 - 1
-theta = 10000 ** (-2 * i / dim)
+# %%
+# exploring pytorch broadcasting
+A = torch.tensor([[[[1, 2, 3, 4, 5],
+                    [6, 7, 8, 9, 10],
+                    [11,12,13,14,15],
+                    [16,17,18,19,20]],
 
-# Plot
-fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+                   [[21,22,23,24,25],
+                    [26,27,28,29,30],
+                    [31,32,33,34,35],
+                    [36,37,38,39,40]],
 
-for pos, color in zip(positions, colors):
-    angle = theta * pos
-    cos_vals = np.cos(angle)
-    sin_vals = np.sin(angle)
+                   [[41,42,43,44,45],
+                    [46,47,48,49,50],
+                    [51,52,53,54,55],
+                    [56,57,58,59,60]]],
 
-    axs[0].plot(i, cos_vals, label=f'pos={pos}', color=color)
-    axs[1].plot(i, sin_vals, label=f'pos={pos}', color=color)
+                  [[[61,62,63,64,65],
+                    [66,67,68,69,70],
+                    [71,72,73,74,75],
+                    [76,77,78,79,80]],
 
-# Configure plots
-axs[0].set_title('cos(θᵢ × position)')
-axs[1].set_title('sin(θᵢ × position)')
+                   [[81,82,83,84,85],
+                    [86,87,88,89,90],
+                    [91,92,93,94,95],
+                    [96,97,98,99,100]],
 
-for ax in axs:
-    ax.set_xlabel('Dimension pair index (i)')
-    ax.set_ylabel('Value')
-    ax.set_xticks(i)
-    ax.grid(True)
-    ax.legend()
+                   [[101,102,103,104,105],
+                    [106,107,108,109,110],
+                    [111,112,113,114,115],
+                    [116,117,118,119,120]]]])
 
-plt.suptitle('RoPE: Rotation Angles Across Dimensions')
-plt.tight_layout()
-plt.show()
+B = torch.tensor([[1, 10, 100, 1000, 10000],
+                  [2, 20, 200, 2000, 20000],
+                  [3, 30, 300, 3000, 30000]])
+
+B = B.unsqueeze(0).unsqueeze(2)
+print(A*B)
+
+
+
 # %%

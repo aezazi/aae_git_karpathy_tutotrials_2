@@ -95,3 +95,43 @@ class CosineLearingRateScheduler:
         
         self.lrs.append(self.optimizer.param_groups[0]['lr'])
 
+class RotaryPosEmbed:
+    def __init__(self, seq_len=1024, head_dim=768):
+        self.seq_len = seq_len
+        self.head_dim = head_dim
+        # self.device = device
+
+    # Compute rotary angles
+    def get_angels(self):
+        theta = 10_000 ** (-torch.arange(0, self.head_dim, 2, dtype=torch.float) / self.head_dim)
+        pos = torch.arange(self.seq_len, dtype=torch.float)
+        angles = torch.outer(pos, theta)
+
+        return angles
+    
+    # x is the input vector with shape: [batch_size, seq_length, num_heads, head_dim]
+    def apply_rotation(self, x=None):
+        angles = self.get_angels()
+
+        # Apply sin and cos to angles and use unsqueeze to add dimensions to match number of dimensions of input vector 
+        sin = angles.sin().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
+        cos = angles.cos().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
+
+        # split input vector x into two vectors from the  even and odd indexed elements of the original vector x. Each element from x1 and x2 will be paired for rotation
+        x1 = x[:, :, :, : :2]
+        x2 = x[:, :, :, 1: :2]
+
+        print('here')
+        # Apply rotation. Note that the elementwise multiplication broadcasts the sin and cos values into batch and num_heads dimensions
+        x1_rot = x1 * cos - x2 * sin #[B, S, num_heads,  head_dim/2]
+        x2_rot = x1 * sin + x2 * cos #[B, S, num_heads,  head_dim/2]
+
+        # Stack into [B, S, head_num, head_dim/2, 2] the dim=-1 adds a new dimension to the end of [B, S, H, head_dim/2] and stacks each corresponding element from dim=1 of [seq_length, dim/2] from the x_rotated_even and x_rotated_odd vectors into that new third dimension
+        x_rot = torch.stack([x1_rot, x2_rot], dim=-1) #[B, S, H, head_dim/2, 2]
+
+        # flatten last two dims back to [B, seq_len, num_head, head_dim]
+        x_rot = x_rot.flatten(start_dim=3, end_dim=-1) 
+        
+        return x_rot
+
+

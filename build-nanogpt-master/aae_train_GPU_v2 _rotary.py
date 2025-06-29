@@ -62,35 +62,40 @@ class CausalSelfAttention(nn.Module):
         # print(qkv.shape)
 
         # divide the output of the linear layer into 3 parts for q, k, v
-        q, k, v = qkv.chunk(3, dim=-1)
-        # print(q.shape)
-        # print(k.shape)
-        # print(v.shape)
+        q, k, v = qkv.chunk(3, dim=-1) # each has shape (B, T, C)
 
-        # #  experimented with different method for dividing the 
-        # q, k, v = qkv.split(self.n_embd, dim=2)
-        # print(q.shape)
-        # print(k.shape)
-        # print(v.shape)
 
         # Karpathy explains the purpose of the following to be to make the process more efficient in Pytorch by splitting the channels into multiple heads. Each head is a slice of the channels. This allows for more parallelization and less memory usage.
 
+        #------------------------- No rotarty embedding --------------------------------
         # reshape q, k, v for multi-head attention and transpose for dot product: (B, nh, T, hs)
         # B is the batch size, T is the sequence length, nh is the number of heads, hs is the head size (C // n_head)
 
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        # q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        # k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        # v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         
-        # print(q.shape)
-        # print(k.shape)
-        # print(v.shape)
-        # print('-'*50)
+        #------------------------- End No rotarty embedding --------------------------------
 
+        #------------------------- for rotary embedding --------------------------------
+        
+        from aae_utils import RotaryPosEmbed
+        rotary = RotaryPosEmbed(seq_len=config.block_size, head_dim=config.n_embd)
+        # for rotary embedding, do not tranpose k and q to (B, nh, T, hs) until the rotation is applied
+        k_for_rotation = k.view(B, T, self.n_head, C // self.n_head) # (B, T, nh, hs)
+        q_for_rotation = q.view(B, T, self.n_head, C // self.n_head) # (B, T, nh, hs)
+
+        # apply rotation and transpose
+        k_rot = rotary.apply_rotation(k_for_rotation).transpose(1, 2)
+        q_rot = rotary.apply_rotation(q_for_rotation).transpose(1, 2)
+        
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
+        #------------------------ end for rotatry embedding -----------------------
 
         # Pytorch implementation of Flash attention algorithim. This is the scaled dot-product attention built-in pytorch function. It takes the dot product of the query and key, scales it by the square root of the head size, and then applies a softmax to get the attention weights. The attention weights are then multiplied by the value to get the output. the is_causal=True argument ensures that the attention is only applied to the left of the current position in the sequence (i.e. it is causal). This is done by applying a mask to the attention weights. See Karpathy's video tutorial at 2:00:00 for more details. 
         
-        y = F.scaled_dot_product_attention(q, k, v, is_causal=True) # (B, nh, T, hs)
+        y = F.scaled_dot_product_attention(q_rot, k_rot, v, is_causal=True) # (B, nh, T, hs)
         
         # transpose back to (B, T, nh*hs) and combine heads
         y = y.transpose(1, 2).contiguous().view(B, T, C)
@@ -171,20 +176,20 @@ class GPT(nn.Module):
         assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
 
         # this creates the position ids for the input sequence. It's just a range of integers from 0 to T (the sequence length)
-        pos = torch.arange(0, T, dtype=torch.long, device=idx.device) 
+        # pos = torch.arange(0, T, dtype=torch.long, device=idx.device) 
 
         # This creates an embedding table for the postions. It's just a lookup table for the position embeddings.
-        pos_embd = self.transformer.wpe(pos) # (T, C)
+        # pos_embd = self.transformer.wpe(pos) # (T, C)
 
         # this creates the embedding table for the token ids.
         token_embd = self.transformer.wte(idx) # (B, T, n_embd)
 
         # Position embeddings are added to the token embeddings to give the model information about the order of the tokens in the sequence. Note that the position embeddings are the same for all sequences of the same length, but the token embeddings are different for each sequence. Also position embeddings have shape (T, C) and token embeddings have shape (B, T, C). Pytorch broadcasts the position embeddings to the batch size.
-        x = token_embd + pos_embd # (B, T, n_embd)
+        # x = token_embd + pos_embd # (B, T, n_embd)
 
         # apply the transformer blocks. each block applies layer norm, self-attention, residual connection, layer norm, MLP, residual connection
         for block in self.transformer.h:
-            x = block(x)
+            x = block(token_embd)
         
         # apply layer norm to the output of the last transformer block
         x = self.transformer.ln_f(x)
