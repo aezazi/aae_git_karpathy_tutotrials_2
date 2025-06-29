@@ -181,6 +181,7 @@ class GPT(nn.Module):
 
         # Position embeddings are added to the token embeddings to give the model information about the order of the tokens in the sequence. Note that the position embeddings are the same for all sequences of the same length, but the token embeddings are different for each sequence. Also position embeddings have shape (T, C) and token embeddings have shape (B, T, C). Pytorch broadcasts the position embeddings to the batch size.
         x = token_embd + pos_embd # (B, T, n_embd)
+       
 
         # apply the transformer blocks. each block applies layer norm, self-attention, residual connection, layer norm, MLP, residual connection
         for block in self.transformer.h:

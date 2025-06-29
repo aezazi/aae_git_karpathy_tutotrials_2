@@ -68,7 +68,6 @@ class CausalSelfAttention(nn.Module):
         x1 = x[:, :, :, : :2]
         x2 = x[:, :, :, 1: :2]
 
-        print('here')
         # Apply rotation. Note that the elementwise multiplication broadcasts the sin and cos values into batch and num_heads dimensions
         x1_rot = x1 * cos - x2 * sin #[B, S, num_heads,  head_dim/2]
         x2_rot = x1 * sin + x2 * cos #[B, S, num_heads,  head_dim/2]
@@ -114,7 +113,7 @@ class CausalSelfAttention(nn.Module):
         # for rotary embedding, do not tranpose k and q to (B, nh, T, hs) until the rotation is applied
         k_for_rotation = k.view(B, T, self.n_head, C // self.n_head) # (B, T, nh, hs)
         q_for_rotation = q.view(B, T, self.n_head, C // self.n_head) # (B, T, nh, hs)
-        print(f'XXXXXXXXXXXXXXXXXXXXXXXX\n q_for_rotation.shape:{q_for_rotation.shape}')
+       
 
       
         head_dim = C//self.n_head
@@ -175,7 +174,7 @@ class GPT(nn.Module):
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
-            wpe = nn.Embedding(config.block_size, config.n_embd), #positional embeddings
+            # wpe = nn.Embedding(config.block_size, config.n_embd), #positional embeddings
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = nn.LayerNorm(config.n_embd)
         ))
@@ -295,13 +294,13 @@ model = GPT(GPTConfig())
 
 torch.set_float32_matmul_precision('high')
 model.to(device)
-use_compile = False # set to True to use torch.compile
+use_compile = True # set to True to use torch.compile
 model = torch.compile(model) if use_compile else model 
 
 # wrap the model in DDP if using DDP
 if ddp:
     
-    model = DDP(model, device_ids=[ddp_local_rank])
+    model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=True )
     print(f'\nModel wrapped in DDP on device: {device}')
 
 # get the raw model from the DDP wrapper. This is useful for accessing the model's parameters and methods directly. the raw_model is the actual model that we want to optimize. The DDP is just a wrapper that allows us to use distributed data parallelism.
@@ -381,7 +380,6 @@ print(f'\nScheduler initialized on GPU rank {ddp_rank}, of {ddp_world_size}\n')
 #%%
 # create log files, loggers, and evaluators to store training loss, learning rate, validation loss, hellaswag eval results, and generate sample text.
 import aae_eval_log_utils as eval_log_utils
-
 log_params = eval_log_utils.LogParamsFilesConfig(
     ddp = ddp,
     ddp_world_size = ddp_world_size,
