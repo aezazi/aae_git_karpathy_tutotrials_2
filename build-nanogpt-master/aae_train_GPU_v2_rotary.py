@@ -80,10 +80,11 @@ class CausalSelfAttention(nn.Module):
         #------------------------- for rotary embedding --------------------------------
         
         from aae_utils import RotaryPosEmbed
-        rotary = RotaryPosEmbed(seq_len=config.block_size, head_dim=config.n_embd)
+        rotary = RotaryPosEmbed(seq_len=config.block_size, head_dim=C // self.n_head)
         # for rotary embedding, do not tranpose k and q to (B, nh, T, hs) until the rotation is applied
         k_for_rotation = k.view(B, T, self.n_head, C // self.n_head) # (B, T, nh, hs)
         q_for_rotation = q.view(B, T, self.n_head, C // self.n_head) # (B, T, nh, hs)
+        print(f'XXXXXXXXXXXXXXXXXXXXXXXX\n q_for_rotation.shape:{q_for_rotation.shape}')
 
         # apply rotation and transpose
         k_rot = rotary.apply_rotation(k_for_rotation).transpose(1, 2)
@@ -105,7 +106,6 @@ class CausalSelfAttention(nn.Module):
 
 #%%
 class MLP(nn.Module):
-
     def __init__(self, config):
         super().__init__()
          # multiply by 4 for additional dimensions and computational power
@@ -121,7 +121,6 @@ class MLP(nn.Module):
 
 #%%
 class Block(nn.Module):
-
     def __init__(self, config):
         super().__init__()
         self.ln_1 = nn.LayerNorm(config.n_embd)
@@ -136,7 +135,6 @@ class Block(nn.Module):
 
 # %%
 class GPT(nn.Module):
-
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -456,6 +454,6 @@ if ddp:
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
 
-# torchrun --standalone --nproc_per_node=4 aae_train_GPU_v2.py
+# torchrun --standalone --nproc_per_node=4 aae_train_GPU_v2_rotary.py
 
 

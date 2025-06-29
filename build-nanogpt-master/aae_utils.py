@@ -102,16 +102,17 @@ class RotaryPosEmbed:
         # self.device = device
 
     # Compute rotary angles
-    def get_angels(self):
-        theta = 10_000 ** (-torch.arange(0, self.head_dim, 2, dtype=torch.float) / self.head_dim)
-        pos = torch.arange(self.seq_len, dtype=torch.float)
+    def get_angels(self, device = 'cuda'):
+        theta = 10_000 ** (-torch.arange(0, self.head_dim, 2, dtype=torch.float, device=device) / self.head_dim)
+        pos = torch.arange(self.seq_len, dtype=torch.float, device=device)
         angles = torch.outer(pos, theta)
-
         return angles
     
     # x is the input vector with shape: [batch_size, seq_length, num_heads, head_dim]
     def apply_rotation(self, x=None):
-        angles = self.get_angels()
+        device = f'cuda:{x.get_device()}'
+        print(f'device: {device}')
+        angles = self.get_angels(device=device)
 
         # Apply sin and cos to angles and use unsqueeze to add dimensions to match number of dimensions of input vector 
         sin = angles.sin().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
