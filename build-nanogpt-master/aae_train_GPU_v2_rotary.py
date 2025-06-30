@@ -37,26 +37,30 @@ print(f'\nGPTConfig instantiated with block size: {config.block_size}, vocab siz
 
 class RotaryPosEmbed(nn.Module):
     def __init__(self, seq_len=1024, head_dim=768):
+        super().__init__()
         self.seq_len = seq_len
         self.head_dim = head_dim
+        # self.get_theta()
+        self.get_angels()
         # self.device = device
+
+    def get_theta(self):
+        theta = 10_000 ** (-torch.arange(0, self.head_dim, 2, dtype=torch.float, device=device) / self.head_dim)
+        self.register_buffer('theta', theta)
 
     # Compute rotary angles
     def get_angels(self, device = 'cuda'):
-        theta = 10_000 ** (-torch.arange(0, self.head_dim, 2, dtype=torch.float, device=device) / self.head_dim)
-        pos = torch.arange(self.seq_len, dtype=torch.float, device=device)
-        angles = torch.outer(pos, theta)
-        return angles
+        self.get_theta()
+        pos = torch.arange(self.seq_len, dtype=torch.float, device=self.theta.device)
+        angles = torch.outer(pos, self.theta)
+        self.register_buffer('angles', angles)
     
     # x is the input vector with shape: [batch_size, seq_length, num_heads, head_dim]
-    def apply_rotation(self, x=None):
-        device = f'cuda:{x.get_device()}'
-        # print(f'device: {device}')
-        angles = self.get_angels()
-
+    def forward(self, x=None):
+        device = x.device
         # Apply sin and cos to angles and use unsqueeze to add dimensions to match number of dimensions of input vector 
-        sin = angles.sin().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
-        cos = angles.cos().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
+        sin = self.angles.sin().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
+        cos = self.angles.cos().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
 
         # split input vector x into two vectors from the  even and odd indexed elements of the original vector x. Each element from x1 and x2 will be paired for rotation
         x1 = x[:, :, :, : :2]
@@ -70,7 +74,7 @@ class RotaryPosEmbed(nn.Module):
         x_rot = torch.stack([x1_rot, x2_rot], dim=-1) #[B, S, H, head_dim/2, 2]
 
         # flatten last two dims back to [B, seq_len, num_head, head_dim]
-        x_rot = x_rot.flatten(start_dim=3, end_dim=-1) 
+        x_rot = x_rot.flatten(start_dim=3, end_dim=-1).to(device=device)
         
         return x_rot
 
