@@ -93,7 +93,7 @@ class RotaryEmbedding:
     def get_angles(self, seq_len, device):
         # Create position indices
         positions = torch.arange(seq_len, device=device).type_as(self.inv_freq)
-        freqs = torch.einsum("i,j->ij", positions, self.inv_freq)  # [seq_len, dim//2]
+        freqs = torch.einsum("i,j->ij", positions.to(device=device), self.inv_freq.to(device=device))  # [seq_len, dim//2]
         emb = torch.cat((freqs, freqs), dim=-1)  # [seq_len, dim]
         return emb
 
@@ -101,8 +101,10 @@ class RotaryEmbedding:
         """
         x: [batch, num_heads, seq_len, head_dim]
         """
+        # print(f'xxxxxxxxxxxx.    {x.device} xxxxxxxxxxxxxxxxxxxxxx') 
         seq_len = x.size(2)
         freqs = self.get_angles(seq_len, x.device)  # [seq_len, dim]
+        
         cos = freqs.cos()[None, None, :, :]  # [1, 1, seq_len, dim]
         sin = freqs.sin()[None, None, :, :]
 
