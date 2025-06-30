@@ -78,10 +78,6 @@ class RotaryPosEmbed(nn.Module):
         
         return x_rot
 
-
-
-
-
 #%%
 class CausalSelfAttention(nn.Module):
 
@@ -100,34 +96,6 @@ class CausalSelfAttention(nn.Module):
         self.n_embd = config.n_embd
 
 
-    # Apply RoPE
-    # x is the input vector with shape: [batch_size, seq_length, num_heads, head_dim]
-    def apply_rotation(self, x=None, head_dim=None, seq_len=None ):
-       
-        # compute angle
-        theta = 10_000 ** (-torch.arange(0, head_dim, 2, dtype=torch.float, device='cuda') / head_dim)
-        pos = torch.arange(seq_len, dtype=torch.float, device='cuda')
-        angles = torch.outer(pos, theta)
-
-        # Apply sin and cos to angles and use unsqueeze to add dimensions to match number of dimensions of input vector 
-        sin = angles.sin().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
-        cos = angles.cos().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
-
-        # split input vector x into two vectors from the  even and odd indexed elements of the original vector x. Each element from x1 and x2 will be paired for rotation
-        x1 = x[:, :, :, : :2]
-        x2 = x[:, :, :, 1: :2]
-
-        # Apply rotation. Note that the elementwise multiplication broadcasts the sin and cos values into batch and num_heads dimensions
-        x1_rot = x1 * cos - x2 * sin #[B, S, num_heads,  head_dim/2]
-        x2_rot = x1 * sin + x2 * cos #[B, S, num_heads,  head_dim/2]
-
-        # Stack into [B, S, head_num, head_dim/2, 2] the dim=-1 adds a new dimension to the end of [B, S, H, head_dim/2] and stacks each corresponding element from dim=1 of [seq_length, dim/2] from the x_rotated_even and x_rotated_odd vectors into that new third dimension
-        x_rot = torch.stack([x1_rot, x2_rot], dim=-1) #[B, S, H, head_dim/2, 2]
-
-        # flatten last two dims back to [B, seq_len, num_head, head_dim]
-        x_rot = x_rot.flatten(start_dim=3, end_dim=-1) 
-        
-        return x_rot
 
     def forward(self, x):
         # input is a batch of sequences of embeddings
@@ -154,9 +122,11 @@ class CausalSelfAttention(nn.Module):
        # the dimension of each head. This is an input for rotary embedding computations
         head_dim = C//self.n_head
     
+        rot_embed = RotaryPosEmbed(seq_len=T, head_dim=head_dim)
+    
         # apply rotation and transpose
-        k_rot = self.apply_rotation(x=k_for_rotation, seq_len=T, head_dim=head_dim).transpose(1, 2)
-        q_rot = self.apply_rotation(x=q_for_rotation, seq_len=T, head_dim=head_dim).transpose(1, 2)
+        k_rot = rot_embed(x=k_for_rotation).transpose(1, 2)
+        q_rot = rot_embed(x=q_for_rotation).transpose(1, 2)
         
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
