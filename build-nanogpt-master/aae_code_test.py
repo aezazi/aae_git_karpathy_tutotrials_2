@@ -658,7 +658,7 @@ print(torch.allclose(x_rot, x_rot2))
 qkv = torch.randint(10, (3,4, 15))
 print(qkv.shape)
 q, k, v = qkv.chunk(3, dim=-1)
-print(q.shape)
+print(q.shape[0])
 
 # %%
 # exploring pytorch broadcasting
@@ -702,10 +702,38 @@ print(A*B)
 
 
 # %%
-n=0
-d = f"cuda:{n}"
-d
+class RotaryEmbedding:
+    def __init__(self, dim, base=10000):
+        assert dim % 2 == 0, "RoPE dim must be even"
+        self.dim = dim
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer = lambda name, tensor: setattr(self, name, tensor)
 
-# %%
+        # This will be broadcasted later to match seq_len
+        self.register_buffer("inv_freq", inv_freq)
 
-# %%
+    def get_angles(self, seq_len, device):
+        # Create position indices
+        positions = torch.arange(seq_len, device=device).type_as(self.inv_freq)
+        freqs = torch.einsum("i,j->ij", positions.to(device=device), self.inv_freq.to(device=device))  # [seq_len, dim//2]
+        emb = torch.cat((freqs, freqs), dim=-1)  # [seq_len, dim]
+        return emb
+
+    def apply(self, x, seq_len=None):
+        """
+        x: [batch, num_heads, seq_len, head_dim]
+        """
+        # print(f'xxxxxxxxxxxx.    {x.device} xxxxxxxxxxxxxxxxxxxxxx') 
+        seq_len = x.size(2)
+        freqs = self.get_angles(seq_len, x.device)  # [seq_len, dim]
+        
+        cos = freqs.cos()[None, None, :, :]  # [1, 1, seq_len, dim]
+        sin = freqs.sin()[None, None, :, :]
+
+        x1, x2 = x[..., ::2], x[..., 1::2]
+        x_rotated = torch.stack(
+            [x1 * cos[..., ::2] - x2 * sin[..., ::2],
+             x1 * sin[..., ::2] + x2 * cos[..., ::2]],
+            dim=-1
+        )
+        return x_rotated.flatten(-2)
