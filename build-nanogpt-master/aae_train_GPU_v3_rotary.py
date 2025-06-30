@@ -118,6 +118,8 @@ class RotaryPositionalEmbeddings(nn.Module):
         # input tensor has shape [b, s, n_h, h_d]
         seq_len = x.size(1)
 
+        # print(f'xxxxxxxxxxx  here2 xxxxxxxxxxxx')
+
         # extract the values based on whether input_pos is set or not
         rope_cache = (
             self.cache[:seq_len] if input_pos is None else self.cache[input_pos]
@@ -126,12 +128,14 @@ class RotaryPositionalEmbeddings(nn.Module):
         # reshape input; the last dimension is used for computing the output.
         # Cast to float to match the reference implementation
         # tensor has shape [b, s, n_h, h_d // 2, 2]
-        xshaped = x.float().reshape(*x.shape[:-1], -1, 2)
+        xshaped = x.float().reshape(*x.shape[:-1], -1, 2).to(device='cuda')
 
         # reshape the cache for broadcasting
         # tensor has shape [b, s, 1, h_d // 2, 2] if packed samples,
         # otherwise has shape [1, s, 1, h_d // 2, 2]
-        rope_cache = rope_cache.view(-1, xshaped.size(1), 1, xshaped.size(3), 2)
+        rope_cache = rope_cache.view(-1, xshaped.size(1), 1, xshaped.size(3), 2).to(device='cuda')
+
+        # print(f'xxxxxxxxxxx  here3 xxxxxxxxxxxx')
 
         # tensor has shape [b, s, n_h, h_d // 2, 2]
         x_out = torch.stack(
@@ -145,7 +149,9 @@ class RotaryPositionalEmbeddings(nn.Module):
         )
 
         # tensor has shape [b, s, n_h, h_d]
+        print(f'xxxxxxxxxxx  here4 xxxxxxxxxxxx')
         x_out = x_out.flatten(3)
+        print(x_out)
         return x_out.type_as(x)
 
 
@@ -198,10 +204,10 @@ class CausalSelfAttention(nn.Module):
        
        # the dimension of each head. This is an input for rotary embedding computations
         
-    
+        # print(f'xxxxxxxxxxx  here1 xxxxxxxxxxxx')
         # apply rotation and transpose
-        q_rot = rot_embed.forward(x=q_for_rotation).transpose(1, 2)
-        k_rot = rot_embed.forward(x=k_for_rotation).transpose(1, 2)
+        q_rot = rot_embed(x=q_for_rotation).transpose(1, 2)
+        k_rot = rot_embed(x=k_for_rotation).transpose(1, 2)
         
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
@@ -557,6 +563,6 @@ if ddp:
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
 
-# torchrun --standalone --nproc_per_node=4 aae_train_GPU_v2_rotary.py
+# torchrun --standalone --nproc_per_node=4 aae_train_GPU_v3_rotary.py
 
 
