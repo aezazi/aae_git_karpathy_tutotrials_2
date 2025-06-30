@@ -8,6 +8,7 @@ from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
 import numpy as np
+import math
 import csv
 
 #%%
@@ -35,48 +36,83 @@ print(f'\nGPTConfig instantiated with block size: {config.block_size}, vocab siz
 
 
 
-class RotaryPosEmbed(nn.Module):
-    def __init__(self, seq_len=1024, head_dim=768):
-        super().__init__()
-        self.seq_len = seq_len
-        self.head_dim = head_dim
-        # self.get_theta()
-        self.get_angels()
-        # self.device = device
+# class RotaryPosEmbed(nn.Module):
+#     def __init__(self, seq_len=1024, head_dim=768):
+#         super().__init__()
+#         self.seq_len = seq_len
+#         self.head_dim = head_dim
+#         # self.get_theta()
+#         self.get_angels()
+#         # self.device = device
 
-    def get_theta(self):
-        theta = 10_000 ** (-torch.arange(0, self.head_dim, 2, dtype=torch.float, device=device) / self.head_dim)
-        self.register_buffer('theta', theta)
+#     def get_theta(self):
+#         theta = 10_000 ** (-torch.arange(0, self.head_dim, 2, dtype=torch.float, device=device) / self.head_dim)
+#         self.register_buffer('theta', theta)
 
-    # Compute rotary angles
-    def get_angels(self, device = 'cuda'):
-        self.get_theta()
-        pos = torch.arange(self.seq_len, dtype=torch.float, device=self.theta.device)
-        angles = torch.outer(pos, self.theta)
-        self.register_buffer('angles', angles)
+#     # Compute rotary angles
+#     def get_angels(self, device = 'cuda'):
+#         self.get_theta()
+#         pos = torch.arange(self.seq_len, dtype=torch.float, device=self.theta.device)
+#         angles = torch.outer(pos, self.theta)
+#         self.register_buffer('angles', angles)
     
-    # x is the input vector with shape: [batch_size, seq_length, num_heads, head_dim]
-    def forward(self, x=None):
-        device = x.device
-        # Apply sin and cos to angles and use unsqueeze to add dimensions to match number of dimensions of input vector 
-        sin = self.angles.sin().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
-        cos = self.angles.cos().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
+#     # x is the input vector with shape: [batch_size, seq_length, num_heads, head_dim]
+#     def forward(self, x=None):
+#         device = x.device
+#         # Apply sin and cos to angles and use unsqueeze to add dimensions to match number of dimensions of input vector 
+#         sin = self.angles.sin().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
+#         cos = self.angles.cos().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
 
-        # split input vector x into two vectors from the  even and odd indexed elements of the original vector x. Each element from x1 and x2 will be paired for rotation
-        x1 = x[:, :, :, : :2]
-        x2 = x[:, :, :, 1: :2]
+#         # split input vector x into two vectors from the  even and odd indexed elements of the original vector x. Each element from x1 and x2 will be paired for rotation
+#         x1 = x[:, :, :, : :2]
+#         x2 = x[:, :, :, 1: :2]
 
-        # Apply rotation. Note that the elementwise multiplication broadcasts the sin and cos values into batch and num_heads dimensions
-        x1_rot = x1 * cos - x2 * sin #[B, S, num_heads,  head_dim/2]
-        x2_rot = x1 * sin + x2 * cos #[B, S, num_heads,  head_dim/2]
+#         # Apply rotation. Note that the elementwise multiplication broadcasts the sin and cos values into batch and num_heads dimensions
+#         x1_rot = x1 * cos - x2 * sin #[B, S, num_heads,  head_dim/2]
+#         x2_rot = x1 * sin + x2 * cos #[B, S, num_heads,  head_dim/2]
 
-        # Stack into [B, S, head_num, head_dim/2, 2] the dim=-1 adds a new dimension to the end of [B, S, H, head_dim/2] and stacks each corresponding element from dim=1 of [seq_length, dim/2] from the x_rotated_even and x_rotated_odd vectors into that new third dimension
-        x_rot = torch.stack([x1_rot, x2_rot], dim=-1) #[B, S, H, head_dim/2, 2]
+#         # Stack into [B, S, head_num, head_dim/2, 2] the dim=-1 adds a new dimension to the end of [B, S, H, head_dim/2] and stacks each corresponding element from dim=1 of [seq_length, dim/2] from the x_rotated_even and x_rotated_odd vectors into that new third dimension
+#         x_rot = torch.stack([x1_rot, x2_rot], dim=-1) #[B, S, H, head_dim/2, 2]
 
-        # flatten last two dims back to [B, seq_len, num_head, head_dim]
-        x_rot = x_rot.flatten(start_dim=3, end_dim=-1).to(device=device)
+#         # flatten last two dims back to [B, seq_len, num_head, head_dim]
+#         x_rot = x_rot.flatten(start_dim=3, end_dim=-1).to(device=device)
         
-        return x_rot
+#         return x_rot
+
+
+class RotaryEmbedding:
+    def __init__(self, dim, base=10000):
+        assert dim % 2 == 0, "RoPE dim must be even"
+        self.dim = dim
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer = lambda name, tensor: setattr(self, name, tensor)
+
+        # This will be broadcasted later to match seq_len
+        self.register_buffer("inv_freq", inv_freq)
+
+    def get_angles(self, seq_len, device):
+        # Create position indices
+        positions = torch.arange(seq_len, device=device).type_as(self.inv_freq)
+        freqs = torch.einsum("i,j->ij", positions, self.inv_freq)  # [seq_len, dim//2]
+        emb = torch.cat((freqs, freqs), dim=-1)  # [seq_len, dim]
+        return emb
+
+    def apply(self, x, seq_len=None):
+        """
+        x: [batch, num_heads, seq_len, head_dim]
+        """
+        seq_len = x.size(2)
+        freqs = self.get_angles(seq_len, x.device)  # [seq_len, dim]
+        cos = freqs.cos()[None, None, :, :]  # [1, 1, seq_len, dim]
+        sin = freqs.sin()[None, None, :, :]
+
+        x1, x2 = x[..., ::2], x[..., 1::2]
+        x_rotated = torch.stack(
+            [x1 * cos[..., ::2] - x2 * sin[..., ::2],
+             x1 * sin[..., ::2] + x2 * cos[..., ::2]],
+            dim=-1
+        )
+        return x_rotated.flatten(-2)
 
 #%%
 class CausalSelfAttention(nn.Module):
@@ -122,11 +158,13 @@ class CausalSelfAttention(nn.Module):
        # the dimension of each head. This is an input for rotary embedding computations
         head_dim = C//self.n_head
     
-        rot_embed = RotaryPosEmbed(seq_len=T, head_dim=head_dim)
+        rot_embed = RotaryEmbedding(dim=head_dim)
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
     
         # apply rotation and transpose
-        k_rot = rot_embed(x=k_for_rotation).transpose(1, 2)
-        q_rot = rot_embed(x=q_for_rotation).transpose(1, 2)
+        k_rot = rot_embed.apply(x=k)
+        q_rot = rot_embed.apply(x=q)
         
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
