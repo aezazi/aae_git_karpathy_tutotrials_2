@@ -52,10 +52,11 @@ class CausalSelfAttention(nn.Module):
         self.n_embd = config.n_embd
 
 
-    # Compute rotary angle
+    # Apply RoPE
     # x is the input vector with shape: [batch_size, seq_length, num_heads, head_dim]
     def apply_rotation(self, x=None, head_dim=None, seq_len=None ):
        
+        # compute angle
         theta = 10_000 ** (-torch.arange(0, head_dim, 2, dtype=torch.float, device='cuda') / head_dim)
         pos = torch.arange(seq_len, dtype=torch.float, device='cuda')
         angles = torch.outer(pos, theta)
@@ -94,31 +95,17 @@ class CausalSelfAttention(nn.Module):
         q, k, v = qkv.chunk(3, dim=-1) # each has shape (B, T, C)
 
 
-        # Karpathy explains the purpose of the following to be to make the process more efficient in Pytorch by splitting the channels into multiple heads. Each head is a slice of the channels. This allows for more parallelization and less memory usage.
-
-        #------------------------- No rotarty embedding --------------------------------
-        # reshape q, k, v for multi-head attention and transpose for dot product: (B, nh, T, hs)
-        # B is the batch size, T is the sequence length, nh is the number of heads, hs is the head size (C // n_head)
-
-        # q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        # k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        # v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        
-        #------------------------- End No rotarty embedding --------------------------------
+        # Karpathy explains the purpose of the following to be to make the training process more efficient in Pytorch by splitting the channels into multiple heads. Each head is a slice of the channels. This allows for more parallelization and less memory usage.
 
         #------------------------- for rotary embedding --------------------------------
         
-        # from aae_utils import RotaryPosEmbed
-        # rotary = RotaryPosEmbed(seq_len=config.block_size, head_dim=C // self.n_head)
         # for rotary embedding, do not tranpose k and q to (B, nh, T, hs) until the rotation is applied
         k_for_rotation = k.view(B, T, self.n_head, C // self.n_head) # (B, T, nh, hs)
         q_for_rotation = q.view(B, T, self.n_head, C // self.n_head) # (B, T, nh, hs)
        
-
-      
+       # the dimension of each head. This is an input for rotary embedding computations
         head_dim = C//self.n_head
     
-
         # apply rotation and transpose
         k_rot = self.apply_rotation(x=k_for_rotation, seq_len=T, head_dim=head_dim).transpose(1, 2)
         q_rot = self.apply_rotation(x=q_for_rotation, seq_len=T, head_dim=head_dim).transpose(1, 2)
@@ -206,17 +193,8 @@ class GPT(nn.Module):
         # this checks if the input sequence is longer than the block size
         assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
 
-        # this creates the position ids for the input sequence. It's just a range of integers from 0 to T (the sequence length)
-        # pos = torch.arange(0, T, dtype=torch.long, device=idx.device) 
-
-        # This creates an embedding table for the postions. It's just a lookup table for the position embeddings.
-        # pos_embd = self.transformer.wpe(pos) # (T, C)
-
         # this creates the embedding table for the token ids.
         token_embd = self.transformer.wte(idx) # (B, T, n_embd)
-
-        # Position embeddings are added to the token embeddings to give the model information about the order of the tokens in the sequence. Note that the position embeddings are the same for all sequences of the same length, but the token embeddings are different for each sequence. Also position embeddings have shape (T, C) and token embeddings have shape (B, T, C). Pytorch broadcasts the position embeddings to the batch size.
-        # x = token_embd + pos_embd # (B, T, n_embd)
 
         # apply the transformer blocks. each block applies layer norm, self-attention, residual connection, layer norm, MLP, residual connection
         for block in self.transformer.h:

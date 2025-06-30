@@ -111,8 +111,8 @@ class RotaryPosEmbed:
     # x is the input vector with shape: [batch_size, seq_length, num_heads, head_dim]
     def apply_rotation(self, x=None):
         device = f'cuda:{x.get_device()}'
-        print(f'device: {device}')
-        angles = self.get_angels(device=device)
+        # print(f'device: {device}')
+        angles = self.get_angels()
 
         # Apply sin and cos to angles and use unsqueeze to add dimensions to match number of dimensions of input vector 
         sin = angles.sin().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
@@ -122,7 +122,6 @@ class RotaryPosEmbed:
         x1 = x[:, :, :, : :2]
         x2 = x[:, :, :, 1: :2]
 
-        print('here')
         # Apply rotation. Note that the elementwise multiplication broadcasts the sin and cos values into batch and num_heads dimensions
         x1_rot = x1 * cos - x2 * sin #[B, S, num_heads,  head_dim/2]
         x2_rot = x1 * sin + x2 * cos #[B, S, num_heads,  head_dim/2]
