@@ -737,3 +737,10 @@ class RotaryEmbedding:
             dim=-1
         )
         return x_rotated.flatten(-2)
+    
+    #%%
+    px = torch.arange(15, dtype=torch.float)
+    px
+
+
+# %%

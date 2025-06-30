@@ -35,88 +35,63 @@ config = GPTConfig()
 print(f'\nGPTConfig instantiated with block size: {config.block_size}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
 
 
-
 class RotaryPosEmbed:
     def __init__(self, head_dim=768):
         super().__init__()
         self.head_dim = head_dim
         # self.get_theta()
-        self.get_theta()
-        # self.device = device
+        theta =  10_000 ** (-torch.arange(0, self.head_dim, 2, dtype=torch.float) / self.head_dim)
+        self.register_buffer = lambda name, tensor: setattr(self, name, tensor)
 
-    def get_theta(self):
-        theta = 10_000 ** (-torch.arange(0, self.head_dim, 2, dtype=torch.float) / self.head_dim)
-        self.register_buffer('theta', theta)
+        # This will be broadcasted later to match seq_len
+        self.register_buffer("theta", theta)
+        
 
     # Compute rotary angles
-    def get_angles(self, seq_len, device):
-        position = torch.arange(seq_len, dtype=torch.float)
+    def get_angles(self, seq_len=1024, device=None):
+        # print(f'\nseq len: {seq_len}\n')
+        position = torch.arange(0, seq_len, 1.0)
+        # print(f'\nposition requires grs: {position.requires_grad}\n')
+        # print(position)
         angles = torch.outer(position.to(device=device), self.theta.to(device=device))
-        self.register_buffer('angles', angles)
+        # self.register_buffer('angles', angles)
+        # print(f'angles requires grs: {angles.requires_grad}')
+        return angles
     
     # x is the input vector with shape: [batch_size, seq_length, num_heads, head_dim]
     def apply_rotaion(self, x=None):
         device = x.device
         seq_len = x.shape[1]
+        # print(f'\nseq len: {seq_len}\n')
+
+        angles = self.get_angles(seq_len=seq_len, device=device)
 
         # Apply sin and cos to angles and use unsqueeze to add dimensions to match number of dimensions of input vector 
-        sin = self.angles.sin().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
-        cos = self.angles.cos().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
+        sin = angles.sin().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
+        cos = angles.cos().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
+        # print(f'sin reqiures grs: {sin.requires_grad}')
+        # print(f'cos requires grs: {cos.requires_grad}')
 
         # split input vector x into two vectors from the  even and odd indexed elements of the original vector x. Each element from x1 and x2 will be paired for rotation
         x1 = x[:, :, :, : :2]
         x2 = x[:, :, :, 1: :2]
+        # print(f'x1 requires grs: {x1.requires_grad}')
 
         # Apply rotation. Note that the elementwise multiplication broadcasts the sin and cos values into batch and num_heads dimensions
         x1_rot = x1 * cos - x2 * sin #[B, S, num_heads,  head_dim/2]
         x2_rot = x1 * sin + x2 * cos #[B, S, num_heads,  head_dim/2]
+        # print(f'x1_rot requires grs: {x1_rot.requires_grad}')
 
         # Stack into [B, S, head_num, head_dim/2, 2] the dim=-1 adds a new dimension to the end of [B, S, H, head_dim/2] and stacks each corresponding element from dim=1 of [seq_length, dim/2] from the x_rotated_even and x_rotated_odd vectors into that new third dimension
         x_rot = torch.stack([x1_rot, x2_rot], dim=-1) #[B, S, H, head_dim/2, 2]
 
         # flatten last two dims back to [B, seq_len, num_head, head_dim]
         x_rot = x_rot.flatten(start_dim=3, end_dim=-1)
-        print(f'x_rot is on device: {x_rot.device}')
-        print(f'x_rot requires grs: {x_rot.requires_grad}')
+        # print(f'x_rot is on device: {x_rot.device}')
+        # print(f'x_rot requires grs: {x_rot.requires_grad}')
         
         return x_rot
 
-
-# class RotaryEmbedding:
-#     def __init__(self, dim, base=10000):
-#         assert dim % 2 == 0, "RoPE dim must be even"
-#         self.dim = dim
-#         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
-#         self.register_buffer = lambda name, tensor: setattr(self, name, tensor)
-
-#         # This will be broadcasted later to match seq_len
-#         self.register_buffer("inv_freq", inv_freq)
-
-#     def get_angles(self, seq_len, device):
-#         # Create position indices
-#         positions = torch.arange(seq_len, device=device).type_as(self.inv_freq)
-#         freqs = torch.einsum("i,j->ij", positions.to(device=device), self.inv_freq.to(device=device))  # [seq_len, dim//2]
-#         emb = torch.cat((freqs, freqs), dim=-1)  # [seq_len, dim]
-#         return emb
-
-#     def apply(self, x, seq_len=None):
-#         """
-#         x: [batch, num_heads, seq_len, head_dim]
-#         """
-#         # print(f'xxxxxxxxxxxx.    {x.device} xxxxxxxxxxxxxxxxxxxxxx') 
-#         seq_len = x.size(2)
-#         freqs = self.get_angles(seq_len, x.device)  # [seq_len, dim]
-        
-#         cos = freqs.cos()[None, None, :, :]  # [1, 1, seq_len, dim]
-#         sin = freqs.sin()[None, None, :, :]
-
-#         x1, x2 = x[..., ::2], x[..., 1::2]
-#         x_rotated = torch.stack(
-#             [x1 * cos[..., ::2] - x2 * sin[..., ::2],
-#              x1 * sin[..., ::2] + x2 * cos[..., ::2]],
-#             dim=-1
-#         )
-#         return x_rotated.flatten(-2)
 
 #%%
 class CausalSelfAttention(nn.Module):
@@ -160,13 +135,13 @@ class CausalSelfAttention(nn.Module):
        # the dimension of each head. This is an input for rotary embedding computations
         head_dim = C//self.n_head
     
-        rot_embed = RotaryPosEmbed(dim=head_dim)
+        rot_embed = RotaryPosEmbed(head_dim=head_dim)
         k = k.view(B, T, self.n_head, C // self.n_head)
         q = q.view(B, T, self.n_head, C // self.n_head)
     
         # apply rotation and transpose
-        k_rot = rot_embed.apply(x=k).transpose(1, 2)
-        q_rot = rot_embed.apply(x=q).transpose(1, 2)
+        k_rot = rot_embed.apply_rotaion(x=k).transpose(1, 2)
+        q_rot = rot_embed.apply_rotaion(x=q).transpose(1, 2)
         
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
@@ -335,8 +310,7 @@ model = torch.compile(model) if use_compile else model
 
 # wrap the model in DDP if using DDP
 if ddp:
-    
-    model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=True )
+    model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=True)
     print(f'\nModel wrapped in DDP on device: {device}')
 
 # get the raw model from the DDP wrapper. This is useful for accessing the model's parameters and methods directly. the raw_model is the actual model that we want to optimize. The DDP is just a wrapper that allows us to use distributed data parallelism.
@@ -389,7 +363,7 @@ if master_process:
 from aae_utils import CosineLearingRateScheduler
 
 # 19,073 steps is ~1 epoch, if data is 10B tokens and batch size 0.5M tokens
-training_steps = 19703
+training_steps = 1000
 
 # define the scheduler parameters
 # the number of iterations over which lr is reduced to the minimum
