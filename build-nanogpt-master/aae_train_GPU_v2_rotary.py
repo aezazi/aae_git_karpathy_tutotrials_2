@@ -35,28 +35,32 @@ config = GPTConfig()
 print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
 
 class RotaryPosEmbed(nn.Module):
-    def __init__(self, head_dim=768):
+    def __init__(self, head_dim=768, seq_len=config.seq_len):
         super().__init__()
         self.head_dim = head_dim
         # self.get_theta()
         theta =  10_000 ** (-torch.arange(0, self.head_dim, 2, dtype=torch.float) / self.head_dim)
         self.register_buffer("theta", theta)
+        position = torch.arange(0, seq_len, 1.0)
+        angles = torch.outer(position, self.theta)
+        self.register_buffer("cached_angles", angles)  # (max_seq_len, head_dim // 2)
         
 
-    # Compute rotary angles. Note that this code allows for variable length sequences. If sequence length is always fixed, it would be more efficient to compute angles in the __init()__ and resigter to a buffer. In our case, we are not guaranteed the sequence length of 1024 at the end of each shard, hence the code for flexible sequence length
-    def get_angles(self, seq_len=1024, device=None):
-        position = torch.arange(0, seq_len, 1.0)
-        angles = torch.outer(position.to(device=device), self.theta.to(device=device))
-        return angles
+    # Note that the code below allows for variable length sequences. If sequence length is always fixed, it would be more efficient to compute angles in the __init()__ and resigter to a buffer as I have done above. I'm leaving this function here for reference
+    # def get_angles(self, seq_len=1024, device=None):
+    #     position = torch.arange(0, seq_len, 1.0)
+    #     angles = torch.outer(position.to(device=device), self.theta)
+    #     return angles
     
     # x is the input vector with shape: [batch_size, seq_length, num_heads, head_dim]
     def apply_rotation(self, x=None):
+        
         device = x.device
         seq_len = x.shape[1]
 
-        angles = self.get_angles(seq_len=seq_len, device=device)
-
-        # Apply sin and cos to angles and use unsqueeze to add dimensions to match number of dimensions of input vector 
+        angles = self.cached_angles[:seq_len].to(device)
+        #
+        #  Apply sin and cos to angles and use unsqueeze to add dimensions to match number of dimensions of input vector 
         sin = angles.sin().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
         cos = angles.cos().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
 
@@ -112,7 +116,6 @@ class CausalSelfAttention(nn.Module):
         # Karpathy explains the purpose of the following to be to make the training process more efficient in Pytorch by splitting the channels into multiple heads. Each head is a slice of the channels. This allows for more parallelization and less memory usage.
     
         # for rotary embedding, do not tranpose k and q to (B, nh, T, hs) until the rotation is applied
-        
         k = k.view(B, T, self.n_head, C // self.n_head)
         q = q.view(B, T, self.n_head, C // self.n_head)
     
@@ -133,20 +136,31 @@ class CausalSelfAttention(nn.Module):
         y = self.c_proj(y)
         return y
 
+
+class SwiGLU(nn.Module):
+    def __init__(self, input_dim, hidden_dim):
+        super().__init__()
+        self.linear1 = nn.Linear(input_dim, hidden_dim)
+        self.linear2 = nn.Linear(input_dim, hidden_dim)
+
+    def forward(self, x):
+        return self.linear1(x) * F.silu(self.linear2(x))
+
 #%%
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
          # multiply by 4 for additional dimensions and computational power
-        self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd)
+        # self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd)
         # self.gelu = nn.GELU(approximate='tanh')
-        self.selu = nn.SELU()
+        self.swiglu = SwiGLU(config.n_embd, 4 * config.n_embd)
         self.c_proj = nn.Linear( 4 * config.n_embd, config.n_embd)
 
     def forward(self, x):
-        x = self.c_fc(x)
-        x = self.selu(x)
-        x = self.c_proj(x)
+        # x = self.c_fc(x)
+        # x = self.selu(x)
+        # x = self.c_proj(x)
+        x= self.c_proj(self.swiglu(x))
         return x
 
 #%%
@@ -340,7 +354,7 @@ if master_process:
 from aae_utils import CosineLearingRateScheduler
 
 # 19,073 steps is ~1 epoch, if data is 10B tokens and batch size 0.5M tokens
-training_steps = 5000
+training_steps = 19703
 
 # define the scheduler parameters
 # the number of iterations over which lr is reduced to the minimum
@@ -388,7 +402,6 @@ log_params = eval_log_utils.LogParamsFilesConfig(
     loss_accum = 0.0,
     lr = 0.0
 )
-
 
 #%%
 # Run the training loop.
