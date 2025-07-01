@@ -185,7 +185,7 @@ class GPT(nn.Module):
 
         # apply the transformer blocks. each block applies layer norm, self-attention, residual connection, layer norm, MLP, residual connection
         for block in self.transformer.h:
-            x = block(x)
+            x = block(x )
         
         # apply layer norm to the output of the last transformer block
         x = self.transformer.ln_f(x)
@@ -264,7 +264,6 @@ model = torch.compile(model) if use_compile else model
 
 # wrap the model in DDP if using DDP
 if ddp:
-    
     model = DDP(model, device_ids=[ddp_local_rank])
     print(f'\nModel wrapped in DDP on device: {device}')
 
@@ -401,6 +400,7 @@ for step in range(training_steps):
         
         # Look at Pytorch documentation for more details on tensor.detach() vs. tensor.item()
         loss_accum += loss.detach() 
+        torch.autograd.set_detect_anomaly(True)
         loss.backward()
 
 

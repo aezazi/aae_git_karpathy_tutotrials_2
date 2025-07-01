@@ -49,46 +49,34 @@ class RotaryPosEmbed:
 
     # Compute rotary angles
     def get_angles(self, seq_len=1024, device=None):
-        # print(f'\nseq len: {seq_len}\n')
         position = torch.arange(0, seq_len, 1.0)
-        # print(f'\nposition requires grs: {position.requires_grad}\n')
-        # print(position)
         angles = torch.outer(position.to(device=device), self.theta.to(device=device))
-        # self.register_buffer('angles', angles)
-        # print(f'angles requires grs: {angles.requires_grad}')
         return angles
     
     # x is the input vector with shape: [batch_size, seq_length, num_heads, head_dim]
-    def apply_rotaion(self, x=None):
+    def apply_rotation(self, x=None):
         device = x.device
         seq_len = x.shape[1]
-        # print(f'\nseq len: {seq_len}\n')
 
         angles = self.get_angles(seq_len=seq_len, device=device)
 
         # Apply sin and cos to angles and use unsqueeze to add dimensions to match number of dimensions of input vector 
         sin = angles.sin().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
         cos = angles.cos().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
-        # print(f'sin reqiures grs: {sin.requires_grad}')
-        # print(f'cos requires grs: {cos.requires_grad}')
 
         # split input vector x into two vectors from the  even and odd indexed elements of the original vector x. Each element from x1 and x2 will be paired for rotation
         x1 = x[:, :, :, : :2]
         x2 = x[:, :, :, 1: :2]
-        # print(f'x1 requires grs: {x1.requires_grad}')
 
         # Apply rotation. Note that the elementwise multiplication broadcasts the sin and cos values into batch and num_heads dimensions
         x1_rot = x1 * cos - x2 * sin #[B, S, num_heads,  head_dim/2]
         x2_rot = x1 * sin + x2 * cos #[B, S, num_heads,  head_dim/2]
-        # print(f'x1_rot requires grs: {x1_rot.requires_grad}')
 
         # Stack into [B, S, head_num, head_dim/2, 2] the dim=-1 adds a new dimension to the end of [B, S, H, head_dim/2] and stacks each corresponding element from dim=1 of [seq_length, dim/2] from the x_rotated_even and x_rotated_odd vectors into that new third dimension
         x_rot = torch.stack([x1_rot, x2_rot], dim=-1) #[B, S, H, head_dim/2, 2]
 
         # flatten last two dims back to [B, seq_len, num_head, head_dim]
         x_rot = x_rot.flatten(start_dim=3, end_dim=-1)
-        # print(f'x_rot is on device: {x_rot.device}')
-        # print(f'x_rot requires grs: {x_rot.requires_grad}')
         
         return x_rot
 
@@ -106,6 +94,7 @@ class CausalSelfAttention(nn.Module):
         # output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd)
         self.c_proj.NANOGPT_SCALE_INIT = 1
+        self.rot_embed = RotaryPosEmbed(config.n_embd/config.n_head) # rotary embedding
         # regularization
         self.n_head = config.n_head
         self.n_embd = config.n_embd
@@ -127,21 +116,15 @@ class CausalSelfAttention(nn.Module):
         # Karpathy explains the purpose of the following to be to make the training process more efficient in Pytorch by splitting the channels into multiple heads. Each head is a slice of the channels. This allows for more parallelization and less memory usage.
 
         #------------------------- for rotary embedding --------------------------------
-        
-        # for rotary embedding, do not tranpose k and q to (B, nh, T, hs) until the rotation is applied
-        k_for_rotation = k.view(B, T, self.n_head, C // self.n_head) # (B, T, nh, hs)
-        q_for_rotation = q.view(B, T, self.n_head, C // self.n_head) # (B, T, nh, hs)
-       
-       # the dimension of each head. This is an input for rotary embedding computations
-        head_dim = C//self.n_head
     
-        rot_embed = RotaryPosEmbed(head_dim=head_dim)
+        # for rotary embedding, do not tranpose k and q to (B, nh, T, hs) until the rotation is applied
+        
         k = k.view(B, T, self.n_head, C // self.n_head)
         q = q.view(B, T, self.n_head, C // self.n_head)
     
         # apply rotation and transpose
-        k_rot = rot_embed.apply_rotaion(x=k).transpose(1, 2)
-        q_rot = rot_embed.apply_rotaion(x=q).transpose(1, 2)
+        k_rot = self.rot_embed.apply_rotation(x=k).transpose(1, 2)
+        q_rot = self.rot_embed.apply_rotation(x=q).transpose(1, 2)
         
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
@@ -163,12 +146,13 @@ class MLP(nn.Module):
         super().__init__()
          # multiply by 4 for additional dimensions and computational power
         self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd)
-        self.gelu = nn.GELU(approximate='tanh')
+        # self.gelu = nn.GELU(approximate='tanh')
+        self.selu = nn.SELU()
         self.c_proj = nn.Linear( 4 * config.n_embd, config.n_embd)
 
     def forward(self, x):
         x = self.c_fc(x)
-        x = self.gelu(x)
+        x = self.selu(x)
         x = self.c_proj(x)
         return x
 
@@ -228,10 +212,11 @@ class GPT(nn.Module):
 
         # this creates the embedding table for the token ids.
         token_embd = self.transformer.wte(idx) # (B, T, n_embd)
-
+        
         # apply the transformer blocks. each block applies layer norm, self-attention, residual connection, layer norm, MLP, residual connection
+        x = token_embd
         for block in self.transformer.h:
-            x = block(token_embd)
+            x = block(x)
         
         # apply layer norm to the output of the last transformer block
         x = self.transformer.ln_f(x)
@@ -310,7 +295,7 @@ model = torch.compile(model) if use_compile else model
 
 # wrap the model in DDP if using DDP
 if ddp:
-    model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=True)
+    model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=False)
     print(f'\nModel wrapped in DDP on device: {device}')
 
 # get the raw model from the DDP wrapper. This is useful for accessing the model's parameters and methods directly. the raw_model is the actual model that we want to optimize. The DDP is just a wrapper that allows us to use distributed data parallelism.
@@ -332,7 +317,6 @@ print(f'\nOptimizer initialized on GPU rank {ddp_rank}, device {device}')
 
 # %%
 # Instantiate the dataloader and load the data.
-
 # NOTE: I moved the code for the dataloader to a separate file  aae_dataloader_til.py. 
 from aae_dataloader_utils import DataLoaderShardMultiGPU
 
@@ -363,7 +347,7 @@ if master_process:
 from aae_utils import CosineLearingRateScheduler
 
 # 19,073 steps is ~1 epoch, if data is 10B tokens and batch size 0.5M tokens
-training_steps = 1000
+training_steps = 5000
 
 # define the scheduler parameters
 # the number of iterations over which lr is reduced to the minimum
