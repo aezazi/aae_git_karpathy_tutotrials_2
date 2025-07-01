@@ -22,7 +22,7 @@ Note that in the initialization of the network in the MLP class, we are multiply
 
 @dataclass
 class GPTConfig:
-    block_size: int = 1024 # max sequence length
+    seq_len: int = 1024 # max sequence length
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
     vocab_size: int = 50304
     n_layer: int = 12
@@ -32,22 +32,18 @@ class GPTConfig:
 # instantiate and check the config
 config = GPTConfig()
 
-print(f'\nGPTConfig instantiated with block size: {config.block_size}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
+print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
 
-
-class RotaryPosEmbed:
+class RotaryPosEmbed(nn.Module):
     def __init__(self, head_dim=768):
         super().__init__()
         self.head_dim = head_dim
         # self.get_theta()
         theta =  10_000 ** (-torch.arange(0, self.head_dim, 2, dtype=torch.float) / self.head_dim)
-        self.register_buffer = lambda name, tensor: setattr(self, name, tensor)
-
-        # This will be broadcasted later to match seq_len
         self.register_buffer("theta", theta)
         
 
-    # Compute rotary angles
+    # Compute rotary angles. Note that this code allows for variable length sequences. If sequence length is always fixed, it would be more efficient to compute angles in the __init()__ and resigter to a buffer. In our case, we are not guaranteed the sequence length of 1024 at the end of each shard, hence the code for flexible sequence length
     def get_angles(self, seq_len=1024, device=None):
         position = torch.arange(0, seq_len, 1.0)
         angles = torch.outer(position.to(device=device), self.theta.to(device=device))
@@ -114,8 +110,6 @@ class CausalSelfAttention(nn.Module):
 
 
         # Karpathy explains the purpose of the following to be to make the training process more efficient in Pytorch by splitting the channels into multiple heads. Each head is a slice of the channels. This allows for more parallelization and less memory usage.
-
-        #------------------------- for rotary embedding --------------------------------
     
         # for rotary embedding, do not tranpose k and q to (B, nh, T, hs) until the rotation is applied
         
@@ -128,7 +122,6 @@ class CausalSelfAttention(nn.Module):
         
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
-        #------------------------ end for rotatry embedding -----------------------
 
         # Pytorch implementation of Flash attention algorithim. This is the scaled dot-product attention built-in pytorch function. It takes the dot product of the query and key, scales it by the square root of the head size, and then applies a softmax to get the attention weights. The attention weights are then multiplied by the value to get the output. the is_causal=True argument ensures that the attention is only applied to the left of the current position in the sequence (i.e. it is causal). This is done by applying a mask to the attention weights. See Karpathy's video tutorial at 2:00:00 for more details. 
         
@@ -178,7 +171,7 @@ class GPT(nn.Module):
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
-            # wpe = nn.Embedding(config.block_size, config.n_embd), #positional embeddings
+            # wpe = nn.Embedding(config.seq_len, config.n_embd), #positional embeddings
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = nn.LayerNorm(config.n_embd)
         ))
@@ -208,7 +201,7 @@ class GPT(nn.Module):
         B, T = idx.shape
 
         # this checks if the input sequence is longer than the block size
-        assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
+        assert T <= self.config.seq_len, f"Cannot forward sequence of length {T}, block size is only {self.config.seq_len}"
 
         # this creates the embedding table for the token ids.
         token_embd = self.transformer.wte(idx) # (B, T, n_embd)
