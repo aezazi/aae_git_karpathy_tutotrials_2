@@ -157,9 +157,6 @@ class MLP(nn.Module):
         self.c_proj = nn.Linear( 4 * config.n_embd, config.n_embd)
 
     def forward(self, x):
-        # x = self.c_fc(x)
-        # x = self.selu(x)
-        # x = self.c_proj(x)
         x= self.c_proj(self.swiglu(x))
         return x
 
@@ -185,7 +182,6 @@ class GPT(nn.Module):
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
-            # wpe = nn.Embedding(config.seq_len, config.n_embd), #positional embeddings
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = nn.LayerNorm(config.n_embd)
         ))
