@@ -291,6 +291,13 @@ if torch.cuda.is_available():
 
 model = GPT(GPTConfig())
 
+
+# compute number of model parameters
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+print(f"\nTotal parameters: {count_parameters(model):,}\n")
+
 torch.set_float32_matmul_precision('high')
 model.to(device)
 use_compile = True # set to True to use torch.compile
