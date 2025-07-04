@@ -738,9 +738,24 @@ class RotaryEmbedding:
         )
         return x_rotated.flatten(-2)
     
-    #%%
-    px = torch.arange(15, dtype=torch.float)
-    px
 
+# %%
+Q = torch.arange((4*3*6*5), dtype=float).view(4,3,6,5)
+# print(Q[0,:,:,:])
+K = torch.randint_like(Q, low=1, high=5)
+R=Q@K.transpose(-2,-1)
+print(f'shape after Q@K.T: {R.shape}')
+
+V=torch.randint_like(Q, low=5, high=10)
+QKV=R@V
+print(f'shape QKV: {QKV.shape}')
+
+# %%
+print(torch.allclose(K.transpose(-1,-2), K.transpose(-2,-1)))
+# %%
+y = F.scaled_dot_product_attention(Q,K,V, is_causal=True) 
+# the y vector returned by 
+y=y.transpose(1,2).contiguous()
+y=y.view(4,3,30)
 
 # %%

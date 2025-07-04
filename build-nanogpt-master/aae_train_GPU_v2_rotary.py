@@ -17,7 +17,7 @@ assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devic
 # %%
 # This is the configuration for the GPT model. It defines the hyperparameters for the model. The block size is the maximum sequence length, vocab size is the size of the vocabulary, n_layer is the number of transformer blocks, n_head is the number of attention heads, and n_embd is the embedding dimension. 
 """
-Note that in the initialization of the network in the MLP class, we are multiplying n_embd (the dimensions of the original embeddings) by 4. So for the inner layers, the dimensionality of the model is 384 * 4 =1536. 
+Note that in the initialization of the network in the ffn class, we are multiplying n_embd (the dimensions of the original embeddings) by 4. So for the inner layers, the dimensionality of the model is 384 * 4 =1536. 
 """
 
 @dataclass
@@ -88,55 +88,52 @@ class CausalSelfAttention(nn.Module):
         super().__init__()
         assert config.n_embd % config.n_head == 0 
 
-        # key, query, value, projections for all heads, but in a batch. The output of the linear layer is 3 times the size of the input. I'm not sure what the multiplication by 3 is for. presumably because we later divide the output of the linear layer into 3 parts for q, k, v
-
+        # key, query, value, projections for all heads, but in a batch. The output of the linear layer is 3 times the size of the input. The 3x multiplication is because we later divide the output of the linear layer into 3 vectors for q, k, v
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd)
+
         # output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd)
-        self.c_proj.NANOGPT_SCALE_INIT = 1
+        self.c_proj.NANOGPT_SCALE_INIT = 1 # attribute flag to id c_proj during weight initialization
         self.rot_embed = RotaryPosEmbed(config.n_embd/config.n_head) # rotary embedding
-        # regularization
         self.n_head = config.n_head
         self.n_embd = config.n_embd
 
     def forward(self, x):
         # input is a batch of sequences of embeddings
-        B, T, C = x.size()
+        B, seq_len, n_embd = x.size()
 
         # split the embeddings into key, query, value
-        # the first 2 dimensions are the batch and sequence length. the last dimension is the embedding dimension
-        # nh is "number of heads", hs is "head size", and C (number of channels) = nh * hs  e.g. in GPT-2 (124M), n_head=12, hs=64, so nh*hs=C=768 channels in the transformer
-        qkv = self.c_attn(x) # (B, T, 3 * C)
+        # B is batch size. seq_len is the length of each sequence. the last dimension is the embedding dimension. n_heads is number of heads, dim_heads is the number of dimensions of each head, and self.n_embd is the dimensionality of the original input embedding and model residual stream. n_embd = n_heads * dim_heads  e.g. in GPT-2 (124M), n_heads=12, dim_heads=64, so n_heads*dim_heads=n_embd=768 channels in the transformer. Note from above the self.c_attn() projects the dimensionality(n_embd) of the input by 3x so that when split into q, k, v vectors, each will have dim = n_embd. 
+        qkv = self.c_attn(x) # (B, seq_len, 3 * n_embd)
         # print(qkv.shape)
 
-        # divide the output of the linear layer into 3 parts for q, k, v
-        q, k, v = qkv.chunk(3, dim=-1) # each has shape (B, T, C)
+        # split the output of the linear layer into 3 vectors for q, k, v
+        q, k, v = qkv.chunk(3, dim=-1) # each has shape (B, seq_len, n_embd)
 
 
         # Karpathy explains the purpose of the following to be to make the training process more efficient in Pytorch by splitting the channels into multiple heads. Each head is a slice of the channels. This allows for more parallelization and less memory usage.
     
-        # for rotary embedding, do not tranpose k and q to (B, nh, T, hs) until the rotation is applied
-        k = k.view(B, T, self.n_head, C // self.n_head)
-        q = q.view(B, T, self.n_head, C // self.n_head)
+        # for rotary embedding, do not tranpose k and q to (B, n_heads, seq_len, dim_heads) until the rotation is applied
+        k = k.view(B, seq_len, self.n_head, n_embd // self.n_head) # (B, seq_len, n_heads, dim_heads)
+        q = q.view(B, seq_len, self.n_head, n_embd // self.n_head) # (B, seq_len, n_heads, dim_heads)
     
-        # apply rotation and transpose
-        k_rot = self.rot_embed.apply_rotation(x=k).transpose(1, 2)
-        q_rot = self.rot_embed.apply_rotation(x=q).transpose(1, 2)
+        # apply rotation and transpose. the reshaping to (B, n_heads, seq_len, dim_heads) is to accommodate the matrix multiplication of k, q, and v along the desiored dimensions
+        k_rot = self.rot_embed.apply_rotation(x=k).transpose(1, 2) # (B, n_heads, seq_len, dim_heads)
+        q_rot = self.rot_embed.apply_rotation(x=q).transpose(1, 2) # (B, n_heads, seq_len, dim_heads)
         
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        v = v.view(B, seq_len, self.n_head, n_embd // self.n_head).transpose(1, 2) # (B, n_heads, seq_len, dim_heads)
 
 
         # Pytorch implementation of Flash attention algorithim. This is the scaled dot-product attention built-in pytorch function. It takes the dot product of the query and key, scales it by the square root of the head size, and then applies a softmax to get the attention weights. The attention weights are then multiplied by the value to get the output. the is_causal=True argument ensures that the attention is only applied to the left of the current position in the sequence (i.e. it is causal). This is done by applying a mask to the attention weights. See Karpathy's video tutorial at 2:00:00 for more details. 
+        y = F.scaled_dot_product_attention(q_rot, k_rot, v, is_causal=True) # (B, n_heads, seq_len, dim_heads)
         
-        y = F.scaled_dot_product_attention(q_rot, k_rot, v, is_causal=True) # (B, nh, T, hs)
-        
-        # transpose back to (B, T, nh*hs) and combine heads
-        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        # transpose back to (B, seq_len, n_heads*dim_heads) and combine heads. Note that the y vector returned by scaled_dot_product is not contiguous and therefor view cannot be applied to until we make it . For view() to work, the original tensor must be contiguous in memory. reshape() can work with both contiguous and non-contiguous tensors, automatically handling the necessary memory operations. 
+        y = y.transpose(1, 2).contiguous().view(B, seq_len, n_embd)
 
         y = self.c_proj(y)
         return y
 
-
+# swiglu activation function
 class SwiGLU(nn.Module):
     def __init__(self, input_dim, hidden_dim):
         super().__init__()
@@ -147,17 +144,21 @@ class SwiGLU(nn.Module):
         return self.linear1(x) * F.silu(self.linear2(x))
 
 #%%
-class MLP(nn.Module):
+# the feed forward 
+class FFN(nn.Module):
     def __init__(self, config):
         super().__init__()
          # multiply by 4 for additional dimensions and computational power
         # self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd)
-        # self.gelu = nn.GELU(approximate='tanh')
-        self.swiglu = SwiGLU(config.n_embd, 4 * config.n_embd)
+        # self.gelu = nn.GELU()
+        self.linear1 = nn.Linear(config.n_embd, 4 * config.n_embd)
+        self.linear2 = nn.Linear(config.n_embd, 4 * config.n_embd)
+        # self.swiglu = SwiGLU(config.n_embd, 4 * config.n_embd)
         self.c_proj = nn.Linear( 4 * config.n_embd, config.n_embd)
 
     def forward(self, x):
-        x= self.c_proj(self.swiglu(x))
+        x =self.linear1(x) * F.silu(self.linear2(x))  # this is Swiglu activation
+        x= self.c_proj(x)
         return x
 
 #%%
@@ -167,11 +168,11 @@ class Block(nn.Module):
         self.ln_1 = nn.LayerNorm(config.n_embd)
         self.attn = CausalSelfAttention(config)
         self.ln_2 = nn.LayerNorm(config.n_embd)
-        self.mlp = MLP(config)
+        self.ffn = FFN(config)
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
-        x = x + self.mlp(self.ln_2(x))
+        x = x + self.ffn(self.ln_2(x))
         return x
 
 # %%
@@ -211,12 +212,12 @@ class GPT(nn.Module):
         B, T = idx.shape
 
         # this checks if the input sequence is longer than the block size
-        assert T <= self.config.seq_len, f"Cannot forward sequence of length {T}, block size is only {self.config.seq_len}"
+        assert T <= self.config.seq_len, f"Cannot forward sequence of length {T}, sequence length is only {self.config.seq_len}"
 
         # this creates the embedding table for the token ids.
         token_embd = self.transformer.wte(idx) # (B, T, n_embd)
         
-        # apply the transformer blocks. each block applies layer norm, self-attention, residual connection, layer norm, MLP, residual connection
+        # apply the transformer blocks. each block applies layer norm, self-attention, residual connection, layer norm, ffn, residual connection
         x = token_embd
         for block in self.transformer.h:
             x = block(x)
@@ -322,7 +323,8 @@ base_lr = 6e-4
 # Note that we are using the raw model here, not the DDP wrapped model. This is because the DDP wrapper does not have the optimizer parameters. The raw model is the actual model that we want to optimize.
 optimizer = ConfigureOptimizer(raw_model).create_optimizer(weight_decay=0.1, learning_rate = base_lr, device_type=device)
 
-print(f'\nOptimizer initialized on GPU rank {ddp_rank}, device {device}')
+if ddp:
+    print(f'\nOptimizer initialized on GPU rank {ddp_rank}, device {device}')
 
 
 # %%
