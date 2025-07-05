@@ -3,8 +3,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import tiktoken
-import os
 import numpy as np
 from hellaswag import render_example, iterate_examples
 
@@ -94,6 +92,8 @@ class CosineLearingRateScheduler:
             self.scheduler.step(step - self.warm_up_steps)
         
         self.lrs.append(self.optimizer.param_groups[0]['lr'])
+
+
 
 # class RotaryPosEmbed:
 #     def __init__(self, seq_len=1024, head_dim=768):
