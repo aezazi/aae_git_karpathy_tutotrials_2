@@ -290,8 +290,7 @@ if torch.cuda.is_available():
 
 # if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
 
-model = GPT(GPTConfig())
-
+model = GPT(config=config)
 
 # compute number of model parameters
 def count_parameters(model):
@@ -318,7 +317,7 @@ raw_model = model.module if ddp else model
 # NOTE: I moved the code for optimizer configuration to a separate file called aae_utils.py.
 from aae_utils import ConfigureOptimizer
 
-base_lr = 6e-4
+base_lr = 6e-4 * 4
 
 # Note that we are using the raw model here, not the DDP wrapped model. This is because the DDP wrapper does not have the optimizer parameters. The raw model is the actual model that we want to optimize.
 optimizer = ConfigureOptimizer(raw_model).create_optimizer(weight_decay=0.1, learning_rate = base_lr, device_type=device)
@@ -328,17 +327,15 @@ if ddp:
 
 
 # %%
-# Instantiate the dataloader and load the data.
-# NOTE: I moved the code for the dataloader to a separate file  aae_dataloader_til.py. 
+# Instantiate the dataloader and load the data. 
 from aae_dataloader_utils import DataLoaderShardMultiGPU
 
 # initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
 B = 64 # batch size
-T = 1024 # sequence length
 
-train_loader = DataLoaderShardMultiGPU(B=B, T=T, process_rank = ddp_rank, num_processes=ddp_world_size, split='train')
+train_loader = DataLoaderShardMultiGPU(B=B, T=config.seq_len, process_rank = ddp_rank, num_processes=ddp_world_size, split='train')
 
-val_loader = DataLoaderShardMultiGPU(B=B, T=T, process_rank = ddp_rank, num_processes=ddp_world_size, split='val')
+val_loader = DataLoaderShardMultiGPU(B=B, seq_len=config.seq_len, process_rank = ddp_rank, num_processes=ddp_world_size, split='val')
 
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
 effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 

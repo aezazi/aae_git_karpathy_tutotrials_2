@@ -88,9 +88,9 @@ class DataLoaderMultiGPU:
 #%%
 #create dataloader for processing shards on multi gpu
 class DataLoaderShardMultiGPU:
-    def __init__(self, B, T , process_rank=0, num_processes=1, split=None, shard_dir='edu_fineweb10B'):
+    def __init__(self, B, seq_len , process_rank=0, num_processes=1, split=None, shard_dir='edu_fineweb10B'):
         self.B = B
-        self.T = T
+        self.seq_len = seq_len
         self.num_processes = num_processes
         self.process_rank = process_rank
         self.shard_dir = shard_dir
@@ -127,19 +127,17 @@ class DataLoaderShardMultiGPU:
         self.current_position = self.B * self.T * self.process_rank  # reset the current position in the text for this process
         
     def next_batch(self):
-        B, T = self.B, self.T
-
         # select a sequence of tokens equal to batch size * sequence length + 1 (for the target token)
-        buf = self.shard_tensor[self.current_position:self.current_position + B*T + 1]
+        buf = self.shard_tensor[self.current_position:self.current_position + self.B*self.seq_len + 1]
         
         # create the input and target sequences from the buffer
-        x = buf[:-1].view(B, T) # input sequence
-        y = buf[1:].view(B, T) # target sequence
+        x = buf[:-1].view(self.B, self.seq_len) # input sequence
+        y = buf[1:].view(self.B, self.seq_len) # target sequence
 
-        self.current_position += B * T * self.num_processes # update the current position in the text   
+        self.current_position += self.B * self.seq_len * self.num_processes # update the current position in the text   
 
         # if loading the next batch would go beyond the end of the current shard, move to the next shard
-        if self.current_position + (B*T*self.num_processes + 1) > len(self.shard_tensor):
+        if self.current_position + (self.B*self.seq_len*self.num_processes + 1) > len(self.shard_tensor):
             # really clever code from Karpathy. If currently at the last shard, it produces the index of the next shard file in the list. If currently at last file in the shard file list, it sets the index for the next shard to 0. Very clever  way to loop back to the first file after reaching the end of the shard files list.
             self.current_shard_idx = (self.current_shard_idx + 1) % len(self.shard_files)
 
