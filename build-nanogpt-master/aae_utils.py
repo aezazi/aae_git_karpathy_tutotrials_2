@@ -1,9 +1,11 @@
 # %%
-# class to create data loader
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
+from torch.distributed import init_process_group, destroy_process_group
+from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed as dist
 from hellaswag import render_example, iterate_examples
 
 
@@ -49,7 +51,6 @@ class ConfigureOptimizer:
 
 # %%
 # create learning rate scheduler class
-
 # This my implementation of the cosine learning rate scheduler and is different from Karpathy's implementation. I am using the Pytorch implementatons of cosine annealing scheduler with and without out restart as well as my own code for an initial linear warm-up. the user has to option use cosine annealing with restarts or not, as well as the option to use a linear warmup or not with the warmup steps as a parameter
 
 class CosineLearingRateScheduler:
@@ -93,7 +94,63 @@ class CosineLearingRateScheduler:
         
         self.lrs.append(self.optimizer.param_groups[0]['lr'])
 
+class DDP_Setup(nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        # Check if we are running in DDP mode. If so, we will initialize the process group and set the device for each process.
 
+        # a simple way to check whether your script is being run under Distributed Data Parallel (DDP) — specifically when using torchrun with a cuda GPU. Note that you can be in DDP mode even with a single GPU when using torchrun. 
+        self.ddp_available = int(os.environ.get('RANK', -1)) != -1
+        self.setup()
+    
+    def setup(self):
+        if self.ddp_available:
+            print(f'\nRunning in Distributed Data Parallel (DDP) mode')
+            # Note that LOCAL_RANK is the rank of the process on one given machine (when using multiple machine), while RANK is the rank of the process across all machines (when using multiple gpus on multiple machines). When using a setup with just one machine, LOCAL_RANK and RANK are the same. 
+            init_process_group(backend='nccl') # initialize the process group for DDP
+            self.ddp_rank = int(os.environ['RANK']) # get the rank of the current process
+            self.ddp_local_rank = int(os.environ['LOCAL_RANK']) # get the local rank of the current process
+            self.ddp_world_size = int(os.environ['WORLD_SIZE']) # get the total number of processes
+            
+            # set the device to the local rank of the current process
+            self.device = f'cuda:{self.ddp_local_rank}' 
+            torch.cuda.set_device(self.device) # set the device for the current process
+
+            # the master process will perform logging and saving checkpoints.
+            self.master_process = (self.ddp_rank == 0)
+
+        # if not using DDP, just use the next best availabel option
+        else: 
+            if torch.cuda.is_available():
+                self.device = torch.device('cuda')
+                self.ddp_rank = 0
+                self.ddp_local_rank = 0
+                self.ddp_world_size = 1
+                self.master_process = True
+
+            elif torch.backends.mps.is_available():
+                self.device = torch.device('mps')
+            else:
+                self.device = torch.device('cpu')
+                
+            print(f"\nusing device: {self.device}")
+
+        torch.manual_seed(42) # set the random seed for reproducibility
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(42) # set the random seed for cuda for reproducibility
+    
+    def wrap_model(self):
+        DDP(self.model, device_ids=[self.ddp_local_rank], find_unused_parameters=False)
+
+
+    # %%
+    #Instantiate the model and implement torch.compile if cuda is available.
+
+    # if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
+
+
+    
 
 # class RotaryPosEmbed:
 #     def __init__(self, seq_len=1024, head_dim=768):
@@ -135,3 +192,5 @@ class CosineLearingRateScheduler:
 #         return x_rot
 
 
+
+# %%

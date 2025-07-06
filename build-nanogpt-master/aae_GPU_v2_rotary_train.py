@@ -6,6 +6,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 import tiktoken
 import aae_GPU_v2_rotary_model
+import aae_utils
 import time
 
 #%%
@@ -37,58 +38,12 @@ def main():
 
     #%%
     # DDP setup
-    from torch.distributed import init_process_group, destroy_process_group
-    from torch.nn.parallel import DistributedDataParallel as DDP
-    import torch.distributed as dist
+    
 
-    # Check if we are running in DDP mode. If so, we will initialize the process group and set the device for each process.
-
-    # a simple way to check whether your script is being run under Distributed Data Parallel (DDP) — specifically when using torchrun with a cuda GPU. Note that you can be in DDP mode even with a single GPU when using torchrun. 
-    ddp = int(os.environ.get('RANK', -1)) != -1
-
-    if ddp:
-        print(f'\nRunning in Distributed Data Parallel (DDP) mode')
-        # Note that LOCAL_RANK is the rank of the process on one given machine (when using multiple machine), while RANK is the rank of the process across all machines (when using multiple gpus on multiple machines). When using a setup with just one machine, LOCAL_RANK and RANK are the same. 
-        init_process_group(backend='nccl') # initialize the process group for DDP
-        ddp_rank = int(os.environ['RANK']) # get the rank of the current process
-        ddp_local_rank = int(os.environ['LOCAL_RANK']) # get the local rank of the current process
-        ddp_world_size = int(os.environ['WORLD_SIZE']) # get the total number of processes
-        
-        # set the device to the local rank of the current process
-        device = f'cuda:{ddp_local_rank}' 
-        torch.cuda.set_device(device) # set the device for the current process
-
-        # the master process will perform logging and saving checkpoints.
-        master_process = (ddp_rank == 0)
-
-    # if not using DDP, just use the next best availabel option
-    else: 
-        if torch.cuda.is_available():
-            device = torch.device('cuda')
-            ddp_rank = 0
-            ddp_local_rank = 0
-            ddp_world_size = 1
-            master_process = True
-
-        elif torch.backends.mps.is_available():
-            device = torch.device('mps')
-        else:
-            device = torch.device('cpu')
-            
-        print(f"\nusing device: {device}")
-
-    torch.manual_seed(42) # set the random seed for reproducibility
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(42) # set the random seed for cuda for reproducibility
-
-
-    # %%
-    #Instantiate the model and implement torch.compile if cuda is available.
-
-    # if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
-
+    
     model = aae_GPU_v2_rotary_model.GPT(GPTConfig())
 
+    
 
     # compute number of model parameters
     def count_parameters(model):
@@ -97,14 +52,17 @@ def main():
     print(f"\nTotal parameters: {count_parameters(model):,}\n")
 
     torch.set_float32_matmul_precision('high')
-    model.to(device)
+
+    ddp = aae_utils(model)
+    
+    model.to(ddp.device)
     use_compile = True # set to True to use torch.compile
     model = torch.compile(model) if use_compile else model 
 
     # wrap the model in DDP if using DDP
     if ddp:
-        model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=False)
-        print(f'\nModel wrapped in DDP on device: {device}')
+        model = ddp.wrap_model()
+        print(f'\nModel wrapped in DDP on device: {ddp.device}')
 
     # get the raw model from the DDP wrapper. This is useful for accessing the model's parameters and methods directly. the raw_model is the actual model that we want to optimize. The DDP is just a wrapper that allows us to use distributed data parallelism.
     raw_model = model.module if ddp else model 
