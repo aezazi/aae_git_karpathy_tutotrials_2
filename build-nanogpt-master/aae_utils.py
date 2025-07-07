@@ -9,7 +9,6 @@ import numpy as np
 from hellaswag import render_example, iterate_examples
 
 
-   
 
 # %%
 # class to configure the optimizer
