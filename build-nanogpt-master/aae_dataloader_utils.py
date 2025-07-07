@@ -124,7 +124,7 @@ class DataLoaderShardMultiGPU:
     def reset(self):
         self.current_shard_idx = 0
         self.shard_tensor = self.load_tokens_convert_to_tensor(self.shard_files[self.current_shard_idx])
-        self.current_position = self.B * self.T * self.process_rank  # reset the current position in the text for this process
+        self.current_position = self.B * self.seq_len * self.process_rank  # reset the current position in the text for this process
         
     def next_batch(self):
         # select a sequence of tokens equal to batch size * sequence length + 1 (for the target token)
@@ -147,8 +147,7 @@ class DataLoaderShardMultiGPU:
             
             # load the next shard
             self.shard_tensor =  self.load_tokens_convert_to_tensor(self.shard_files[self.current_shard_idx])  
-            self.current_position = self.B * self.T * self.process_rank  # reset the current position in the text for this process
-        
+            self.current_position = self.B * self.seq_len * self.process_rank  # reset the current position in the text for this process
         
         # move the tensors to the GPU
         x = x.cuda(non_blocking=True)
