@@ -128,7 +128,7 @@ from aae_dataloader_utils import DataLoaderShardMultiGPU
 # initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
 B = 64 # batch size
 
-train_loader = DataLoaderShardMultiGPU(B=B, T=config.seq_len, process_rank = ddp_rank, num_processes=ddp_world_size, split='train')
+train_loader = DataLoaderShardMultiGPU(B=B, seq_len=config.seq_len, process_rank = ddp_rank, num_processes=ddp_world_size, split='train')
 
 val_loader = DataLoaderShardMultiGPU(B=B, seq_len=config.seq_len, process_rank = ddp_rank, num_processes=ddp_world_size, split='val')
 
@@ -136,10 +136,10 @@ val_loader = DataLoaderShardMultiGPU(B=B, seq_len=config.seq_len, process_rank =
 effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
 
 
-assert effective_batch_size_desired % (train_loader.B * train_loader.T * ddp_world_size) == 0, f"effective batch size {effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.T}"
+assert effective_batch_size_desired % (train_loader.B * train_loader.seq_len * ddp_world_size) == 0, f"effective batch size {effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.T}"
 
 # this is the desired number of micro steps to accumulate gradients over. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU.
-accumulation_steps_desired = effective_batch_size_desired // (train_loader.B * train_loader.T * ddp_world_size) 
+accumulation_steps_desired = effective_batch_size_desired // (train_loader.B * train_loader.seq_len * ddp_world_size) 
 
 if master_process:
     print(f"\neffective batch size desired: {effective_batch_size_desired}")
@@ -248,7 +248,7 @@ for step in range(training_steps):
     
     t1 = time.time()
     dt = (t1 - t0)
-    tokens_processed = train_loader.B * train_loader.T * micro_steps * ddp_world_size
+    tokens_processed = train_loader.B * train_loader.seq_len * micro_steps * ddp_world_size
     tokens_per_sec = tokens_processed / dt
     
     # update log_params, log traing loss and learning rate to file, print processing stats.
@@ -283,6 +283,6 @@ if ddp:
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
 
-# torchrun --standalone --nproc_per_node=4 aae_train_GPU_v2_rotary.py
+# torchrun --standalone --nproc_per_node=1 aae_GPU_train_rotary.py
 
 

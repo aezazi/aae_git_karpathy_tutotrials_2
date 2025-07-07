@@ -5,15 +5,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from hellaswag import render_example, iterate_examples
-import tiktoken
-import time
-import numpy as np
-import math
-import csv
 
 #%%
-
-
 class RotaryPosEmbed(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -113,15 +106,6 @@ class CausalSelfAttention(nn.Module):
         y = self.c_proj(y)
         return y
 
-# swiglu activation function
-# class SwiGLU(nn.Module):
-#     def __init__(self, input_dim, hidden_dim):
-#         super().__init__()
-#         self.linear1 = nn.Linear(input_dim, hidden_dim)
-#         self.linear2 = nn.Linear(input_dim, hidden_dim)
-
-#     def forward(self, x):
-#         return self.linear1(x) * F.silu(self.linear2(x))
 
 #%%
 # the feed forward 
@@ -129,11 +113,8 @@ class FFN(nn.Module):
     def __init__(self, config):
         super().__init__()
          # multiply by 4 for additional dimensions and computational power
-        # self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd)
-        # self.gelu = nn.GELU()
         self.linear1 = nn.Linear(config.n_embd, 4 * config.n_embd)
         self.linear2 = nn.Linear(config.n_embd, 4 * config.n_embd)
-        # self.swiglu = SwiGLU(config.n_embd, 4 * config.n_embd)
         self.c_proj = nn.Linear( 4 * config.n_embd, config.n_embd)
 
     def forward(self, x):
