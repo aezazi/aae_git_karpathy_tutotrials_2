@@ -759,5 +759,59 @@ y=y.transpose(1,2).contiguous()
 y=y.view(4,3,30)
 
 # %%
+# experiment with building moe gating function
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
+@dataclass
+class GPTConfig:
+    seq_len: int = 1024 # max sequence length
+    # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
+    vocab_size: int = 50304
+    n_layer: int = 12
+    n_head: int = 12
+    n_embd: int = 768
+    num_experts = 8
+    k = 2
 
+# instantiate and check the config
+config = GPTConfig()
+
+x = torch.randn(3, 5, 8)
+print(x)
+#This class creates a single expert in the MoE layer. Each expert is a simple feedforward network with a swiglu activation function.
+class ExpertMoE(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.hidden_dim = config.n_embd * 4 # hidden dimension for the expert
+        self.ln_1 = nn.Linear(config.n_embd, self.hidden_dim) 
+        self.ln_2 = nn.Linear(config.n_embd, self.hidden_dim)
+        self.c_proj = nn.Linear(self.hidden_dim, config.n_embd)
+
+    def forward(self, x):
+        x =self.linear1(x) * F.silu(self.linear2(x))  # this is Swiglu activation
+        x= self.c_proj(x)
+        return x
+    
+class TopKMoE(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.n_embd = config.n_embd
+        self.hidden_dim = config.n_embd * 4 
+        self.num_experts = config.num_experts
+        self.k = config.k
+        # Create a list of experts, each expert is an instance of the ExpertMoE class
+        self.experts = nn.ModuleList([ExpertMoE(config) for _ in range(self.num_experts)])
+        self.gate_linear = nn.Linear(config.n_embd, config.num_experts, bias=False)
+        
+
+    def forward(self, x):
+        # x has shape (batch_size, sequence_length, embedding dimension). We reshape to (batch_size*seq_length, embedding dim)
+        B, seq_len, _ = x.shape
+        x = x.view(B*seq_len, -1)
+
+        logits = self.ln_1(x)
+ # project the embedding dimensions down to number of experts for computing logits and then probs for each expert
+
+# %%

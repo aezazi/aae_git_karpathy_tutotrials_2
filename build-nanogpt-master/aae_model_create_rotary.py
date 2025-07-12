@@ -109,7 +109,7 @@ class CausalSelfAttention(nn.Module):
 
 
 #%%
-# the feed forward 
+# the feed forward network
 class FFN(nn.Module):
     def __init__(self, config):
         super().__init__()
