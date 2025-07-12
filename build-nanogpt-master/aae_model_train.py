@@ -26,6 +26,7 @@ class GPTConfig:
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
+    num_experts = 8
 
 # instantiate and check the config
 config = GPTConfig()
