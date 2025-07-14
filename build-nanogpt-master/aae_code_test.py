@@ -790,7 +790,7 @@ print(f'logits: \n{logits}\n')
 # The logits  and their indices will have shape (batch_size, seq_len, top_k) 
 top_k_logits, top_k_indices = logits.topk(top_k, dim=-1)  
 print(f'top_k_logits with shape {top_k_logits.shape}: \n{top_k_logits}\n') # (batch_size, seq_len, top_k)
-print(f'top_k_indices eith shape {top_k_indices.shape}: \n{top_k_indices}\n')
+print(f'top_k_indices with shape {top_k_indices.shape}: \n{top_k_indices}\n')
 
 # We want sparse matrices. We achieve this by keeping the top-k logits for each token and filling the rest with a value that represents "no contribution" (like negative infinity).  This is done to ensure that the softmax function will ignore these values when computing the probabilities for each expert. So only the values produced by the top-k experts will contribute to the final output. We implement this by first creating a tensor of the same shape as the logits filled with negative infinity, and then using the scatter function to fill in the top-k logits at the indices of the top-k experts.
 zeros = torch.full_like(logits, float('-inf')) #full_like clones a tensor and fills it with a specified value (like infinity) for masking or calculations.
@@ -802,18 +802,18 @@ sparse_logits
 class GPTConfig:
     seq_len: int = 1024 # max sequence length
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
+    seq_len: int = 7
     vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
-    n_embd: int = 768
-    num_experts = 8
+    n_embd: int = 8
+    num_experts = 5
     k = 2
 
 # instantiate and check the config
 config = GPTConfig()
 
-x = torch.randn(3, 5, 8)
-print(x)
+#%%
 #This class creates a single expert in the MoE layer. Each expert is a simple feedforward network with a swiglu activation function.
 class ExpertMoESwiglu(nn.Module):
     def __init__(self, config):
@@ -822,9 +822,10 @@ class ExpertMoESwiglu(nn.Module):
         self.ln_1 = nn.Linear(config.n_embd, self.hidden_dim) 
         self.ln_2 = nn.Linear(config.n_embd, self.hidden_dim)
         self.c_proj = nn.Linear(self.hidden_dim, config.n_embd)
+        torch.manual_seed(42)
 
     def forward(self, x):
-        x =self.linear1(x) * F.silu(self.linear2(x))  # this is Swiglu activation
+        x =self.ln_1(x) * F.silu(self.ln_2(x))  # this is Swiglu activation
         x= self.c_proj(x)
         return x
     
@@ -832,7 +833,6 @@ class TopKMoEGate(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.n_embd = config.n_embd
-
         self.num_experts = config.num_experts
         self.k = config.k
     
@@ -860,28 +860,103 @@ class TopKMoEGate(nn.Module):
         # Add the noise to the logits. 
         logits_noisy = logits + noise  # (batch_size, seq_len, num_experts)
 
-
-
         # Get the top-k logits and their corresponding indices. The top_k function returns the top-k values and their indices along the last dimension (num_experts). In each batch, for each token in the sequence, it selects the top-k logits and their indices from the logits produced by each expert.
-        top_k_logits, top_k_indices = logits_noisy.topk(top_k, dim=-1)  # (batch_size, seq_len, top_k) 
+        top_k_logits_noisy, top_k_indices_noisy = logits_noisy.topk(top_k, dim=-1)  # (batch_size, seq_len, top_k) 
 
         # We want sparse matrices. We achieve this by keeping the top-k logits for each token and filling the rest with a value that represents "no contribution" (like negative infinity).  This is done to ensure that the softmax function will ignore these values when computing the probabilities for each expert. So only the values produced by the top-k experts will contribute to the final output. We implement this by first creating a tensor of the same shape as the logits filled with negative infinity, and then using the scatter function to fill in the top-k logits at the indices of the top-k experts.
         
         #full_like clones a tensor and fills it with a specified value (like infinity).
-        zeros = torch.full_like(logits, float('-inf')) 
+        zeros = torch.full_like(logits_noisy, float('-inf')) 
 
         # scatter fills the zeros tensor with the top_k_logits at the indices of the top_k_indices along the last dimension (-1). This creates a sparse matrix where only the top-k logits are kept and the rest are filled with negative infinity.
-        sparse_logits = zeros.scatter(-1, top_k_indices, top_k_logits)
-        gated_probs = F.softmax(sparse_logits, dim=-1)
+        sparse_logits_noisy = zeros.scatter(-1, top_k_indices_noisy, top_k_logits_noisy)
+        gated_probs = F.softmax(sparse_logits_noisy, dim=-1)
 
-        return gated_probs, top_k_indices, top_k_logits
+        return gated_probs, top_k_indices_noisy, top_k_logits_noisy
 
-
-        
- # project the embedding dimensions down to number of experts for computing logits and then probs for each expert
 
 # %%
+# test the classes above
+example_input = torch.randn(batch_size, seq_len, config.n_embd)  # Simulated multi-head attention output
+top_k_gate = TopKMoEGate(config)
+gated_probs, top_k_indices, top_k_logits = top_k_gate(example_input)
 
+print(f'gated_probs shape: {gated_probs.shape} \n{gated_probs}\n') 
+print(f'gated_probs_flattened shape: {gated_probs.view(batch_size*seq_len, config.num_experts).shape} \n{gated_probs.view(batch_size*seq_len, config.num_experts)}')
         
-# Create a list of experts, each expert is an instance of the ExpertMoE class
-# self.experts = nn.ModuleList([ExpertMoESwiglu(config) for _ in range(self.num_experts)])
+
+# %%
+class MoE(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.num_experts = config.num_experts
+        self.k = config.k
+    
+        # Create a linear layer to project the multi-head attention output to the number of experts. This layer will compute the logits for each expert. the logits will have shape (batch_size, seq_len, num_experts) 
+        self.gate = TopKMoEGate(config)
+
+        # Create a list of experts, each expert is an instance of the ExpertMoESwiglu class
+        self.experts = nn.ModuleList([ExpertMoESwiglu(config) for _ in range(self.num_experts)])
+
+    def forward(self, x):
+        batch_size, seq_len, _ = x.shape
+        # Get the gated probabilities and top-k indices from the gate
+        gated_probs, top_k_indices, top_k_logits = self.gate(x)
+
+        # Initialize the output tensor
+        output = torch.zeros_like(x)
+
+        # flatten the input to (batch_size * seq_len, n_embd) for batch processing
+        x_flat = x.view(batch_size*seq_len, -1) 
+        print(f'\ninput x_flat shape: {x_flat.shape} \n{x_flat}\n')
+
+        # flatten the gated probabilities to (batch_size * seq_len, num_experts) for batch processing
+        gated_probs_flat = gated_probs.view(batch_size*seq_len, self.num_experts)  
+
+        # Iterate over each expert and apply it to the input
+        for i, expert in enumerate(self.experts):
+            # Create a mask for the inputs where the current expert is in top-k. the mask will have shape (batch_size, seq_len) and will be True for the tokens where expert i is in the top_k indices.
+            print(f'\nExpert {i} with x_flat input shape {x_flat.shape}\n')
+            print(f'top_k_indices shape: {top_k_indices.shape} \n{top_k_indices}\n')
+            expert_mask = (top_k_indices == i).any(dim=-1)
+            print(f'expert_mask shape: {expert_mask.shape} \n{expert_mask}\n')
+
+            # flatten the mask to match the shape of the flattened input x_flat. Note that the shape of flat_mask is a one dimensional (batch_size*seq_len). x_flat has shape (batch_size * seq_len, n_embd). each row in x_flat is a token in the sequence. Pytorch applies the mask to the rows of x_flat based on shape matching
+            flat_mask = expert_mask.view(-1) # (batch_size * seq_len)
+            print(f'flat_mask shape: {flat_mask.shape} \n{flat_mask}\n')
+
+            if flat_mask.any():
+                # Apply the expert to the inputs selected by the mask. x_flat[flat_mask] picks the rows(tokens) of x_flat where the mask is True. This allows us to activate the expert only for the tokens where the expert is in the top_k indices.
+                expert_input = x_flat[flat_mask] # (number of tokens where expert is in top_k, n_embd)
+                expert_output = expert(expert_input)
+                print(f'\nx_flat[flat_mask]) shape: {expert_input.shape} \n{expert_input}\n')
+                print(f'expert_output shape: {expert_output.shape} \n{expert_output}\n')
+            break
+
+        return output
+    
+# %%
+example_input = torch.randn(batch_size, seq_len, config.n_embd)
+moe_layer = MoE(config)
+output = moe_layer(example_input)
+
+# %%
+# experimenting with how to use msking to select specific rows from a 2d tensor
+# 1. Define the 2D tensor
+data = torch.tensor([[1, 2, 3],
+                     [4, 5, 6],
+                     [7, 8, 9],
+                     [10, 11, 12]])
+
+print(f"Original data tensor:\n{data}")
+
+# 2. Create the boolean mask to select specific rows (e.g., row 0 and row 2)
+mask = torch.tensor([True, False, True, False])
+
+print(f"\nBoolean mask:\n{mask}")
+
+# 3. Apply the mask to select entire rows
+selected_rows = data[mask]
+
+print(f"\nSelected rows:\n{selected_rows}")
+# %%
