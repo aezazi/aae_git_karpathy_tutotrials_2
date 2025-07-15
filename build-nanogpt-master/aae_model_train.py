@@ -7,7 +7,7 @@ from torch.nn import functional as F
 from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
-import aae_model_create_rotary
+import aae_model_create_rotary_moe as model_moe_create
 
 #%%
 assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
@@ -27,6 +27,7 @@ class GPTConfig:
     n_head: int = 12
     n_embd: int = 768
     num_experts = 8
+    k = 2
 
 # instantiate and check the config
 config = GPTConfig()
@@ -86,7 +87,7 @@ if torch.cuda.is_available():
 
 # if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
 
-model = aae_model_create_rotary.CreateGPT(config=config)
+model = model_moe_create.CreateMoE(config=config)
 
 # compute number of model parameters
 def count_parameters(model):
@@ -284,6 +285,6 @@ if ddp:
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
 
-# torchrun --standalone --nproc_per_node=1 aae_GPU_train_rotary.py
+# torchrun --standalone --nproc_per_node=1 aae_model_train.py
 
 
