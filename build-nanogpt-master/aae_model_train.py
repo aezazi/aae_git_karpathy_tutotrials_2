@@ -8,6 +8,7 @@ from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
 import aae_model_create_rotary_moe as model_moe_create
+import aae_model_create_rotary
 
 #%%
 assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
@@ -26,7 +27,7 @@ class GPTConfig:
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
-    num_experts = 8
+    num_experts = 4
     k = 2
 
 # instantiate and check the config
@@ -88,6 +89,7 @@ if torch.cuda.is_available():
 # if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
 
 model = model_moe_create.CreateMoE(config=config)
+# model = aae_model_create_rotary.CreateGPT(config=config)
 
 # compute number of model parameters
 def count_parameters(model):
@@ -102,7 +104,7 @@ model = torch.compile(model) if use_compile else model
 
 # wrap the model in DDP if using DDP
 if ddp:
-    model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=False)
+    model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=True)
     print(f'\nModel wrapped in DDP on device: {device}')
 
 # get the raw model from the DDP wrapper. This is useful for accessing the model's parameters and methods directly. the raw_model is the actual model that we want to optimize. The DDP is just a wrapper that allows us to use distributed data parallelism.
@@ -128,7 +130,7 @@ if ddp:
 from aae_dataloader_utils import DataLoaderShardMultiGPU
 
 # initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
-B = 64 # batch size
+B = 32 # batch size
 
 train_loader = DataLoaderShardMultiGPU(B=B, seq_len=config.seq_len, process_rank = ddp_rank, num_processes=ddp_world_size, split='train')
 
