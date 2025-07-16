@@ -161,7 +161,7 @@ class TopKMoEGate(nn.Module):
         # Get the top-k logits and their corresponding indices. The pytorch top_k method returns the top-k values and their indices along the last dimension (num_experts). In each batch, for each token in the sequence, it selects the top-k logits and their indices from the logits produced by each expert.
         top_k_logits_noisy, top_k_indices_noisy = logits_noisy.topk(self.k, dim=-1)  # (batch_size, seq_len, top_k) 
 
-        # We want sparse matrices. We achieve this by keeping the top-k logits for each token and filling the rest with a value that represents "no contribution" (like negative infinity).  This is done to ensure that the softmax function will ignore these values when computing the probabilities for each expert. So only the values produced by the top-k experts will contribute to the final output. We implement this by first creating a tensor of the same shape as the logits filled with negative infinity, and then using the scatter function to fill in the top-k logits at the indices of the top-k experts.
+        # We want sparse matrices. We achieve this by keeping the top-k logits for each token and filling the rest with a value that represents "no contribution" (like negative infinity).  This is done to ensure that the softmax function will ignore these values when computing the weights for each expert. So only the values produced by the top-k experts will contribute to the final output. We implement this by first creating a tensor of the same shape as the logits filled with negative infinity, and then using the scatter function to fill in the top-k logits at the indices of the top-k experts. Note that in this context, softmax is being used to compute "weights" for each expert not probabilities as for multiclass classification. Its a subttle difference but I think important to note.
         
         #full_like clones a tensor and fills it with a specified value (like infinity).
         zeros = torch.full_like(logits_noisy, float('-inf')) 
@@ -174,7 +174,7 @@ class TopKMoEGate(nn.Module):
 
 
 # %%
-# this class implements the full MoE layer. It uses the TopKMoEGate class to compute the gated probabilities and the top-k indices, and then applies each expert to the input based on these indices. The output is a weighted sum of the expert outputs, where the weights are the gated probabilities.
+# this class implements the full MoE layer. It uses the TopKMoEGate class to compute the gated weights and the top-k indices, and then applies each expert to the input based on these indices. The output is a weighted sum of the expert outputs, where the weights are the gated weights.
 class MoELayer(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -191,7 +191,7 @@ class MoELayer(nn.Module):
 
     def forward(self, x):
         batch_size, seq_len, _ = x.shape
-        # Get the gated probabilities and top-k indices from the gate
+        # Get the gated weights and top-k indices from the gate
         gated_weights, top_k_indices, top_k_logits = self.gate(x)
 
         # Initialize the fianl output tensor
@@ -202,7 +202,7 @@ class MoELayer(nn.Module):
         x_flat = x.view(batch_size*seq_len, -1) 
         # print(f'\ninput x_flat shape: {x_flat.shape} \n{x_flat}\n')
 
-        # flatten the gated probabilities to (batch_size * seq_len, num_experts) for batch processing
+        # flatten the gated weights to (batch_size * seq_len, num_experts) for batch processing
         gated_weights_flat = gated_weights.view(batch_size*seq_len, self.num_experts)  
 
         # Iterate over each expert and apply it to the input

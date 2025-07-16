@@ -452,6 +452,6 @@ if ddp:
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
 
-# torchrun --standalone --nproc_per_node=4 aae_train_GPU_v2.py
+# torchrun --standalone --nproc_per_node=4 aae_model_base.py
 
 
