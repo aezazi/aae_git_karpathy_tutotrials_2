@@ -28,6 +28,7 @@ class GPTConfig:
     n_embd: int = 768
     num_experts = 4
     k = 2
+    noisy_std = 1.0
 
 # instantiate and check the config
 config = GPTConfig()

@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 import torch
 import torch.nn as nn
+from deepspeed.moe.layer import MoE
 from torch.nn import functional as F
 from hellaswag import render_example, iterate_examples
 
@@ -125,133 +126,70 @@ class ExpertMoESwiglu(nn.Module):
         x= self.c_proj(x)
         return x
     
-# this class implemets top_k sparse gating 
-class TopKMoEGate(nn.Module):
+
+
+
+# %%
+# this class implements the full MoE layer in a form that is compatible with DeepSpeed. Note that DeepSpeed intenally takes care of the routing and expert selection, so we only need to define the experts and the gate projection. As compared to the the implementation in aae_model_rotary_moe.py, this class does not implement the routing and and top_k selection. Deepseed handles this internally.
+class DeepSpeedMoeLayer(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.n_embd = config.n_embd
         self.num_experts = config.num_experts
-        self.k = config.k
-        self.seq_len = config.seq_len
-    
-        # Create a linear layer to project the multi-head attention output to the number of experts. This layer will compute the logits for each expert. the logits will have shape (batch_size, seq_len, num_experts) 
-        self.gate_linear = nn.Linear(config.n_embd, config.num_experts, bias=False)
+        self.noisy_std = config.noisy_std
 
-        # this is a learnable parameter that will be used to scale the noise added to the logits of each expert. The allows the noise added to each expert to be "customized" and dynamic. It adapts during training depending on the expert. It is initialized to zero and will be learned during training.
-        self.noise_weight = nn.Parameter(torch.zeros(config.num_experts)) 
+        self.gate_proj = nn.Linear(config.n_embd, self.num_experts, bias=False)
 
-        # this is the standard deviation of the noise added to the logits of each expert. It is a hyperparameter that can be tuned. Note that unlike the noise_weight it is a global parameter, this is not a learnable parameter.
-        self.noisy_std = 1.0
-        
-    # x has shape (batch_size, sequence_length, embedding dimension) and is the output of the multi-head attention layer. 
-    def forward(self, x):
-        
-        # In each batch, there is a logit for each token in the sequence and for each expert. 
-        logits = self.gate_linear(x) # (batch_size, seq_len, num_experts)
+        # learnable weights for each expert
+        self.expert_weights = nn.Parameter(torch.ones(self.num_experts))
 
-        # The global noise to be added to the logits of each expert. This is a random noise tensor of the same shape as the logits. 
-        noise = torch.randn_like(logits) * self.noisy_std # (batch_size, seq_len, num_experts)
+        self.moe = MoE(
+            hidden_size=config.n_embd,
+            expert=lambda config: ExpertMoESwiglu(config),
+            num_experts=config.num_experts,
+            k=config.k,
+            capacity_factor=1.25,
+            eval_capacity_factor=1.0,
 
-        # Per-expert noise scaling using self.weights. 
-        noise = noise * self.noise_weight
-
-        # Add the noise to the logits. 
-        logits_noisy = logits + noise  # (batch_size, seq_len, num_experts)
-
-        # Get the top-k logits and their corresponding indices. The pytorch top_k method returns the top-k values and their indices along the last dimension (num_experts). In each batch, for each token in the sequence, it selects the top-k logits and their indices from the logits produced by each expert.
-        top_k_logits_noisy, top_k_indices_noisy = logits_noisy.topk(self.k, dim=-1)  # (batch_size, seq_len, top_k) 
-
-        # We want sparse matrices. We achieve this by keeping the top-k logits for each token and filling the rest with a value that represents "no contribution" (like negative infinity).  This is done to ensure that the softmax function will ignore these values when computing the weights for each expert. So only the values produced by the top-k experts will contribute to the final output. We implement this by first creating a tensor of the same shape as the logits filled with negative infinity, and then using the scatter function to fill in the top-k logits at the indices of the top-k experts. Note that in this context, softmax is being used to compute "weights" for each expert not probabilities as for multiclass classification. Its a subttle difference but I think important to note.
-        
-        #full_like clones a tensor and fills it with a specified value (like infinity).
-        zeros = torch.full_like(logits_noisy, float('-inf'), device=x.device)  # (batch_size, seq_len, num_experts)
-
-        # scatter fills the zeros tensor with the top_k_logits at the indices of the top_k_indices along the last dimension (-1). This creates a sparse matrix where only the top-k logits are kept and the rest are filled with negative infinity.
-        # gated_weights is known as the "dispatch_mask" in the MoE literature. 
-        sparse_logits_noisy = zeros.scatter(-1, top_k_indices_noisy, top_k_logits_noisy)
-        gated_weights = F.softmax(sparse_logits_noisy, dim=-1)
-
-        return gated_weights, top_k_indices_noisy, sparse_logits_noisy
+            #use_residual=False because in a Transformer MoE layer, the residual connection is handled outside the MoE block, at the Transformer block level, not inside the MoE itself.
+            use_residual=False, 
+            
+            noisy_gate_policy=None, # we will handle noise ourselves
+            
+            gate=self.gate_fn # gate function that DeepS will use to select experts. Defined below
+        )
 
 
-# %%
-# this class implements the full MoE layer. It uses the TopKMoEGate class to compute the gated weights and the top-k indices, and then applies each expert to the input based on these indices. The output is a weighted sum of the expert outputs, where the weights are the gated weights.
-class MoELayer(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.num_experts = config.num_experts
-        self.sq_len = config.seq_len
-        self.k = config.k
-    
-        # Create a linear layer to project the multi-head attention output to the number of experts. This layer will compute the logits for each expert. the logits will have shape (batch_size, seq_len, num_experts) 
-        self.gate = TopKMoEGate(config)
-
-        # Create a list of experts, each expert is an instance of the ExpertMoESwiglu class
-        self.experts = nn.ModuleList([ExpertMoESwiglu(config) for _ in range(self.num_experts)])
-        torch.manual_seed(42)
-
-    def forward(self, x):
+    def gate_fn(self, x):
         batch_size, seq_len, _ = x.shape
-        # Get the gated weights and top-k indices from the gate
-        gated_weights, top_k_indices, top_k_logits = self.gate(x)
 
-        # Initialize the fianl output tensor
-        final_output = torch.zeros_like(x)
-        # print(f'\ninput x shape: {x.shape} \n{x}\n')
+        # flatten the input to (batch_size*seq_len, n_embd)
+        x_flat = x.view(batch_size*seq_len, self.n_embd)  
+        logits = self.gate_proj(x_flat) # (batch_size*seq_len, num_experts)
 
-        # flatten the input to (batch_size * seq_len, n_embd) for batch processing
-        x_flat = x.view(batch_size*seq_len, -1) 
-        # print(f'\ninput x_flat shape: {x_flat.shape} \n{x_flat}\n')
+        # add noise to the logits.
+        if self.training:
+            noise = torch.randn_like(logits) * self.noisy_std
+            logits_noisy = logits + noise
 
-        # flatten the gated weights to (batch_size * seq_len, num_experts) for batch processing
-        gated_weights_flat = gated_weights.view(batch_size*seq_len, self.num_experts)  
+        # apply per expert weights to logits
+        logits_noisy_weighted = logits_noisy * self.expert_weights
 
-        # Iterate over each expert and apply it to the input
-        for i, expert in enumerate(self.experts):
-            # Create a mask for the inputs where the current expert is in top-k. the mask will have shape (batch_size, seq_len) and will be True for the tokens where expert i is in the top_k indices.
-            # print(f'\nExpert {i} with x_flat input shape {x_flat.shape}\n')
-            # print(f'top_k_indices shape: {top_k_indices.shape} \n{top_k_indices}\n')
-            expert_mask = (top_k_indices == i).any(dim=-1)
-            # print(f'expert_mask shape: {expert_mask.shape} \n{expert_mask}\n')
 
-            # flatten the mask to match the shape of the flattened input x_flat. Note that the shape of flat_mask is a one dimensional (batch_size*seq_len). x_flat has shape (batch_size * seq_len, n_embd). each row in x_flat is a token in the sequence. Pytorch applies the mask to the rows of x_flat based on shape matching.
-            flat_mask = expert_mask.view(-1) # (batch_size * seq_len)
-            # print(f'flat_mask shape: {flat_mask.shape} \n{flat_mask}\n')
-
-            if flat_mask.any():
-                # Apply the expert to the inputs selected by the mask. x_flat[flat_mask] picks the rows(tokens) of x_flat where the mask is True. This allows us to activate the expert only for the tokens where the expert is in the top_k indices.
-                expert_input = x_flat[flat_mask] # (number of tokens where expert i is in top_k, n_embd)
-                # print(f'\nexpert_input shape: {expert_input.shape} \n{expert_input}\n')
-                
-                # apply expert i to the expert_input. Again, note that based on the mask described above, epxert i is applied only to the tokens where it is in the top_k indices.
-                expert_output = expert(expert_input) # (number of tokens where expert i is in top_k, n_embd)
-                # print(f'expert_output shape: {expert_output.shape} \n{expert_output}\n')
-
-                # Now we need to scale the expert output by the gated weights for the tokens where the expert is in the top_k indices. gated_weights_flat has shape (batch_size * seq_len, num_experts). We apply the same mask as we used to create expert_input to select all rows from gated_weights_flat where expert i is in the top_k indices, then we select the ith column. This returns the weighting for expert i that is to be applied to the tokens where expert i is in the top_k indices. This is the same as selecting all the non_zero values in the ith column of gated_weights_flat. We  then use unsqueeze(1) to add a dimension to create a column vector of shape (number of tokens where expert i is in top_k, 1). this allows  multiplication with the expert_output which has shape (number of tokens where expert i is in top_k, n_embd). 
-                # print(f'gated_weights_flat shape: {gated_weights_flat.shape} \n{gated_weights_flat}\n')
-                expert_weights = gated_weights_flat[flat_mask, i].unsqueeze(1)  # (number of tokens where expert i is in top_k, 1)
-                # print(f'expert_weights shape: {expert_weights.shape} \n{expert_weights}\n')
-
-                # Scale the expert_output by expert_weights.
-                expert_output_weighted = expert_output * expert_weights # (number of tokens where expert i is in top_k, n_embd)
-                # print(f'expert_output_weighted shape: {expert_output_weighted.shape} \n{expert_output_weighted}\n')
-
-                # Now we need to add the expert_output_weighted to final_output at positions where the expert is in the top_k indices. We use expert_mask to select the rows where expert i is in the top_k indices. Note that here we use expert_mask (not flat_mask) with shape (batch_size, seq_len, hidden_dim) to match the shape of final_output. final_output will have shape (batch_size, seq_len, n_embd), the same as input x.
-                # print(f'final_output shape before adding expert_output_weighted:{final_output.shape} \n{final_output}\n')
-
-                # the huggingface implementation uses .squeeze(1) to remove any singleton dimensions from  the expert_output_weighted tensor. Not sure why this is needed. I tried removing it and the shapes were still compatible and the result the same
-                final_output[expert_mask] += expert_output_weighted.squeeze(1) # (batch_size, seq_len, n_embd)
-                # print(f'final_output shape after adding expert_output_weighted:{final_output.shape} \n{final_output}\n')
-
-                ## just a test to see if .squeeze(1) is necessary
-                # final_test = torch.zeros_like(x)
-                # final_test[expert_mask] += expert_output_weighted
-                # print(f'{torch.allclose(final_output, final_test)}')
-
-            # break
-
-        return final_output
-
+#%%
+@dataclass
+class GPTConfig:
+    seq_len: int = 1024 # max sequence length
+    # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
+    vocab_size: int = 50304
+    n_layer: int = 12
+    n_head: int = 12
+    n_embd: int = 768
+    num_experts = 4
+    k = 2
+    noisy_std = 1.0
+config = GPTConfig()
+test = DeepSpeedMoeLayer(config)
 #%%
 class Block(nn.Module):
     def __init__(self, config):
