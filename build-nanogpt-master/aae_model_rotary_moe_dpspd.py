@@ -164,13 +164,14 @@ class TopKMoEGate(nn.Module):
         # We want sparse matrices. We achieve this by keeping the top-k logits for each token and filling the rest with a value that represents "no contribution" (like negative infinity).  This is done to ensure that the softmax function will ignore these values when computing the weights for each expert. So only the values produced by the top-k experts will contribute to the final output. We implement this by first creating a tensor of the same shape as the logits filled with negative infinity, and then using the scatter function to fill in the top-k logits at the indices of the top-k experts. Note that in this context, softmax is being used to compute "weights" for each expert not probabilities as for multiclass classification. Its a subttle difference but I think important to note.
         
         #full_like clones a tensor and fills it with a specified value (like infinity).
-        zeros = torch.full_like(logits_noisy, float('-inf')) 
+        zeros = torch.full_like(logits_noisy, float('-inf'), device=x.device)  # (batch_size, seq_len, num_experts)
 
         # scatter fills the zeros tensor with the top_k_logits at the indices of the top_k_indices along the last dimension (-1). This creates a sparse matrix where only the top-k logits are kept and the rest are filled with negative infinity.
+        # gated_weights is known as the "dispatch_mask" in the MoE literature. 
         sparse_logits_noisy = zeros.scatter(-1, top_k_indices_noisy, top_k_logits_noisy)
         gated_weights = F.softmax(sparse_logits_noisy, dim=-1)
 
-        return gated_weights, top_k_indices_noisy, top_k_logits_noisy
+        return gated_weights, top_k_indices_noisy, sparse_logits_noisy
 
 
 # %%
