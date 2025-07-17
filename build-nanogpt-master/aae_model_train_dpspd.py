@@ -10,14 +10,13 @@ import time
 import aae_model_rotary_moe as model_rotary_moe
 import aae_model_rotary as model_rotary
 
-#%%
+# #%%
 assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # %%
 # This is the configuration for the GPT model. It defines the hyperparameters for the model. The block size is the maximum sequence length, vocab size is the size of the vocabulary, n_layer is the number of transformer blocks, n_head is the number of attention heads, and n_embd is the embedding dimension. 
-"""
-Note that in the initialization of the network in the ffn class, we are multiplying n_embd (the dimensions of the original embeddings) by 4. So for the inner layers, the dimensionality of the model is 384 * 4 =1536. 
-"""
 
 @dataclass
 class GPTConfig:
@@ -36,47 +35,10 @@ config = GPTConfig()
 print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
 
 
+
 #%%
-# DDP setup
-from torch.distributed import init_process_group, destroy_process_group
-from torch.nn.parallel import DistributedDataParallel as DDP
-import torch.distributed as dist
 
-# Check if we are running in DDP mode. If so, we will initialize the process group and set the device for each process.
-
-# a simple way to check whether your script is being run under Distributed Data Parallel (DDP) — specifically when using torchrun with a cuda GPU. Note that you can be in DDP mode even with a single GPU when using torchrun. 
-ddp = int(os.environ.get('RANK', -1)) != -1
-
-if ddp:
-    print(f'\nRunning in Distributed Data Parallel (DDP) mode')
-    # Note that LOCAL_RANK is the rank of the process on one given machine (when using multiple machine), while RANK is the rank of the process across all machines (when using multiple gpus on multiple machines). When using a setup with just one machine, LOCAL_RANK and RANK are the same. 
-    init_process_group(backend='nccl') # initialize the process group for DDP
-    ddp_rank = int(os.environ['RANK']) # get the rank of the current process
-    ddp_local_rank = int(os.environ['LOCAL_RANK']) # get the local rank of the current process
-    ddp_world_size = int(os.environ['WORLD_SIZE']) # get the total number of processes
-    
-    # set the device to the local rank of the current process
-    device = f'cuda:{ddp_local_rank}' 
-    torch.cuda.set_device(device) # set the device for the current process
-
-    # the master process will perform logging and saving checkpoints.
-    master_process = (ddp_rank == 0)
-
-# if not using DDP, just use the next best available option
-else: 
-    if torch.cuda.is_available():
-        device = torch.device('cuda')
-        ddp_rank = 0
-        ddp_local_rank = 0
-        ddp_world_size = 1
-        master_process = True
-
-    elif torch.backends.mps.is_available():
-        device = torch.device('mps')
-    else:
-        device = torch.device('cpu')
-        
-    print(f"\nusing device: {device}")
+print(f"\nusing device: {device}")
 
 torch.manual_seed(42) # set the random seed for reproducibility
 if torch.cuda.is_available():
@@ -102,10 +64,7 @@ model.to(device)
 use_compile = True # set to True to use torch.compile
 model = torch.compile(model) if use_compile else model 
 
-# wrap the model in DDP if using DDP
-if ddp:
-    model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=True)
-    print(f'\nModel wrapped in DDP on device: {device}')
+
 
 # get the raw model from the DDP wrapper. This is useful for accessing the model's parameters and methods directly. the raw_model is the actual model that we want to optimize. The DDP is just a wrapper that allows us to use distributed data parallelism.
 raw_model = model.module if ddp else model 
@@ -121,8 +80,7 @@ base_lr = 6e-4 * 4
 # Note that we are using the raw model here, not the DDP wrapped model. This is because the DDP wrapper does not have the optimizer parameters. The raw model is the actual model that we want to optimize.
 optimizer = ConfigureOptimizer(raw_model).create_optimizer(weight_decay=0.1, learning_rate = base_lr, device_type=device)
 
-if ddp:
-    print(f'\nOptimizer initialized on GPU rank {ddp_rank}, device {device}')
+
 
 
 # %%

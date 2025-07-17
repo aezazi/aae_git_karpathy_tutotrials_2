@@ -960,3 +960,6 @@ selected_rows = data[mask]
 
 print(f"\nSelected rows:\n{selected_rows}")
 # %%
+mode = str(input("\nEnter parallelization mode 'ddp' or 'dps' for DeepSpeed: ")).strip().lower()
+if mode not in ['ddp', 'dps']:
+    raise ValueError(f"Invalid parallelization mode: {mode}. Please enter 'ddp' or 'dps' : ")
