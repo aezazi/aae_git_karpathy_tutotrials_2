@@ -136,13 +136,7 @@ class DeepSpeedMoeLayer(nn.Module):
         super().__init__()
         self.n_embd = config.n_embd
         self.num_experts = config.num_experts
-        self.noisy_std = config.noisy_std
-
-        self.gate_proj = nn.Linear(config.n_embd, self.num_experts, bias=False)
-
-        # learnable weights for each expert
-        self.expert_weights = nn.Parameter(torch.ones(self.num_experts))
-
+        
         self.moe = MoE(
             hidden_size=config.n_embd,
             expert=lambda config: ExpertMoESwiglu(config),
