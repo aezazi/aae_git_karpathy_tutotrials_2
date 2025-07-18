@@ -28,7 +28,6 @@ class GPTConfig:
     n_head: int = 12
     n_embd: int = 768
     num_experts = 8
-    ep_size = 8
     k = 2
 
 # instantiate and check the config

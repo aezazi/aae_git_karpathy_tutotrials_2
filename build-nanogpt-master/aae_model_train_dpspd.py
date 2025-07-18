@@ -7,7 +7,7 @@ from torch.nn import functional as F
 from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
-import aae_model_rotary_moe as model_rotary_moe
+import aae_model_rotary_moe_ddp as model_rotary_moe
 import aae_model_rotary as model_rotary
 
 # #%%
@@ -27,6 +27,9 @@ class GPTConfig:
     n_head: int = 12
     n_embd: int = 768
     num_experts = 4
+    ep_size = 4
+    assert ep_size <= num_experts, "ep_size must be less than or equal to num_experts"
+    assert num_experts % ep_size == 0, "num_experts must be divisible by ep_size"
     k = 2
     noisy_std = 1.0
 
