@@ -27,7 +27,8 @@ class GPTConfig:
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
-    num_experts = 4
+    num_experts = 8
+    ep_size = 8
     k = 2
 
 # instantiate and check the config
@@ -289,6 +290,6 @@ if ddp:
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
 
-# torchrun --standalone --nproc_per_node=1 aae_model_train.py
+# torchrun --standalone --nproc_per_node=1 aae_model_train_ddp.py
 
 
