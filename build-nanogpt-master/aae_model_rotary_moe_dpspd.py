@@ -116,17 +116,19 @@ class ExpertMoESwiglu(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.hidden_dim = config.n_embd * 4 # hidden dimension for the expert
-        self.ln_1 = nn.Linear(config.n_embd, self.hidden_dim) 
-        self.ln_2 = nn.Linear(config.n_embd, self.hidden_dim)
-        self.c_proj = nn.Linear(self.hidden_dim, config.n_embd)
-        # torch.manual_seed(42)
+        self.ln_1 = nn.Linear(config.n_embd, self.hidden_dim, bias=False) # no bias in the linear layer
+        self.ln_2 = nn.Linear(config.n_embd, self.hidden_dim, bias=False) 
+        self.c_proj = nn.Linear(self.hidden_dim, config.n_embd, bias=False) 
 
     def forward(self, x):
         x =self.ln_1(x) * F.silu(self.ln_2(x))  # this is Swiglu activation
         x= self.c_proj(x)
         return x
-    
 
+# wrap ExpertMoESwiglu in a function that can be used by DeepSpeed to create the experts. This is needed because DeepSpeed requires a function that returns an instance of the expert class, rather than the class itself.
+def expert_swiglu_moe_fn(config):
+    # Default MoE FFN dimension = 4x hidden_dim
+    return ExpertMoESwiglu(config)
 
 
 # %%
@@ -139,7 +141,7 @@ class DeepSpeedMoeLayer(nn.Module):
         
         self.moe = MoE(
             hidden_size=config.n_embd,
-            expert=lambda config: ExpertMoESwiglu(config),
+            expert=expert_swiglu_moe_fn(config),
             num_experts=config.num_experts,
             ep_size=config.ep_size,
             k=config.k,
@@ -152,21 +154,15 @@ class DeepSpeedMoeLayer(nn.Module):
             noisy_gate_policy='RSample' # use DeepSpeed's RSample policy for noisy gating
         )
 
-
-    def gate_fn(self, x):
-        batch_size, seq_len, _ = x.shape
-
-        # flatten the input to (batch_size*seq_len, n_embd)
-        x_flat = x.view(batch_size*seq_len, self.n_embd)  
-        logits = self.gate_proj(x_flat) # (batch_size*seq_len, num_experts)
-
-        # add noise to the logits.
-        if self.training:
-            noise = torch.randn_like(logits) * self.noisy_std
-            logits_noisy = logits + noise
-
-        # apply per expert weights to logits
-        logits_noisy_weighted = logits_noisy * self.expert_weights
+    def forward(self, x):
+        """
+        x: [B, S, D]
+        Returns:
+            out: [B, S, D]
+            loss_aux: load balancing loss
+        """
+        out, loss_aux = self.moe(x)
+        return out, loss_aux
 
 
 #%%
@@ -179,10 +175,15 @@ class GPTConfig:
     n_head: int = 12
     n_embd: int = 768
     num_experts = 4
+    ep_size = 4
+    assert ep_size <= num_experts, "ep_size must be less than or equal to num_experts"
+    assert num_experts % ep_size == 0, "num_experts must be divisible by ep_size"
     k = 2
     noisy_std = 1.0
 config = GPTConfig()
 test = DeepSpeedMoeLayer(config)
+
+
 #%%
 class Block(nn.Module):
     def __init__(self, config):
@@ -190,7 +191,7 @@ class Block(nn.Module):
         self.ln_1 = nn.LayerNorm(config.n_embd)
         self.attn = CausalSelfAttention(config)
         self.ln_2 = nn.LayerNorm(config.n_embd)
-        self.moe = MoELayer(config)
+        self.moe = DeepSpeedMoeLayer(config)
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
