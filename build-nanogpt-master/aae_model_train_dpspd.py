@@ -4,14 +4,14 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+import deepspeed
 from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
-import json
 import aae_model_rotary_moe_dpspd as model_moe
 
 
-# #%%
+#%%
 # assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
 if torch.cuda.is_available():
     gpu_count = torch.cuda.device_count()
@@ -40,7 +40,11 @@ class GPTConfig:
     effective_batch_size = effective_batch_size_desired_tokens // seq_len 
     mini_batch_size = 16 # this is the batch size per gpu. The effective batch size is the product of the mini-batch size and the number of gpus.
     n_embd: int = 768
-
+    base_lr: float = 6e-4 * 4
+    max_lr: float = base_lr # max learning rate
+    min_lr_ratio: float =  0.1
+    warm_up_steps: int = 300
+    train_steps: int = 19703 # 19,073 steps is ~1 epoch, if data is 10B tokens and batch size 0.5M tokens
 # instantiate and check the config
 config = GPTConfig()
 
@@ -74,10 +78,10 @@ ds_config = {
     "scheduler": {
         "type": "WarmupCosineLR",
         "params": {
-            "warmup_min_lr": 0.0,
-            "warmup_max_lr": 0.0006,
-            "warmup_num_steps": 300,
-            "total_num_steps": 10000
+            "total_num_steps": config.train_steps,
+            "warmup_min_ratio": 0.0,
+            "warmup_num_steps": config.warm_up_steps,
+            "cos_min_ratio": config.min_lr_ratio,  # Min ratio of max LR
         }
     },
 
@@ -110,7 +114,13 @@ ds_config = {
 
 print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
 
-
+scheduler = deepspeed.runtime.lr_schedules.WarmupCosineLR(
+    optimizer=None,  # Placeholder, will be set later
+    warmup_min_ratio=0.0,
+    warmup_num_steps=config.warm_up_steps,
+    total_num_steps=config.train_steps,
+    cos_min_ratio=config.min_lr_ratio
+)
 
 #%%
 
@@ -134,12 +144,8 @@ def count_parameters(model):
 
 print(f"\nTotal parameters: {count_parameters(model):,}\n")
 
-torch.set_float32_matmul_precision('high')
-model.to(device)
-use_compile = True # set to True to use torch.compile
-model = torch.compile(model) if use_compile else model 
-
-
+# Note that we do not use torch.compile since it's not comaptible with DeepSpeed MoE layer
+# torch.set_float32_matmul_precision('high')
 
 
 #%%
@@ -147,10 +153,8 @@ model = torch.compile(model) if use_compile else model
 # NOTE: I moved the code for optimizer configuration to a separate file called aae_utils.py.
 from aae_utils import ConfigureOptimizer
 
-base_lr = 6e-4 * 4
 
-optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.1, learning_rate = base_lr, device_type=device)
-
+optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.1, learning_rate = config.base_lr, device_type=device)
 
 
 
