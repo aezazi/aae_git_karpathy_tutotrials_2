@@ -7,11 +7,14 @@ from torch.nn import functional as F
 from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
-import aae_model_rotary_moe_ddp as model_rotary_moe
-import aae_model_rotary as model_rotary
+import json
+import aae_model_rotary_moe_dpspd as model_moe
+
 
 # #%%
-assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
+# assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
+if torch.cuda.is_available():
+    gpu_count = torch.cuda.device_count()
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -25,16 +28,85 @@ class GPTConfig:
     vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
-    n_embd: int = 768
     num_experts = 4
-    ep_size = 4
+    world_size = gpu_count
+    ep_size = world_size
     assert ep_size <= num_experts, "ep_size must be less than or equal to num_experts"
     assert num_experts % ep_size == 0, "num_experts must be divisible by ep_size"
     k = 2
     noisy_std = 1.0
+    effective_batch_size_desired_tokens = 524288 # 2^19 ~ .5M to match the original GPT-2 paper.
+    seq_len = 1024
+    effective_batch_size = effective_batch_size_desired_tokens // seq_len 
+    mini_batch_size = 16 # this is the batch size per gpu. The effective batch size is the product of the mini-batch size and the number of gpus.
+    n_embd: int = 768
 
 # instantiate and check the config
 config = GPTConfig()
+
+
+#%%
+# create the deepspeed config.
+ds_config = {
+    # ====== BATCH SETTINGS ======
+    "train_batch_size": config.effective_batch_size,            # Effective batch size
+    "train_micro_batch_size_per_gpu": config.mini_batch_size,   # Micro-batch per GPU
+    # "gradient_accumulation_steps": 8,             # Accumulation to reach 512
+
+    # ====== PRECISION ======
+    "bf16": {
+        "enabled": True                          # Enable bf16 mixed precision
+    },
+    "fp16": {
+        "enabled": False                         # No fp16, using bf16 instead
+    },
+
+    # ====== ZeRO OPTIMIZATION ======
+    "zero_optimization": {
+        "stage": 2,                              # ZeRO stage 2 optimizer sharding
+        "allgather_partitions": True,
+        "reduce_scatter": True,
+        "overlap_comm": True,
+        "contiguous_gradients": True
+    },
+
+    # ====== LR SCHEDULER ======
+    "scheduler": {
+        "type": "WarmupCosineLR",
+        "params": {
+            "warmup_min_lr": 0.0,
+            "warmup_max_lr": 0.0006,
+            "warmup_num_steps": 300,
+            "total_num_steps": 10000
+        }
+    },
+
+    # ====== MoE CONFIG ======
+    "moe": {
+        "enabled": True,                    # Enable Mixture-of-Experts
+        "moe_type": "standard",             # Standard Switch Transformer MoE
+        "num_experts": config.num_experts,  # experts per MoE layer
+        "top_k": config.k,                  # Each token routed to 1 expert (Switch-style)
+        "min_capacity": 4,                  # Minimum slots per expert
+        "capacity_factor": 1.25,            # Expert capacity buffer
+        "gate_type": "noisy",               # Enable noisy gating
+        "noisy_gate_policy": "RSample",     # Add noise before routing
+        "aux_loss_coef": 1e-1,              # Load-balancing auxiliary loss weight
+
+        # Extra tuning
+        "ep_size": config.num_experts,      # shard experts across all GPUs (optional)
+        "moe_param_group": True,            # separate optimizer group for experts
+        "moe_dropout": 0.0,                 # no dropout for large-scale pretraining
+        "use_residual": False               # standard Switch Transformer style
+    },
+
+    # ====== GENERAL ======
+    "gradient_clipping": 1.0,               # Clip global gradient norm
+    "steps_per_print": 10,                  # Log every 10 steps
+    "wall_clock_breakdown": False           # No detailed time breakdown
+}
+
+
 
 print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
 
@@ -54,8 +126,7 @@ if torch.cuda.is_available():
 
 # if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
 
-model = model_rotary_moe.CreateMoE(config=config)
-# model = model_rotary.CreateGPT(config=config)
+model = model_moe.CreateDeepSpeedMoE(config=config)
 
 # compute number of model parameters
 def count_parameters(model):
@@ -70,9 +141,6 @@ model = torch.compile(model) if use_compile else model
 
 
 
-# get the raw model from the DDP wrapper. This is useful for accessing the model's parameters and methods directly. the raw_model is the actual model that we want to optimize. The DDP is just a wrapper that allows us to use distributed data parallelism.
-raw_model = model.module if ddp else model 
-
 
 #%%
 # Instantiate the optimizer.
@@ -81,8 +149,7 @@ from aae_utils import ConfigureOptimizer
 
 base_lr = 6e-4 * 4
 
-# Note that we are using the raw model here, not the DDP wrapped model. This is because the DDP wrapper does not have the optimizer parameters. The raw model is the actual model that we want to optimize.
-optimizer = ConfigureOptimizer(raw_model).create_optimizer(weight_decay=0.1, learning_rate = base_lr, device_type=device)
+optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.1, learning_rate = base_lr, device_type=device)
 
 
 
