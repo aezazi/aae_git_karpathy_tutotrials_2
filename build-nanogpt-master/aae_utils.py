@@ -31,7 +31,7 @@ class ConfigureOptimizer:
         decay_params = set()
         no_decay_params = set()
         for name, parameter in self.model.named_parameters():  
-            if 'bias' in name or 'ln' in name:
+            if "bias" in name or "LayerNorm.weight" in name:
                 no_decay_params.add(name)
             else:
                 decay_params.add(name)

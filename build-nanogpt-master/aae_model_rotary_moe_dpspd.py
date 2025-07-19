@@ -166,26 +166,11 @@ class DeepSpeedMoeLayer(nn.Module):
 
 
 #%%
-@dataclass
-class GPTConfig:
-    seq_len: int = 1024 # max sequence length
-    # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
-    vocab_size: int = 50304
-    n_layer: int = 12
-    n_head: int = 12
-    n_embd: int = 768
-    num_experts = 4
-    ep_size = 4
-    assert ep_size <= num_experts, "ep_size must be less than or equal to num_experts"
-    assert num_experts % ep_size == 0, "num_experts must be divisible by ep_size"
-    k = 2
-    noisy_std = 1.0
-config = GPTConfig()
-test = DeepSpeedMoeLayer(config)
+
 
 
 #%%
-class Block(nn.Module):
+class BlockDeepSpeed(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.ln_1 = nn.LayerNorm(config.n_embd)
@@ -195,18 +180,19 @@ class Block(nn.Module):
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
-        x = x + self.moe(self.ln_2(x))
-        return x
+        moe_out, loss_aux = self.moe(self.ln_2(x))
+        x = x + moe_out
+        return x, loss_aux
 
 # %%
-class CreateMoE(nn.Module):
+class CreateDeepSpeedMoE(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
-            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            layers = nn.ModuleList([BlockDeepSpeed(config) for _ in range(config.n_layer)]),
             ln_f = nn.LayerNorm(config.n_embd)
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # final classier projects from embedding dimension to vocab_size
@@ -242,8 +228,10 @@ class CreateMoE(nn.Module):
         
         # apply the transformer blocks. each block applies layer norm, self-attention, residual connection, layer norm, MoE layer, residual connection
         x = token_embd
-        for block in self.transformer.h:
-            x = block(x)
+        loss_aux_total = 0.0  # initialize the loss auxiliary for the MoE layer
+        for block in self.transformer.layers:
+            x, loss_aux_layer = block(x)
+            loss_aux_total += loss_aux_layer
         
         # apply layer norm to the output of the last transformer block
         x = self.transformer.ln_f(x)
@@ -258,7 +246,9 @@ class CreateMoE(nn.Module):
             # reshape the logits: (B, T, vocab_size) -> (B*T, vocab_size) to match the shape of the targets: (B, T) -> (B*T) and then calculate the cross-entropy loss
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         
-        return logits, loss
+        lambda_aux = 0.01
+        total_loss = loss + (lambda_aux * loss_aux_total)
+        return logits, total_loss
 
 
 #%%
