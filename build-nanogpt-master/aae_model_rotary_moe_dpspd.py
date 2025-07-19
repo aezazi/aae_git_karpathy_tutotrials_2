@@ -134,7 +134,7 @@ def expert_swiglu_moe_fn(config):
 # %%
 # this class implements the full MoE layer in a form that is compatible with DeepSpeed. Note that DeepSpeed intenally takes care of the routing and expert selection, so we only need to define the experts and the gate projection. As compared to the the implementation in aae_model_rotary_moe.py, this class does not implement the routing and and top_k selection. Deepseed handles this internally. What we lose that DS cannot do is per expert weight scaling with learnable weights. This feature is implemented in aae_model_rotary_moe_ddp.py.
 class DeepSpeedMoeLayer(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, ds_config_moe=None):
         super().__init__()
         self.n_embd = config.n_embd
         self.num_experts = config.num_experts
@@ -151,7 +151,7 @@ class DeepSpeedMoeLayer(nn.Module):
             #use_residual=False because in a Transformer MoE layer, the residual connection is handled outside the MoE block, at the Transformer block level, not inside the MoE itself.
             use_residual=False, 
             
-            noisy_gate_policy='RSample' # use DeepSpeed's RSample policy for noisy gating
+            noisy_gate_policy=ds_config_moe["noisy_gate_policy"] if ds_config_moe else "Rsample",
         )
 
     def forward(self, x):
