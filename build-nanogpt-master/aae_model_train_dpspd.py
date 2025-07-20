@@ -125,21 +125,19 @@ print(f"\nTotal parameters: {count_parameters(model):,}\n")
 
 #%%
 import deepspeed.moe.layer as moe_layer
-
-decay_params = []
-no_decay_params = []
-moe_params = []
+import deepspeed.moe.utils
 
 def create_moe_param_groups(model):
     from deepspeed.moe.utils import split_params_into_different_moe_groups_for_optimizer
 
     parameters = {'params': [p for p in model.parameters()], 'name': 'parameters'}
 
-    return split_params_into_different_moe_groups_for_optimizer(parameters), parameters
+    return split_params_into_different_moe_groups_for_optimizer(parameters)
 
 
-t, p = create_moe_param_groups(model)
-p.keys()
+
+
+
 
 #%%
 # Instantiate the optimizer.
@@ -147,7 +145,7 @@ p.keys()
 from aae_utils import ConfigureOptimizerDS
 
 
-optimizer = ConfigureOptimizerDS(model).create_optimizer(weight_decay=0.1, learning_rate = config.base_lr, device_type=device)
+# optimizer = ConfigureOptimizerDS(model).create_optimizer(weight_decay=0.1, learning_rate = config.base_lr, device_type=device)
 
 scheduler = deepspeed.runtime.lr_schedules.WarmupCosineLR(
     optimizer=optimizer,  
@@ -163,6 +161,7 @@ model_engine, optimizer, _, scheduler = deepspeed.initialize(
     model=model,
     optimizer=optimizer,    # manually created AdamW
     lr_scheduler=scheduler, # manually created WarmupCosineLR
+    model_parameters=None,
     config=ds_config   # only contains ZeRO/MoE/etc. (no scheduler section)
 )
 
@@ -301,6 +300,6 @@ if ddp:
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
 
-# torchrun --standalone --nproc_per_node=1 aae_model_train.py
+# deepspeed --num_gpus=1  aae_model_train_dpspd.py
 
 

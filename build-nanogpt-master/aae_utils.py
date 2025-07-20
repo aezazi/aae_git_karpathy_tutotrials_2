@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import deepspeed
 import deepspeed.moe.layer as moe_layer
+import deepspeed.moe.utils as moe_utils
 import tiktoken
 import os
 import numpy as np
@@ -63,16 +64,16 @@ class ConfigureOptimizerDS:
         no_decay_params = []
         moe_params = []
 
-        for name, param in self.model.named_parameters():
+        for p in self.model.parameters():
             # ✅ Detect MoE params (experts, gates)
-            if "moe" in name:
-                moe_params.append(param)
+            if moe_utils.is_moe_param(p):
+                moe_params.append(moe_params)
             
             # ✅ Normal weight decay split
-            elif "bias" in name or "LayerNorm.weight" in name:
-                no_decay_params.append(param)
+            elif "bias" in p.name or "LayerNorm.weight" in p.name:
+                no_decay_params.append(p)
             else:
-                decay_params.append(param)
+                decay_params.append(p)
 
         # === 2. Create optimizer param groups ===
         param_groups = []
