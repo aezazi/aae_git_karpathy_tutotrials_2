@@ -61,36 +61,48 @@ class ConfigureOptimizerDS:
 
         # === 1. Separate params into three categories ===
         decay_params = []
+        non_moe_params = []
         no_decay_params = []
         moe_params = []
 
-        for p in self.model.parameters():
-            # ✅ Detect MoE params (experts, gates)
-            if moe_utils.is_moe_param(p):
-                moe_params.append(moe_params)
+        for name, module in self.model.named_modules():
+            if isinstance(module, moe_layer.MOELayer):
+                # collect all parameters from this MoE module
+                for p in module.parameters():
+                    moe_params.append(p)
+
+        all_params = list(self.model.parameters())
+        non_moe_params = [p for p in all_params if p not in moe_params]
+
+
+        
+        # for p in self.model.parameters():
+        #     # ✅ Detect MoE params (experts, gates)
+        #     if moe_utils.is_moe_param(p):
+        #         moe_params.append(moe_params)
             
-            # ✅ Normal weight decay split
-            elif "bias" in p.name or "LayerNorm.weight" in p.name:
-                no_decay_params.append(p)
-            else:
-                decay_params.append(p)
+        #     # ✅ Normal weight decay split
+        #     elif "bias" in p.name or "LayerNorm.weight" in p.name:
+        #         no_decay_params.append(p)
+        #     else:
+        #         decay_params.append(p)
 
         # === 2. Create optimizer param groups ===
         param_groups = []
 
         # Dense params with weight decay
-        if decay_params:
-            param_groups.append({
-                "params": decay_params,
-                "weight_decay": weight_decay
-            })
+        # if decay_params:
+        #     param_groups.append({
+        #         "params": decay_params,
+        #         "weight_decay": weight_decay
+        #     })
 
-        # Dense params without weight decay
-        if no_decay_params:
-            param_groups.append({
-                "params": no_decay_params,
-                "weight_decay": 0.0
-            })
+        # # Dense params without weight decay
+        # if no_decay_params:
+        #     param_groups.append({
+        #         "params": no_decay_params,
+        #         "weight_decay": 0.0
+        #     })
 
         # MoE params (must mark with "moe": True for DeepSpeed)
         if moe_params:
