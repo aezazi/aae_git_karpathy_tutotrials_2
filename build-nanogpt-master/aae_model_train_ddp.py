@@ -7,7 +7,7 @@ from torch.nn import functional as F
 from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
-import aae_model_rotary_moe as model_rotary_moe
+import aae_model_rotary_moe_ddp as model_rotary_moe
 import aae_model_rotary as model_rotary
 
 # #%%
