@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import deepspeed
-from hellaswag import render_example, iterate_examples
+# from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
 import aae_model_rotary_moe_dpspd as model_moe
@@ -17,6 +17,7 @@ if torch.cuda.is_available():
     gpu_count = torch.cuda.device_count()
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"\nUsing device: {device}")
 
 # %%
 # This is the configuration for the GPT model. It defines the hyperparameters for the model. The block size is the maximum sequence length, vocab size is the size of the vocabulary, n_layer is the number of transformer blocks, n_head is the number of attention heads, and n_embd is the embedding dimension. 
@@ -52,51 +53,72 @@ config = GPTConfig()
 #%%
 # create the deepspeed config.
 ds_config = {
-    # ====== BATCH SETTINGS ======
-    "train_batch_size": config.effective_batch_size,            # Effective batch size
-    "train_micro_batch_size_per_gpu": config.mini_batch_size,   # Micro-batch per GPU
-    # "gradient_accumulation_steps": 8,             # Accumulation to reach 512
+    # === Training batch settings ===
+    "train_batch_size": config.effective_batch_size,           # total global batch size
+    "train_micro_batch_size_per_gpu": config.mini_batch_size,  # per-GPU batch size
+    # "gradient_accumulation_steps": 4,
 
-    # ====== PRECISION ======
-    "bf16": {
-        "enabled": True                          # Enable bf16 mixed precision
-    },
+    # === Mixed precision ===
     "fp16": {
-        "enabled": False                         # No fp16, using bf16 instead
+        "enabled": False
+    },
+    "bf16": {
+        "enabled": True
     },
 
-    # ====== ZeRO OPTIMIZATION ======
+    # === ZeRO optimization ===
     "zero_optimization": {
-        "stage": 2,                              # ZeRO stage 2 optimizer sharding
+        "stage": 2,
+        "offload_param": {
+            "device": "none"
+        },
         "allgather_partitions": True,
         "reduce_scatter": True,
+        "reduce_bucket_size": 5e8,
+        "allgather_bucket_size": 5e8,
         "overlap_comm": True,
         "contiguous_gradients": True
     },
 
-    # ====== MoE CONFIG ======
-    "moe": {
-        "enabled": True,                    # Enable Mixture-of-Experts
-        "moe_type": "standard",             # Standard Switch Transformer MoE
-        "num_experts": config.num_experts,  # experts per MoE layer
-        "top_k": config.k,                  # Each token routed to 1 expert (Switch-style)
-        "min_capacity": 4,                  # Minimum slots per expert
-        "capacity_factor": 1.25,            # Expert capacity buffer
-        "gate_type": "noisy",               # Enable noisy gating
-        "noisy_gate_policy": "RSample",     # Add noise before routing
-        "aux_loss_coef": 1e-1,              # Load-balancing auxiliary loss weight
-
-        # Extra tuning
-        "ep_size": config.num_experts,      # shard experts across all GPUs (optional)
-        "moe_param_group": False,            # separate optimizer group for experts
-        "moe_dropout": 0.0,                 # no dropout for large-scale pretraining
-        "use_residual": False               # standard Switch Transformer style
+    # === Optimizer ===
+    "optimizer": {
+        "type": "AdamW",
+        "params": {
+            "lr": 3e-4,
+            "betas": [0.9, 0.95],
+            "eps": 1e-8,
+            "weight_decay": 0.1
+        }
     },
 
-    # ====== GENERAL ======
-    "gradient_clipping": 1.0,               # Clip global gradient norm
-    "steps_per_print": 10,                  # Log every 10 steps
-    "wall_clock_breakdown": False           # No detailed time breakdown
+    # === LR Scheduler ===
+    "scheduler": {
+        "type": "WarmupLR",
+        "params": {
+            "warmup_min_lr": 0.0,
+            "warmup_max_lr": 3e-4,
+            "warmup_num_steps": 1000
+        }
+    },
+
+    # === MoE-specific configuration ===
+    "moe": {
+        "enabled": True,
+        "num_experts": 16,              # total experts per MoE layer
+        "top_k": 2,                     # number of experts to activate per token
+        "capacity_factor": 1.25,        # controls expert load capacity
+        "min_capacity": 4,              # minimum tokens per expert
+        "noisy_gate_policy": "RSample", # or None, 'Jitter'
+        "use_residual": False,          # enable residual MoE connections
+        "aux_loss_coeff": 0.01          # auxiliary loss weight for balancing
+    },
+
+    # ✅ Crucial for auto MoE param grouping
+    "moe_param_group": True,
+
+    # === Misc ===
+    "gradient_clipping": 1.0,
+    "wall_clock_breakdown": False
 }
 
 print(f"\nusing device: {device}")
@@ -112,7 +134,7 @@ if torch.cuda.is_available():
 # %%
 #Instantiate the model. Note that we do not use torch.compile since it's not comaptible with DeepSpeed MoE layer
 
-model = model_moe.CreateDeepSpeedMoE(config=config, ds_config_moe=ds_config["moe"])
+model = model_moe.CreateDeepSpeedMoE(config=config)
 
 # compute number of model parameters
 def count_parameters(model):
@@ -124,20 +146,27 @@ print(f"\nTotal parameters: {count_parameters(model):,}\n")
 # torch.set_float32_matmul_precision('high')
 
 #%%
-import deepspeed.moe.layer as moe_layer
-import deepspeed.moe.utils
+# import deepspeed.moe.layer as moe_layer
+# import deepspeed.moe.utils
 
-def create_moe_param_groups(model):
-    from deepspeed.moe.utils import split_params_into_different_moe_groups_for_optimizer
+moe_params = []
+non_moe_params = []
 
-    parameters = {'params': [p for p in model.parameters()], 'name': 'parameters'}
+# for name, param in model.named_parameters():
+#     if "deepspeed_moe_experts" in name or "experts" in name:   # adjust as needed
+#         moe_params.append(param)
+#     else:
+#         non_moe_params.append(param)
 
-    return split_params_into_different_moe_groups_for_optimizer(parameters)
+# param_groups = [
+#     {"params": non_moe_params},  # regular params
+#     {"params": moe_params, "moe": True, "name": "expert"}  # ✅ name required
+# ]
 
+# for name, _ in model.named_parameters():
+#     print(name)
 
-
-
-
+# len(moe_params)
 
 #%%
 # Instantiate the optimizer.
@@ -145,23 +174,15 @@ def create_moe_param_groups(model):
 from aae_utils import ConfigureOptimizerDS
 
 
-# optimizer = ConfigureOptimizerDS(model).create_optimizer(weight_decay=0.1, learning_rate = config.base_lr, device_type=device)
 
-scheduler = deepspeed.runtime.lr_schedules.WarmupCosineLR(
-    optimizer=optimizer,  
-    warmup_min_ratio=0.0,
-    warmup_num_steps=config.warm_up_steps,
-    total_num_steps=config.train_steps,
-    cos_min_ratio=config.min_lr_ratio
-)
 
 #%%
 # Initialize DeepSpeed engine. This is where the model, optimizer, and scheduler are wrapped in a DeepSpeed engine.
 model_engine, optimizer, _, scheduler = deepspeed.initialize(
     model=model,
-    optimizer=optimizer,    # manually created AdamW
-    lr_scheduler=scheduler, # manually created WarmupCosineLR
-    model_parameters=None,
+    # optimizer=optimizer,    # manually created AdamW
+    # lr_scheduler=scheduler, # manually created WarmupCosineLR
+    model_parameters=model.parameters(),
     config=ds_config   # only contains ZeRO/MoE/etc. (no scheduler section)
 )
 

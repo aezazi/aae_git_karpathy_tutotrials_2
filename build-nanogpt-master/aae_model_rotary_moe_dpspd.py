@@ -151,7 +151,7 @@ class DeepSpeedMoeLayer(nn.Module):
             #use_residual=False because in a Transformer MoE layer, the residual connection is handled outside the MoE block, at the Transformer block level, not inside the MoE itself.
             use_residual=False, 
             
-            noisy_gate_policy=ds_config_moe["noisy_gate_policy"] if ds_config_moe else "Rsample",
+            noisy_gate_policy="RSample",
         )
 
     def forward(self, x):
