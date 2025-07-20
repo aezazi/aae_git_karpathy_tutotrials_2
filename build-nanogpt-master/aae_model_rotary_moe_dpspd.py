@@ -166,17 +166,13 @@ class DeepSpeedMoeLayer(nn.Module):
 
 
 #%%
-
-
-
-#%%
 class BlockDeepSpeed(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, ds_config_moe=None):
         super().__init__()
         self.ln_1 = nn.LayerNorm(config.n_embd)
         self.attn = CausalSelfAttention(config)
         self.ln_2 = nn.LayerNorm(config.n_embd)
-        self.moe = DeepSpeedMoeLayer(config)
+        self.moe = DeepSpeedMoeLayer(config, ds_config_moe) # pass the ds_config_moe to the MoE layer
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
@@ -186,13 +182,13 @@ class BlockDeepSpeed(nn.Module):
 
 # %%
 class CreateDeepSpeedMoE(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, ds_config_moe=None):
         super().__init__()
         self.config = config
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
-            layers = nn.ModuleList([BlockDeepSpeed(config) for _ in range(config.n_layer)]),
+            layers = nn.ModuleList([BlockDeepSpeed(config, ds_config_moe) for _ in range(config.n_layer)]),
             ln_f = nn.LayerNorm(config.n_embd)
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # final classier projects from embedding dimension to vocab_size
