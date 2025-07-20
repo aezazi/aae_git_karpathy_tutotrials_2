@@ -3,6 +3,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import deepspeed
+import deepspeed.moe.layer as moe_layer
 import tiktoken
 import os
 import numpy as np
@@ -46,6 +48,66 @@ class ConfigureOptimizer:
         else:
             optimizer = torch.optim.AdamW(param_groups, lr=learning_rate, betas=(0.9, 0.95), weight_decay=weight_decay, eps=1e-8, fused=False)
         
+        return optimizer
+    
+
+class ConfigureOptimizerDS:
+    def __init__(self, model):
+        self.model = model
+
+    def create_optimizer(self, weight_decay=0.01, learning_rate=6e-4, device_type=None):
+        assert device_type is not None, "a device_type must be specified"
+
+        # === 1. Separate params into three categories ===
+        decay_params = []
+        no_decay_params = []
+        moe_params = []
+
+        for name, param in self.model.named_parameters():
+            # ✅ Detect MoE params (experts, gates)
+            if "moe" in name:
+                moe_params.append(param)
+            
+            # ✅ Normal weight decay split
+            elif "bias" in name or "LayerNorm.weight" in name:
+                no_decay_params.append(param)
+            else:
+                decay_params.append(param)
+
+        # === 2. Create optimizer param groups ===
+        param_groups = []
+
+        # Dense params with weight decay
+        if decay_params:
+            param_groups.append({
+                "params": decay_params,
+                "weight_decay": weight_decay
+            })
+
+        # Dense params without weight decay
+        if no_decay_params:
+            param_groups.append({
+                "params": no_decay_params,
+                "weight_decay": 0.0
+            })
+
+        # MoE params (must mark with "moe": True for DeepSpeed)
+        if moe_params:
+            param_groups.append({
+                "params": moe_params,
+                "weight_decay": weight_decay,
+                "moe": True    # ✅ REQUIRED for DeepSpeed MoE + ZeRO
+            })
+
+        # === 3. Create optimizer (fused if CUDA) ===
+        optimizer = torch.optim.AdamW(
+            param_groups,
+            lr=learning_rate,
+            betas=(0.9, 0.95),
+            eps=1e-8,
+            fused=True if device_type == "cuda" else False
+        )
+
         return optimizer
 
 # %%

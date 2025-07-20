@@ -74,17 +74,6 @@ ds_config = {
         "contiguous_gradients": True
     },
 
-    # ====== LR SCHEDULER ======
-    "scheduler": {
-        "type": "WarmupCosineLR",
-        "params": {
-            "total_num_steps": config.train_steps,
-            "warmup_min_ratio": 0.0,
-            "warmup_num_steps": config.warm_up_steps,
-            "cos_min_ratio": config.min_lr_ratio,  # Min ratio of max LR
-        }
-    },
-
     # ====== MoE CONFIG ======
     "moe": {
         "enabled": True,                    # Enable Mixture-of-Experts
@@ -99,7 +88,7 @@ ds_config = {
 
         # Extra tuning
         "ep_size": config.num_experts,      # shard experts across all GPUs (optional)
-        "moe_param_group": True,            # separate optimizer group for experts
+        "moe_param_group": False,            # separate optimizer group for experts
         "moe_dropout": 0.0,                 # no dropout for large-scale pretraining
         "use_residual": False               # standard Switch Transformer style
     },
@@ -110,15 +99,10 @@ ds_config = {
     "wall_clock_breakdown": False           # No detailed time breakdown
 }
 
-
+print(f"\nusing device: {device}")
 
 print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
 
-
-
-#%%
-
-print(f"\nusing device: {device}")
 
 torch.manual_seed(42) # set the random seed for reproducibility
 if torch.cuda.is_available():
@@ -126,11 +110,9 @@ if torch.cuda.is_available():
 
 
 # %%
-#Instantiate the model and implement torch.compile if cuda is available.
+#Instantiate the model. Note that we do not use torch.compile since it's not comaptible with DeepSpeed MoE layer
 
-# if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
-
-model = model_moe.CreateDeepSpeedMoE(config=config)
+model = model_moe.CreateDeepSpeedMoE(config=config, ds_config_moe=ds_config["moe"])
 
 # compute number of model parameters
 def count_parameters(model):
@@ -138,26 +120,53 @@ def count_parameters(model):
 
 print(f"\nTotal parameters: {count_parameters(model):,}\n")
 
-# Note that we do not use torch.compile since it's not comaptible with DeepSpeed MoE layer
+
 # torch.set_float32_matmul_precision('high')
 
+#%%
+import deepspeed.moe.layer as moe_layer
+
+decay_params = []
+no_decay_params = []
+moe_params = []
+
+def create_moe_param_groups(model):
+    from deepspeed.moe.utils import split_params_into_different_moe_groups_for_optimizer
+
+    parameters = {'params': [p for p in model.parameters()], 'name': 'parameters'}
+
+    return split_params_into_different_moe_groups_for_optimizer(parameters), parameters
+
+
+t, p = create_moe_param_groups(model)
+p.keys()
 
 #%%
 # Instantiate the optimizer.
 # NOTE: I moved the code for optimizer configuration to a separate file called aae_utils.py.
-from aae_utils import ConfigureOptimizer
+from aae_utils import ConfigureOptimizerDS
 
 
-optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.1, learning_rate = config.base_lr, device_type=device)
+optimizer = ConfigureOptimizerDS(model).create_optimizer(weight_decay=0.1, learning_rate = config.base_lr, device_type=device)
 
 scheduler = deepspeed.runtime.lr_schedules.WarmupCosineLR(
-    optimizer=optimizer,  # Placeholder, will be set later
+    optimizer=optimizer,  
     warmup_min_ratio=0.0,
     warmup_num_steps=config.warm_up_steps,
     total_num_steps=config.train_steps,
     cos_min_ratio=config.min_lr_ratio
 )
 
+#%%
+# Initialize DeepSpeed engine. This is where the model, optimizer, and scheduler are wrapped in a DeepSpeed engine.
+model_engine, optimizer, _, scheduler = deepspeed.initialize(
+    model=model,
+    optimizer=optimizer,    # manually created AdamW
+    lr_scheduler=scheduler, # manually created WarmupCosineLR
+    config=ds_config   # only contains ZeRO/MoE/etc. (no scheduler section)
+)
+
+print(f'I am here')
 # %%
 # Instantiate the dataloader and load the data. 
 from aae_dataloader_utils import DataLoaderShardMultiGPU
@@ -182,35 +191,7 @@ if master_process:
     print(f"\neffective batch size desired: {effective_batch_size_desired}")
     print(f"accumulation steps desired: {accumulation_steps_desired}")
 
-#%%
-# Instantiate the learning rate scheduler 
-# NOTE: I moved the code for the scheduler to a separate aae_utils.py file.
-from aae_utils import CosineLearingRateScheduler
 
-# 19,073 steps is ~1 epoch, if data is 10B tokens and batch size 0.5M tokens
-training_steps = 19703
-
-# define the scheduler parameters
-# the number of iterations over which lr is reduced to the minimum
-T_max = training_steps 
-
-max_lr = base_lr # max learning rate
-min_lr = max_lr * 0.1 # min learning rate
-
-# modified from gpt paper per AK suggestion to be more aggresive with startup steps than paper
-warm_up_steps = 300 
-
-# whether to use cosine annealing with restarts or not
-restart = False 
-
-# if using restarts, the number of iterations over which lr is reduced to the minimum before restart
-T_0 = T_max // 4 
-
-T_mult = 3 # the factor by which T_0 is multiplied at each restart.
-
-# instantiate and create learning rate scheduler
-scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=T_max, restart=restart, warm_up_steps=warm_up_steps, max_lr=max_lr, min_lr=min_lr, T_mult=T_mult, T_0=T_0)
-print(f'\nScheduler initialized on GPU rank {ddp_rank}, of {ddp_world_size}\n')
 
 #%%
 # create log files, loggers, and evaluators to store training loss, learning rate, validation loss, hellaswag eval results, and generate sample text.
