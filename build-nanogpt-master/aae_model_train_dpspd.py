@@ -114,13 +114,7 @@ ds_config = {
 
 print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
 
-scheduler = deepspeed.runtime.lr_schedules.WarmupCosineLR(
-    optimizer=None,  # Placeholder, will be set later
-    warmup_min_ratio=0.0,
-    warmup_num_steps=config.warm_up_steps,
-    total_num_steps=config.train_steps,
-    cos_min_ratio=config.min_lr_ratio
-)
+
 
 #%%
 
@@ -156,7 +150,13 @@ from aae_utils import ConfigureOptimizer
 
 optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.1, learning_rate = config.base_lr, device_type=device)
 
-
+scheduler = deepspeed.runtime.lr_schedules.WarmupCosineLR(
+    optimizer=optimizer,  # Placeholder, will be set later
+    warmup_min_ratio=0.0,
+    warmup_num_steps=config.warm_up_steps,
+    total_num_steps=config.train_steps,
+    cos_min_ratio=config.min_lr_ratio
+)
 
 # %%
 # Instantiate the dataloader and load the data. 
