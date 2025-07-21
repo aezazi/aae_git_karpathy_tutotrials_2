@@ -40,8 +40,9 @@ print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: 
 #%%
 # DDP setup
 from torch.distributed import init_process_group, destroy_process_group
-from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
 
 # Check if we are running in DDP mode. If so, we will initialize the process group and set the device for each process.
 
@@ -57,11 +58,13 @@ if FSDP:
     FSDP_world_size = int(os.environ['WORLD_SIZE']) # get the total number of processes
     
     # set the device to the local rank of the current process
-    device = f'cuda:{ddp_local_rank}' 
+    device = f'cuda:{FSDP_local_rank}' 
     torch.cuda.set_device(device) # set the device for the current process
 
     # the master process will perform logging and saving checkpoints.
-    master_process = (ddp_rank == 0)
+    master_process = (FSDP_rank == 0)
+
+    print(f'\nFSDP initialized on device: {device}, rank: {FSDP_rank}, local rank: {FSDP_local_rank}, world size: {FSDP_world_size}')
 
 # if not using FSDP, just use the next best available option
 else: 
@@ -283,11 +286,11 @@ for step in range(training_steps):
     if ((step % 500 == 0 and step > 0) or last_step):
         eval_log_utils.GenerateSample(log_params=log_params).generate(context="Hello, I'm a language model,", sample_max_length=32)
 
-if ddp:
+if FSDP:
     destroy_process_group()
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
 
-# torchrun --standalone --nproc_per_node=1 aae_model_train_ddp.py
+# torchrun --nproc_per_node=1 aae_model_train_moe_fsdp.py
 
 
