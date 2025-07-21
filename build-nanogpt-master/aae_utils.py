@@ -3,9 +3,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import deepspeed
-import deepspeed.moe.layer as moe_layer
-import deepspeed.moe.utils as moe_utils
+# import deepspeed
+# import deepspeed.moe.layer as moe_layer
+# import deepspeed.moe.utils as moe_utils
 import tiktoken
 import os
 import numpy as np
