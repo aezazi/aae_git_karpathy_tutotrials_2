@@ -7,8 +7,8 @@ from torch.nn import functional as F
 from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
-import aae_model_moe_ddp as model_rotary_moe
-import aae_model_rotary as model_rotary
+import aae_model_moe_fsdp as model_fsdp
+
 
 # #%%
 # assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
@@ -38,7 +38,6 @@ print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: 
 
 
 #%%
-
 # DDP setup
 from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -46,16 +45,16 @@ import torch.distributed as dist
 
 # Check if we are running in DDP mode. If so, we will initialize the process group and set the device for each process.
 
-# a simple way to check whether your script is being run under Distributed Data Parallel (DDP) — specifically when using torchrun with a cuda GPU. Note that you can be in DDP mode even with a single GPU when using torchrun. 
-ddp = int(os.environ.get('RANK', -1)) != -1
+# a simple way to check whether your script is being run under Fully Sharded Data Parallel (FSDP) — specifically when using torchrun with a cuda GPU. Note that you can be in DDP mode even with a single GPU when using torchrun. 
+FSDP = int(os.environ.get('RANK', -1)) != -1
 
-if ddp:
-    print(f'\nRunning in Distributed Data Parallel (DDP) mode')
+if FSDP:
+    print(f'\nRunning in Distributed Data Parallel (FSDP) mode')
     # Note that LOCAL_RANK is the rank of the process on one given machine (when using multiple machine), while RANK is the rank of the process across all machines (when using multiple gpus on multiple machines). When using a setup with just one machine, LOCAL_RANK and RANK are the same. 
-    init_process_group(backend='nccl') # initialize the process group for DDP
-    ddp_rank = int(os.environ['RANK']) # get the rank of the current process
-    ddp_local_rank = int(os.environ['LOCAL_RANK']) # get the local rank of the current process
-    ddp_world_size = int(os.environ['WORLD_SIZE']) # get the total number of processes
+    init_process_group(backend='nccl') # initialize the process group for FSDP
+    FSDP_rank = int(os.environ['RANK']) # get the rank of the current process
+    FSDP_local_rank = int(os.environ['LOCAL_RANK']) # get the local rank of the current process
+    FSDP_world_size = int(os.environ['WORLD_SIZE']) # get the total number of processes
     
     # set the device to the local rank of the current process
     device = f'cuda:{ddp_local_rank}' 
@@ -64,7 +63,7 @@ if ddp:
     # the master process will perform logging and saving checkpoints.
     master_process = (ddp_rank == 0)
 
-# if not using DDP, just use the next best available option
+# if not using FSDP, just use the next best available option
 else: 
     if torch.cuda.is_available():
         device = torch.device('cuda')
