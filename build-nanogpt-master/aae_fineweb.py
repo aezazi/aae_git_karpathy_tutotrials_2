@@ -120,7 +120,7 @@ def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=s
                 # print(f'concacting example: {i} to shard: {shard_idx}')
                 # print(f'shard_token_count: {shard_token_count:,}')
         
-            
+        # If we have iterated through all the tokens in the dataset and the shard is not full, write any remaining tokens as the last shard. 
         if shard_token_count > 0:
                 split = 'val' if shard_idx == 0 else 'train'
                 shard_save_path = os.path.join(shard_dir, f'{split}_shard_{shard_idx:04d}')
