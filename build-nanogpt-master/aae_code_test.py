@@ -963,3 +963,14 @@ print(f"\nSelected rows:\n{selected_rows}")
 mode = str(input("\nEnter parallelization mode 'ddp' or 'dps' for DeepSpeed: ")).strip().lower()
 if mode not in ['ddp', 'dps']:
     raise ValueError(f"Invalid parallelization mode: {mode}. Please enter 'ddp' or 'dps' : ")
+
+#%%
+from datasets import load_dataset
+dataset_iterator = load_dataset("HuggingFaceFW/fineweb-edu", split="train", name="sample-10BT", streaming=False)
+# %%
+print(len(dataset_iterator))  # Check the number of documents in the dataset
+for i, data in enumerate(dataset_iterator):
+    print(f"\nDocument {i}: {data['text'][:100]}...\n")  
+    if i == 5:  # Limit to first 5 documents for demonstration
+        break
+# %%
