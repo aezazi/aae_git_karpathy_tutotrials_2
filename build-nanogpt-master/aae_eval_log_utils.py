@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 @dataclass
 class LogParamsFilesConfig:
-    ddp: bool 
+    fsdp_ddp: bool 
     world_size: int 
     rank: int 
     local_rank: int
@@ -62,7 +62,7 @@ class TrainLoss():
         self.step = log_params.step
         self.loss_accum = log_params.loss_accum
         self.train_loss_file = log_params.train_loss_file
-        self.master_process = log_params.ddp_rank == 0
+        self.master_process = log_params.rank == 0
     
     def log_training_loss(self):
         with open(self.train_loss_file, "a") as f:
@@ -74,7 +74,7 @@ class LearningRate():
         self.step = log_params.step
         self.lr = log_params.lr
         self.lr_file = log_params.lr_file
-        self.master_process = log_params.ddp_rank == 0
+        self.master_process = log_params.rank == 0
 
     def log_learning_rate(self):
         with open(self.lr_file, "a") as f:
@@ -85,10 +85,10 @@ class HellaSwag:
     def __init__(self, log_params):
         self.model = log_params.model
         self.device = log_params.device
-        self.ddp = log_params.ddp
-        self.ddp_world_size = log_params.ddp_world_size
-        self.ddp_rank = log_params.ddp_rank
-        self.master_process = log_params.ddp_rank == 0
+        self.fsdp_ddp = log_params.fsdp_ddp
+        self.world_size = log_params.world_size
+        self.rank = log_params.rank
+        self.master_process = log_params.rank == 0
         self.step = log_params.step
         self.log_file = log_params.hella_accu_file
         

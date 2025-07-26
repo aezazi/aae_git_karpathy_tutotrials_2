@@ -27,7 +27,7 @@ class GPTConfig:
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
-    num_experts = 8
+    num_experts = 4
     k = 2
 
 # instantiate and check the config
@@ -96,6 +96,7 @@ if torch.cuda.is_available():
 
 
 model = model_fsdp.CreateMoESharded(config=config)
+model.to(device)
 
 
 # compute number of model parameters
@@ -105,9 +106,6 @@ def count_parameters(model):
 print(f"\nTotal parameters: {count_parameters(model):,}\n")
 
 torch.set_float32_matmul_precision('high')
-device_id = FSDP_local_rank
-torch.cuda.set_device(device_id)
-model = model.to(torch.device(f"cuda:{device_id}"))
 
 if FSDP_check:
     from aae_model_moe_fsdp import Block
@@ -204,10 +202,10 @@ print(f'\nScheduler initialized on GPU rank {FSDP_rank}, of {FSDP_world_size}\n'
 # create log files, loggers, and evaluators to store training loss, learning rate, validation loss, hellaswag eval results, and generate sample text.
 import aae_eval_log_utils as eval_log_utils
 log_params = eval_log_utils.LogParamsFilesConfig(
-    fsdp = FSDP_check,
-    FSDP_world_size = FSDP_world_size,
-    FSDP_rank = FSDP_rank,
-    # FSDP_local_rank = FSDP_local_rank
+    fsdp_ddp = FSDP_check,
+    world_size = FSDP_world_size,
+    rank = FSDP_rank,
+    local_rank = FSDP_local_rank,
     model = model,
     device = device,
     encoder = tiktoken.get_encoding('gpt2'),

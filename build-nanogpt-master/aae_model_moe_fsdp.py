@@ -274,14 +274,14 @@ class MoELayerSharded(nn.Module):
          # compute auxiliary load balancing loss
         # first compute the average weight given to each expert by the top_k router. This is how much the router wanted to send to each expert.
         avg_weight_per_expert = top_k_gated_weights_flat.mean(0) # shape(num_experts)
-        print(f'\navg_weight_per_expert:\n {avg_weight_per_expert}\n')
+        # print(f'\navg_weight_per_expert:\n {avg_weight_per_expert}\n')
 
         # compute average number of tokens processed by each expert. This is  how many tokens were actually sent to each expert. To compute this, I use the gated_weights_flat (batch_size*seq_len, num_experts) with non_zero elements only for tokens where the expert was in the top_k. I replace the non-zero element with 1.0 which serves as a counter for the expert having processed that token. Finally, I take the mean to compute the average number of tokens processed by each expert across all batches.
        
         # Replaces elements != 0 with 1.0 and takes the mean over (batch*seq_len).result has shape(num_experts)
         avg_tokens_per_expert = torch.where(top_k_gated_weights_flat != 0, 1.0, 0).mean(0)
 
-        print(f'\navg_tokens_per_expert: \n {avg_tokens_per_expert}\n')
+        # print(f'\navg_tokens_per_expert: \n {avg_tokens_per_expert}\n')
 
 
         # refer to literature on why this formula for the load balancing loss
@@ -300,12 +300,9 @@ class Block(nn.Module):
         self.moe = MoELayerSharded(config)
 
     def forward(self, x):
-        attn_out, _ = self.attn(x)
-        x = x + attn_out
-        x = self.ln_1(x)
-        moe_out, aux_loss = self.moe(x)
+        x = x + self.attn(self.ln_1(x))
+        moe_out, aux_loss = self.moe(self.ln_2(x))  
         x = x + moe_out
-        x = self.ln_2(x)
         return x, aux_loss
 
 # %%
@@ -326,19 +323,6 @@ class CreateMoESharded(nn.Module):
 
         # initialization
         self.apply(self._init_weights)
-
-    # this Karpathy's weight initialization code 
-    # def _init_weights(self, module):
-    #     if isinstance(module, nn.Linear):
-    #         std = 0.02
-    #         if hasattr(module, 'NANOGPT_SCALE_INIT'):
-    #             std *= (2 * self.config.n_layer) ** -0.5
-    #         torch.nn.init.normal_(module.weight, mean=0.0, std=std)
-    #         if module.bias is not None:
-    #             torch.nn.init.zeros_(module.bias)
-    #     elif isinstance(module, nn.Embedding):
-    #         torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-
 
     def _init_weights(self, module):
     # Standard GPT-style init
@@ -393,7 +377,7 @@ class CreateMoESharded(nn.Module):
             # reshape the logits: (B, T, vocab_size) -> (B*T, vocab_size) to match the shape of the targets: (B, T) -> (B*T) and then calculate the cross-entropy loss
             main_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         
-        total_loss = main_loss + aux_loss_total
+        total_loss = main_loss + (.01*aux_loss_total)
         
         return logits, total_loss
 
