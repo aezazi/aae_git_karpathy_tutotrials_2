@@ -15,9 +15,9 @@ from dataclasses import dataclass
 @dataclass
 class LogParamsFilesConfig:
     ddp: bool 
-    ddp_world_size: int 
-    ddp_rank: int 
-    # ddp_local_rank: int
+    world_size: int 
+    rank: int 
+    local_rank: int
     model: object 
     device: str
     encoder: object
