@@ -41,8 +41,9 @@ print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: 
 # DDP setup
 from torch.distributed import init_process_group, destroy_process_group
 import torch.distributed as dist
+import torch.multiprocessing as mp
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
+from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
 # Check if we are running in DDP mode. If so, we will initialize the process group and set the device for each process.
 
@@ -53,12 +54,12 @@ if FSDP:
     print(f'\nRunning in Distributed Data Parallel (FSDP) mode')
     # Note that LOCAL_RANK is the rank of the process on one given machine (when using multiple machine), while RANK is the rank of the process across all machines (when using multiple gpus on multiple machines). When using a setup with just one machine, LOCAL_RANK and RANK are the same. 
     init_process_group(backend='nccl') # initialize the process group for FSDP
-    FSDP_rank = int(os.environ['RANK']) # get the rank of the current process
+    FSDP_rank = dist.get_rank() # get the rank of the current process
     FSDP_local_rank = int(os.environ['LOCAL_RANK']) # get the local rank of the current process
-    FSDP_world_size = int(os.environ['WORLD_SIZE']) # get the total number of processes
+    FSDP_world_size = dist.get_world_size() # get the total number of processes
     
     # set the device to the local rank of the current process
-    device = f'cuda:{FSDP_local_rank}' 
+    device = f'cuda:{FSDP_rank}' 
     torch.cuda.set_device(device) # set the device for the current process
 
     # the master process will perform logging and saving checkpoints.
@@ -92,8 +93,8 @@ if torch.cuda.is_available():
 
 # if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
 
-model = model_rotary_moe.CreateMoE(config=config)
-# model = model_rotary.CreateGPT(config=config)
+model = model_fsdp.CreateMoESharded(config=config)
+
 
 # compute number of model parameters
 def count_parameters(model):
@@ -103,16 +104,18 @@ print(f"\nTotal parameters: {count_parameters(model):,}\n")
 
 torch.set_float32_matmul_precision('high')
 model.to(device)
-use_compile = True # set to True to use torch.compile
+
+if FSDP:
+# wrap model in FSDP
+    model = FSDP(model, auto_wrap_policy=transformer_auto_wrap_policy, device_id=FSDP_rank)
+    print(f'\nModel wrapped in FSDP on device: {device}')
+
+use_compile = False # set to True to use torch.compile
 model = torch.compile(model) if use_compile else model 
 
-# wrap the model in DDP if using DDP
-if ddp:
-    model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=True)
-    print(f'\nModel wrapped in DDP on device: {device}')
 
 # get the raw model from the DDP wrapper. This is useful for accessing the model's parameters and methods directly. the raw_model is the actual model that we want to optimize. The DDP is just a wrapper that allows us to use distributed data parallelism.
-raw_model = model.module if ddp else model 
+# raw_model = model.module if ddp else model 
 
 
 #%%
@@ -123,10 +126,10 @@ from aae_utils import ConfigureOptimizer
 base_lr = 6e-4 * 4
 
 # Note that we are using the raw model here, not the DDP wrapped model. This is because the DDP wrapper does not have the optimizer parameters. The raw model is the actual model that we want to optimize.
-optimizer = ConfigureOptimizer(raw_model).create_optimizer(weight_decay=0.1, learning_rate = base_lr, device_type=device)
+optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.1, learning_rate = base_lr, device_type=device)
 
-if ddp:
-    print(f'\nOptimizer initialized on GPU rank {ddp_rank}, device {device}')
+if FSDP:
+    print(f'\nOptimizer initialized on GPU rank {FSDP_rank}, device {device}')
 
 
 # %%
@@ -187,7 +190,7 @@ print(f'\nScheduler initialized on GPU rank {ddp_rank}, of {ddp_world_size}\n')
 # create log files, loggers, and evaluators to store training loss, learning rate, validation loss, hellaswag eval results, and generate sample text.
 import aae_eval_log_utils as eval_log_utils
 log_params = eval_log_utils.LogParamsFilesConfig(
-    ddp = ddp,
+    fsdp = FSDP,
     ddp_world_size = ddp_world_size,
     ddp_rank = ddp_rank,
     # ddp_local_rank = ddp_local_rank
@@ -227,7 +230,7 @@ for step in range(training_steps):
         x, y = x.to(device), y.to(device) # move the data to the device. 
 
         # By default, ddp synchronizes the loss from each process after each micro step by taking an average of all the processes and making that average the loss for all the processes for that step. Its very inefficient to do this at each micro_step. So we want to only synchronize gradients among all the processes on the last micro step. See Karpathy's video tutorial at 2:57:00 for more details. The code below sets the require_backward_grad_sync attribute of the model to True only on the last micro step. 
-        if ddp:
+        if FSDP:
             model.require_backward_grad_sync = (micro_step == micro_steps - 1) 
 
         # we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs. The device must be cuda.
@@ -243,7 +246,7 @@ for step in range(training_steps):
         loss.backward()
 
 
-    if ddp:
+    if FSDP:
         dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG)
 
     # clip the gradients to prevent exploding gradients

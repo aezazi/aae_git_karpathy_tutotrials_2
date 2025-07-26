@@ -115,13 +115,13 @@ class ExpertMoESwiglu(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.hidden_dim = config.n_embd * 4 # hidden dimension for the expert
-        self.ln_1 = nn.Linear(config.n_embd, self.hidden_dim) 
-        self.ln_2 = nn.Linear(config.n_embd, self.hidden_dim)
+        self.linear_1 = nn.Linear(config.n_embd, self.hidden_dim) 
+        self.linear_2 = nn.Linear(config.n_embd, self.hidden_dim)
         self.c_proj = nn.Linear(self.hidden_dim, config.n_embd)
         # torch.manual_seed(42)
 
     def forward(self, x):
-        x =self.ln_1(x) * F.silu(self.ln_2(x))  # this is Swiglu activation
+        x =self.linear_1(x) * F.silu(self.linear_2(x))  # this is Swiglu activation
         x= self.c_proj(x)
         return x
     
@@ -290,6 +290,7 @@ class CreateMoE(nn.Module):
             std = 0.02
             if hasattr(module, 'NANOGPT_SCALE_INIT'):
                 std *= (2 * self.config.n_layer) ** -0.5
+                # print('i am here')
             torch.nn.init.normal_(module.weight, mean=0.0, std=std)
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)

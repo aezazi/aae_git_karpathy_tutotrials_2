@@ -965,6 +965,7 @@ if mode not in ['ddp', 'dps']:
     raise ValueError(f"Invalid parallelization mode: {mode}. Please enter 'ddp' or 'dps' : ")
 
 #%%
+# experimenting with creating a dataset iterator from huggingface dataset
 from datasets import load_dataset
 dataset_iterator = load_dataset("HuggingFaceFW/fineweb-edu", split="train", name="sample-10BT", streaming=False)
 # %%
@@ -973,4 +974,34 @@ for i, data in enumerate(dataset_iterator):
     print(f"\nDocument {i}: {data['text'][:100]}...\n")  
     if i == 5:  # Limit to first 5 documents for demonstration
         break
+
+#%%
+world_size = 4
+num_experts = 8
+local_rank = 1
+
+local_expert_ids = [e_idx for e_idx in range(num_experts) if e_idx % world_size == local_rank]
+
+print(local_expert_ids)
+
+local_experts = nn.ModuleList([nn.Sequential(
+                nn.Linear(3, 12),
+                nn.ReLU(),
+                nn.Linear(12, 3)
+            ) for _ in local_expert_ids])
+
+len(local_experts)
+
+z = zip(local_expert_ids, local_experts)
+for i, expert in z:
+    print(f'\nexpert_{i}:   {expert}\n')
+
+mod = nn.Sequential(
+                nn.Linear(3, 12),
+                nn.ReLU(),
+                nn.Linear(12, 3)
+            ) 
+d = {e_idx: mod for e_idx in range(num_experts) if e_idx % world_size == local_rank}
+
+print(d)
 # %%

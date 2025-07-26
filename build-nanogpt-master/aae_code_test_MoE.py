@@ -63,8 +63,11 @@ class ExpertMoESwiglu(nn.Module):
         super().__init__()
         self.hidden_dim = config.n_embd * 4 # hidden dimension for the expert
         self.ln_1 = nn.Linear(config.n_embd, self.hidden_dim) 
+        self.ln_1._am_expert =True
         self.ln_2 = nn.Linear(config.n_embd, self.hidden_dim)
+        self.ln_2._am_expert =True
         self.c_proj = nn.Linear(self.hidden_dim, config.n_embd)
+        self.c_proj._am_expert =True
         # torch.manual_seed(42)
 
     def forward(self, x):
@@ -145,6 +148,7 @@ class MoELayer(nn.Module):
 
         # Create a list of experts, each expert is an instance of the ExpertMoESwiglu class
         self.experts = nn.ModuleList([ExpertMoESwiglu(config) for _ in range(self.num_experts)])
+       
         torch.manual_seed(42)
 
     def forward(self, x):
@@ -163,15 +167,17 @@ class MoELayer(nn.Module):
         # flatten the gated probabilities to (batch_size * seq_len, num_experts) for batch processing
         gated_weights_flat = gated_weights.view(batch_size*seq_len, self.num_experts)  
 
+        
+
         # Iterate over each expert and apply it to the input
         for i, expert in enumerate(self.experts):
-            # Create a mask for the inputs where the current expert is in top-k. the mask will have shape (batch_size, seq_len) and will be True for the tokens where expert i is in the top_k indices.
+            # Create a mask for the inputs where the current expert is in top-k. the mask will have shape (batch_size, seq_len). top_k_indices have shape (B, seq_len, top_k). Each row of each batch in top_k_indices has the indices of the top two experts for the token corresponding that row in the token sequence. The mask will return True (row wise) if expert i is in the top_k indices 
             print(f'\nExpert {i} with x_flat input shape {x_flat.shape}\n')
             print(f'top_k_indices shape: {top_k_indices.shape} \n{top_k_indices}\n')
             expert_mask = (top_k_indices == i).any(dim=-1)
             print(f'expert_mask shape: {expert_mask.shape} \n{expert_mask}\n')
 
-            # flatten the mask to match the shape of the flattened input x_flat. Note that the shape of flat_mask is a one dimensional (batch_size*seq_len). x_flat has shape (batch_size * seq_len, n_embd). each row in x_flat is a token in the sequence. Pytorch applies the mask to the rows of x_flat
+            # flatten the mask to match the shape of the flattened input x_flat. Note that the shape of flat_mask is a one dimensional (batch_size*seq_len). x_flat has shape (batch_size * seq_len, n_embd). each row in x_flat is a token in the sequence. 
             flat_mask = expert_mask.view(-1) # (batch_size * seq_len)
             print(f'flat_mask shape: {flat_mask.shape} \n{flat_mask}\n')
 
@@ -206,15 +212,46 @@ class MoELayer(nn.Module):
                 # print(f'{torch.allclose(final_output, final_test)}')
 
             break
+        
+        # compute auxiliary load balancing loss
+        # first compute the average weight given to each expert by the top_k router. This is how much the router wanted to send to each expert.
+        avg_weight_per_expert = gated_weights_flat.mean(0) # shape(num_experts)
+        print(f'\navg_weight_per_expert:\n {avg_weight_per_expert}\n')
 
-        return final_output
+        # compute average number of tokens processed by each expert. This is  how many tokens were actually sent to each expert. To compute this, I use the gated_weights_flat (batch_size*seq_len, num_experts) with non_zero elements only for tokens where the expert was in the top_k. I replace the non-zero element with 1.0 which serves as a counter for the expert having processed that token. Finally, I take the mean to compute the average number of tokens processed by each expert across all batches.
+       
+        # Replaces elements != 0 with 1.0 and takes the mean over (batch*seq_len).result has shape(num_experts)
+        avg_tokens_per_expert = torch.where(gated_weights_flat != 0, 1.0, 0).mean(0)
+
+        print(f'\navg_tokens_per_expert: \n {avg_tokens_per_expert}\n')
+
+
+        # refer to literature on why this formula for the load balancing loss
+        aux_loss = (avg_tokens_per_expert * avg_weight_per_expert).sum() * self.num_experts
+
+        return final_output, aux_loss
     
 # %%
 # test the MoE class
 batch_size = 3
 example_input = torch.randn(batch_size, config.seq_len, config.n_embd)
 moe_layer = MoELayer(config)
-output = moe_layer(example_input)
+
+
+# output, aux_loss = moe_layer(example_input)
+
+# print(moe_layer.__getattr__)
+for e in moe_layer.experts:
+    print(e.ln_1._am_expert)
+
+if isinstance(moe_layer, nn.Linear):
+    std = 0.02  # default GPT init
+    # if hasattr(moe_layer, "_is_expert"):
+    #     print('i am an expert')
+    #     std = 0.01  # ✅ smaller init for MoE experts
+    # else:
+    #         print('not working')
+    print('xxxxx')
 
 
 
@@ -224,19 +261,280 @@ output = moe_layer(example_input)
 # 1. Define the 2D tensor
 data = torch.tensor([[1, 2, 3],
                      [4, 5, 6],
-                     [7, 8, 9],
-                     [10, 11, 12]])
+                     [7, 1, 9],
+                     [10, 1, 12]])
 
 print(f"Original data tensor:\n{data}")
 
-# 2. Create the boolean mask to select specific rows (e.g., row 0 and row 2)
-mask = torch.tensor([True, False, True, False])
+# 2. Create the boolean mask that returns true if any element in a row of data is ==1
+mask = (data==1).any(dim=-1)
 print(f"\nBoolean mask:\n{mask}")
 
-# 3. Apply the mask to select entire rows
-selected_rows = data[mask]
+# 3. Apply the mask to all rows and select all columns
+selected_rows = data[mask,:]
 print(f"\nSelected rows:\n{selected_rows}")
 
+# Apply the mask to all rows and select column 0
 selected_rows_col = data[mask,0]
-print(f"\nSelected rows col:\n{selected_rows_col}")
+print(f"\nSelected rows col 0:\n{selected_rows_col}")
+
+# select the second and third column of the masked data. 
+selected_rows_col = data[mask,1:3]
+print(f"\nSelected rows col 1-3:\n{selected_rows_col}")
+
+# create a column wise mask
+mask = (data==1).any(dim=0)
+print(f"\ncolumn wise Boolean mask:\n{mask}")
+
+# 3. Apply the mask to select cols
+selected_cols = data[:,mask]
+print(f"\nSelected cols:\n{selected_cols}")
 # %%
+
+
+
+
+import os
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.distributed as dist
+import torch.multiprocessing as mp
+
+# ✅ FSDP
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
+from torch.optim import AdamW
+
+###############################################################################
+# 1. Mixture-of-Experts Layer (manual expert sharding + all-reduce)
+###############################################################################
+
+class DistributedMoE(nn.Module):
+    def __init__(self, hidden_dim, expert_dim, num_experts, k=1):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.expert_dim = expert_dim
+        self.num_experts = num_experts
+        self.k = k  # top-k gating
+
+        # ✅ Gating network (dense, FSDP will shard it)
+        self.gate = nn.Linear(hidden_dim, num_experts)
+
+        # ✅ Distributed info
+        if dist.is_initialized():
+            self.world_size = dist.get_world_size()
+            self.rank = dist.get_rank()
+        else:
+            self.world_size = 1
+            self.rank = 0
+
+        # ✅ Only assign a subset of experts to this GPU
+        self.local_expert_ids = [
+            e_idx for e_idx in range(num_experts)
+            if e_idx % self.world_size == self.rank
+        ]
+
+        # ✅ Create experts for this GPU
+        self.local_experts = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(hidden_dim, expert_dim),
+                nn.ReLU(),
+                nn.Linear(expert_dim, hidden_dim)
+            )
+            for _ in self.local_expert_ids
+        ])
+
+    def forward(self, x):
+        """
+        x: [B, hidden_dim]
+        returns: y (combined expert output), aux_loss (Switch-style)
+        """
+        B, H = x.shape
+
+        # ✅ Step 1: Gating softmax
+        logits = self.gate(x)                  # [B, num_experts]
+        probs = F.softmax(logits, dim=-1)      # [B, num_experts]
+
+        # ✅ Step 2: Select top-k experts per token
+        topk_vals, topk_idx = torch.topk(probs, self.k, dim=-1)  # [B, k]
+
+        # ✅ Step 3: Partial output for only local experts
+        y_partial = torch.zeros_like(x)        # [B, H]
+
+        # ✅ Step 4: Process tokens routed to *this GPU’s* experts
+        for expert_id, expert_module in zip(self.local_expert_ids, self.local_experts):
+            mask = (topk_idx == expert_id).any(dim=-1)  # [B]
+            if mask.any():
+                selected = x[mask]                    # [n_tokens, H]
+                out = expert_module(selected)         # [n_tokens, H]
+
+                # ✅ Weight outputs by gating prob & scale by 1/k (Switch style)
+                scaling = (probs[mask, expert_id] / self.k).unsqueeze(-1)
+                y_partial[mask] += out * scaling
+
+        # ✅ Step 5: All-reduce to combine all GPUs’ outputs
+        if self.world_size > 1:
+            dist.all_reduce(y_partial, op=dist.ReduceOp.SUM)
+
+        # ✅ Step 6: Switch Transformer load-balancing loss
+        num_experts = self.num_experts
+
+        # Soft load: mean gating prob per expert
+        prob_per_expert = probs.mean(0)  # [num_experts]
+
+        # Hard load: fraction of tokens routed
+        expert_mask = torch.zeros_like(probs)
+        expert_mask.scatter_(1, topk_idx, 1.0)
+        tokens_per_expert = expert_mask.mean(0)
+
+        # Switch load balancing loss
+        aux_loss = (prob_per_expert * tokens_per_expert).sum() * num_experts
+
+        return y_partial, aux_loss
+
+###############################################################################
+# 2. Transformer Block
+###############################################################################
+
+class TransformerBlock(nn.Module):
+    def __init__(self, hidden_dim, num_heads, moe_num_experts=None, moe_expert_dim=None, top_k=1):
+        super().__init__()
+        self.attn = nn.MultiheadAttention(hidden_dim, num_heads, batch_first=True)
+        self.norm1 = nn.LayerNorm(hidden_dim)
+        self.norm2 = nn.LayerNorm(hidden_dim)
+
+        # ✅ Always MoE in this example
+        self.moe = DistributedMoE(hidden_dim, moe_expert_dim, moe_num_experts, k=top_k)
+
+    def forward(self, x):
+        attn_out, _ = self.attn(x, x, x)
+        x = x + attn_out
+        x = self.norm1(x)
+
+        moe_out, aux_loss = self.moe(x)
+        x = x + moe_out
+
+        x = self.norm2(x)
+        return x, aux_loss
+
+###############################################################################
+# 3. MoE Transformer
+###############################################################################
+
+class TinyMoETransformer(nn.Module):
+    def __init__(self, vocab_size, hidden_dim, num_layers, num_heads, moe_num_experts, moe_expert_dim, top_k=1):
+        super().__init__()
+        self.embed = nn.Embedding(vocab_size, hidden_dim)
+        self.blocks = nn.ModuleList([
+            TransformerBlock(hidden_dim, num_heads, moe_num_experts, moe_expert_dim, top_k=top_k)
+            for _ in range(num_layers)
+        ])
+        self.norm = nn.LayerNorm(hidden_dim)
+        self.lm_head = nn.Linear(hidden_dim, vocab_size, bias=False)
+
+    def forward(self, x):
+        aux_total = 0.0
+        x = self.embed(x)  # [B, T, H]
+
+        for blk in self.blocks:
+            x, aux_loss = blk(x)
+            aux_total = aux_total + aux_loss
+
+        x = self.norm(x)
+        logits = self.lm_head(x)  # [B, T, vocab_size]
+        return logits, aux_total
+
+###############################################################################
+# ✅ Custom Initialization: GPT-style + scaled-down experts
+###############################################################################
+
+def moe_init_weights(module):
+    if isinstance(module, nn.Linear):
+        # Detect if it's inside an expert by name
+        if "local_experts" in module._get_name().lower():
+            # ✅ Smaller init for experts (stability)
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.01)
+        else:
+            # ✅ GPT-style for other linear layers
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+        if module.bias is not None:
+            torch.nn.init.zeros_(module.bias)
+
+    elif isinstance(module, nn.Embedding):
+        torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+###############################################################################
+# 4. Training loop with FSDP wrapping
+###############################################################################
+
+def train_fsdp(rank, world_size):
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
+
+    # Dummy training config
+    vocab_size = 10000
+    hidden_dim = 512
+    num_layers = 2
+    num_heads = 8
+    num_experts = 8
+    expert_dim = 1024
+    seq_len = 128
+    batch_size = 16
+    aux_loss_weight = 0.01
+    top_k = 2  # Use top-2 routing for Switch-like behavior
+
+    # ✅ Create model
+    model = TinyMoETransformer(
+        vocab_size=vocab_size,
+        hidden_dim=hidden_dim,
+        num_layers=num_layers,
+        num_heads=num_heads,
+        moe_num_experts=num_experts,
+        moe_expert_dim=expert_dim,
+        top_k=top_k
+    ).cuda(rank)
+
+    # ✅ Apply custom init
+    model.apply(moe_init_weights)
+
+    # ✅ Auto-wrap policy for FSDP
+    auto_wrap_policy = transformer_auto_wrap_policy
+
+    # ✅ Wrap model in FSDP
+    model = FSDP(model, auto_wrap_policy=auto_wrap_policy, device_id=rank)
+
+    # ✅ Fused AdamW (PyTorch 2.x)
+    optimizer = AdamW(model.parameters(), lr=3e-4, fused=True)
+
+    # Dummy data
+    inputs = torch.randint(0, vocab_size, (batch_size, seq_len), device=rank)
+    labels = torch.randint(0, vocab_size, (batch_size, seq_len), device=rank)
+
+    for step in range(10):
+        optimizer.zero_grad()
+
+        logits, aux_loss = model(inputs)
+        main_loss = F.cross_entropy(logits.view(-1, vocab_size), labels.view(-1))
+        total_loss = main_loss + aux_loss_weight * aux_loss
+
+        total_loss.backward()
+        optimizer.step()
+
+        if rank == 0:
+            print(f"[Step {step}] main_loss={main_loss.item():.4f} aux_loss={aux_loss.item():.4f} total={total_loss.item():.4f}")
+
+    dist.destroy_process_group()
+
+###############################################################################
+# 5. Spawn training
+###############################################################################
+
+def main():
+    world_size = torch.cuda.device_count()
+    print(f"Launching FSDP MoE training on {world_size} GPUs...")
+    mp.spawn(train_fsdp, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == "__main__":
+    main()

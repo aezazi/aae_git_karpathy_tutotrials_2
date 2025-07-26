@@ -5,6 +5,12 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+import torch.multiprocessing as mp
+
+import torch.distributed as dist
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
+
 from hellaswag import render_example, iterate_examples
 
 #%%
@@ -91,7 +97,7 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, seq_len, self.n_head, n_embd // self.n_head) # (B, seq_len, n_heads, dim_heads)
         q = q.view(B, seq_len, self.n_head, n_embd // self.n_head) # (B, seq_len, n_heads, dim_heads)
     
-        # apply rotation and transpose. the reshaping to (B, n_heads, seq_len, dim_heads) is to accommodate the matrix multiplication of k, q, and v along the desiored dimensions
+        # apply rotation and transpose. the reshaping to (B, n_heads, seq_len, dim_heads) is to accommodate the matrix multiplication of k, q, and v along the desired dimensions
         k_rot = self.rot_embed.apply_rotation(x=k).transpose(1, 2) # (B, n_heads, seq_len, dim_heads)
         q_rot = self.rot_embed.apply_rotation(x=q).transpose(1, 2) # (B, n_heads, seq_len, dim_heads)
         
@@ -115,13 +121,17 @@ class ExpertMoESwiglu(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.hidden_dim = config.n_embd * 4 # hidden dimension for the expert
-        self.ln_1 = nn.Linear(config.n_embd, self.hidden_dim) 
-        self.ln_2 = nn.Linear(config.n_embd, self.hidden_dim)
+       
+        self.linear_1 = nn.Linear(config.n_embd, self.hidden_dim) 
+        self.linear_1._am_expert =True
+        self.linear_2 = nn.Linear(config.n_embd, self.hidden_dim)
+        self.linear_2._am_expert =True
         self.c_proj = nn.Linear(self.hidden_dim, config.n_embd)
+        self.c_proj._am_expert =True
         # torch.manual_seed(42)
 
     def forward(self, x):
-        x =self.ln_1(x) * F.silu(self.ln_2(x))  # this is Swiglu activation
+        x =self.linear_1(x) * F.silu(self.linear_2(x))  # this is Swiglu activation
         x= self.c_proj(x)
         return x
     
@@ -168,34 +178,44 @@ class TopKMoEGate(nn.Module):
 
         # scatter fills the zeros tensor with the top_k_logits at the indices of the top_k_indices along the last dimension (-1). This creates a sparse matrix where only the top-k logits are kept and the rest are filled with negative infinity.
         sparse_logits_noisy = zeros.scatter(-1, top_k_indices_noisy, top_k_logits_noisy)
-        gated_weights = F.softmax(sparse_logits_noisy, dim=-1)
+        top_k_gated_weights = F.softmax(sparse_logits_noisy, dim=-1)
 
-        return gated_weights, top_k_indices_noisy, top_k_logits_noisy
+        return top_k_gated_weights, top_k_indices_noisy, top_k_logits_noisy
 
 
 # %%
 # this class implements the full MoE layer. It uses the TopKMoEGate class to compute the gated weights and the top-k indices, and then applies each expert to the input based on these indices. The output is a weighted sum of the expert outputs, where the weights are the gated weights.
-class MoELayer(nn.Module):
+class MoELayerSharded(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.num_experts = config.num_experts
         self.sq_len = config.seq_len
         self.k = config.k
     
-        # Create a linear layer to project the multi-head attention output to the number of experts. This layer will compute the logits for each expert. the logits will have shape (batch_size, seq_len, num_experts) 
+        # Instantiate top_k gating
         self.gate = TopKMoEGate(config)
 
-        # Create a list of experts, each expert is an instance of the ExpertMoESwiglu class
-        self.experts = nn.ModuleList([ExpertMoESwiglu(config) for _ in range(self.num_experts)])
-        torch.manual_seed(42)
+        # note that when on multiple gpus, FSDP or DDP launch identical processes on each gpu. So a separate instance of this module will be launched on each gpu. Each instance will have a different local_rank corresponding to the gpu it was launched on. dist.getrank() returns the local_rank of each process/gpu.
+        self.local_rank = dist.get_rank()
+        self.world_size = dist.get_world_size()
+
+
+        # This is a clever algo GPT suggested for assigning experts to GPUs. It's called "round robin" assignment. It assigns only a subset of experts to the GPU running this instance of the module. If remainder of expert_idx/world_size == local_rank, create and add an expert to this GPU
+        self.local_expert_ids = [e_idx for e_idx in range(self.num_experts) if e_idx % self.world_size == self.local_rank]
+                
+
+        # create ModuleList with an expert (instance of ExpertMoeSwiglu) for each index in local_experts_ids
+        self.local_experts = nn.ModuleList([ExpertMoESwiglu(config) for _ in self.local_expert_ids])
+        
+       
 
     def forward(self, x):
         batch_size, seq_len, _ = x.shape
-        # Get the gated weights and top-k indices from the gate
-        gated_weights, top_k_indices, top_k_logits = self.gate(x)
+        # Get the top_k gated weights and top-k indices from the gate
+        top_k_gated_weights, top_k_indices, top_k_logits = self.gate(x)
 
-        # Initialize the fianl output tensor
-        final_output = torch.zeros_like(x)
+        # tensor to hold the output from just in the experts in this process
+        y_partial_output = torch.zeros_like(x)
         # print(f'\ninput x shape: {x.shape} \n{x}\n')
 
         # flatten the input to (batch_size * seq_len, n_embd) for batch processing
@@ -203,17 +223,17 @@ class MoELayer(nn.Module):
         # print(f'\ninput x_flat shape: {x_flat.shape} \n{x_flat}\n')
 
         # flatten the gated weights to (batch_size * seq_len, num_experts) for batch processing
-        gated_weights_flat = gated_weights.view(batch_size*seq_len, self.num_experts)  
+        top_k_gated_weights_flat = top_k_gated_weights.view(batch_size*seq_len, self.num_experts)  
 
-        # Iterate over each expert and apply it to the input
-        for i, expert in enumerate(self.experts):
-            # Create a mask for the inputs where the current expert is in top-k. the mask will have shape (batch_size, seq_len) and will be True for the tokens where expert i is in the top_k indices.
+        # Iterate over each expert  assigned to this GPU and apply it to the input
+        for expert_id, expert_module in zip(self.local_expert_ids, self.local_experts):
+            # Create a mask for the inputs where the current expert is in top-k. the mask will have shape (batch_size, seq_len). top_k_indices have shape (B, seq_len, top_k). Each row of each batch in top_k_indices has the indices of the top two experts for the token corresponding that row in the token sequence. The mask will return True (row wise) if expert i is in the top_k indices. S
             # print(f'\nExpert {i} with x_flat input shape {x_flat.shape}\n')
             # print(f'top_k_indices shape: {top_k_indices.shape} \n{top_k_indices}\n')
-            expert_mask = (top_k_indices == i).any(dim=-1)
+            expert_mask = (top_k_indices == expert_id).any(dim=-1)
             # print(f'expert_mask shape: {expert_mask.shape} \n{expert_mask}\n')
 
-            # flatten the mask to match the shape of the flattened input x_flat. Note that the shape of flat_mask is a one dimensional (batch_size*seq_len). x_flat has shape (batch_size * seq_len, n_embd). each row in x_flat is a token in the sequence. Pytorch applies the mask to the rows of x_flat based on shape matching.
+            # flatten the mask to match the shape of the flattened input x_flat. Note that the shape of flat_mask is a one dimensional (batch_size*seq_len). x_flat has shape (batch_size * seq_len, n_embd). each row in x_flat is a token in the sequence. 
             flat_mask = expert_mask.view(-1) # (batch_size * seq_len)
             # print(f'flat_mask shape: {flat_mask.shape} \n{flat_mask}\n')
 
@@ -223,12 +243,12 @@ class MoELayer(nn.Module):
                 # print(f'\nexpert_input shape: {expert_input.shape} \n{expert_input}\n')
                 
                 # apply expert i to the expert_input. Again, note that based on the mask described above, epxert i is applied only to the tokens where it is in the top_k indices.
-                expert_output = expert(expert_input) # (number of tokens where expert i is in top_k, n_embd)
+                expert_output = expert_module(expert_input) # (number of tokens where expert i is in top_k, n_embd)
                 # print(f'expert_output shape: {expert_output.shape} \n{expert_output}\n')
 
                 # Now we need to scale the expert output by the gated weights for the tokens where the expert is in the top_k indices. gated_weights_flat has shape (batch_size * seq_len, num_experts). We apply the same mask as we used to create expert_input to select all rows from gated_weights_flat where expert i is in the top_k indices, then we select the ith column. This returns the weighting for expert i that is to be applied to the tokens where expert i is in the top_k indices. This is the same as selecting all the non_zero values in the ith column of gated_weights_flat. We  then use unsqueeze(1) to add a dimension to create a column vector of shape (number of tokens where expert i is in top_k, 1). this allows  multiplication with the expert_output which has shape (number of tokens where expert i is in top_k, n_embd). 
                 # print(f'gated_weights_flat shape: {gated_weights_flat.shape} \n{gated_weights_flat}\n')
-                expert_weights = gated_weights_flat[flat_mask, i].unsqueeze(1)  # (number of tokens where expert i is in top_k, 1)
+                expert_weights = top_k_gated_weights_flat[flat_mask, expert_id].unsqueeze(1)  # (number of tokens where expert i is in top_k, 1)
                 # print(f'expert_weights shape: {expert_weights.shape} \n{expert_weights}\n')
 
                 # Scale the expert_output by expert_weights.
@@ -239,17 +259,36 @@ class MoELayer(nn.Module):
                 # print(f'final_output shape before adding expert_output_weighted:{final_output.shape} \n{final_output}\n')
 
                 # the huggingface implementation uses .squeeze(1) to remove any singleton dimensions from  the expert_output_weighted tensor. Not sure why this is needed. I tried removing it and the shapes were still compatible and the result the same
-                final_output[expert_mask] += expert_output_weighted.squeeze(1) # (batch_size, seq_len, n_embd)
+                y_partial_output[expert_mask] += expert_output_weighted.squeeze(1) # (batch_size, seq_len, n_embd)
                 # print(f'final_output shape after adding expert_output_weighted:{final_output.shape} \n{final_output}\n')
 
                 ## just a test to see if .squeeze(1) is necessary
                 # final_test = torch.zeros_like(x)
                 # final_test[expert_mask] += expert_output_weighted
                 # print(f'{torch.allclose(final_output, final_test)}')
+        
+        # each instance
+        if self.world_size > 1:
+            dist.all_reduce(y_partial_output, op=dist.ReduceOp.SUM)
 
-            # break
+         # compute auxiliary load balancing loss
+        # first compute the average weight given to each expert by the top_k router. This is how much the router wanted to send to each expert.
+        avg_weight_per_expert = top_k_gated_weights_flat.mean(0) # shape(num_experts)
+        print(f'\navg_weight_per_expert:\n {avg_weight_per_expert}\n')
 
-        return final_output
+        # compute average number of tokens processed by each expert. This is  how many tokens were actually sent to each expert. To compute this, I use the gated_weights_flat (batch_size*seq_len, num_experts) with non_zero elements only for tokens where the expert was in the top_k. I replace the non-zero element with 1.0 which serves as a counter for the expert having processed that token. Finally, I take the mean to compute the average number of tokens processed by each expert across all batches.
+       
+        # Replaces elements != 0 with 1.0 and takes the mean over (batch*seq_len).result has shape(num_experts)
+        avg_tokens_per_expert = torch.where(top_k_gated_weights_flat != 0, 1.0, 0).mean(0)
+
+        print(f'\navg_tokens_per_expert: \n {avg_tokens_per_expert}\n')
+
+
+        # refer to literature on why this formula for the load balancing loss
+        aux_loss = (avg_tokens_per_expert * avg_weight_per_expert).sum() * self.num_experts
+            
+
+        return y_partial_output, aux_loss
 
 #%%
 class Block(nn.Module):
@@ -258,15 +297,19 @@ class Block(nn.Module):
         self.ln_1 = nn.LayerNorm(config.n_embd)
         self.attn = CausalSelfAttention(config)
         self.ln_2 = nn.LayerNorm(config.n_embd)
-        self.moe = MoELayer(config)
+        self.moe = MoELayerSharded(config)
 
     def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
-        x = x + self.moe(self.ln_2(x))
-        return x
+        attn_out, _ = self.attn(x)
+        x = x + attn_out
+        x = self.ln_1(x)
+        moe_out, aux_loss = self.moe(x)
+        x = x + moe_out
+        x = self.ln_2(x)
+        return x, aux_loss
 
 # %%
-class CreateMoE(nn.Module):
+class CreateMoESharded(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -276,7 +319,7 @@ class CreateMoE(nn.Module):
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = nn.LayerNorm(config.n_embd)
         ))
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # final classier projects from embedding dimension to vocab_size
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # final classifier projects from embedding dimension to vocab_size
 
         # weight tying design. the idea is to tie the weights of the input and output embeddings so that they are the same. This is done to reduce the number of parameters in the model and to improve generalization. 
         self.transformer.wte.weight = self.lm_head.weight
@@ -284,22 +327,46 @@ class CreateMoE(nn.Module):
         # initialization
         self.apply(self._init_weights)
 
-    # this Karpathy's weight initialization code that I dont really follow
+    # this Karpathy's weight initialization code 
+    # def _init_weights(self, module):
+    #     if isinstance(module, nn.Linear):
+    #         std = 0.02
+    #         if hasattr(module, 'NANOGPT_SCALE_INIT'):
+    #             std *= (2 * self.config.n_layer) ** -0.5
+    #         torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+    #         if module.bias is not None:
+    #             torch.nn.init.zeros_(module.bias)
+    #     elif isinstance(module, nn.Embedding):
+    #         torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+
     def _init_weights(self, module):
+    # Standard GPT-style init
+        std = 0.02
+
         if isinstance(module, nn.Linear):
-            std = 0.02
+            # ✅ Detect if this linear is inside an MoE expert
+            if hasattr(module, "_am_expert"):
+                # Experts get smaller init for stability
+                std = 0.01
+            
+            # ✅ GPT residual scaling (e.g. output projection)
             if hasattr(module, 'NANOGPT_SCALE_INIT'):
                 std *= (2 * self.config.n_layer) ** -0.5
-            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+            
+            nn.init.normal_(module.weight, mean=0.0, std=std)
+
             if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
+                nn.init.zeros_(module.bias)
+
         elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, idx, targets=None):
         # idx is the input sequence of token ids
-
         B, T = idx.shape
+
+        aux_loss_total = 0 # varible to carry accumulated aux_loss from ech transformer block
 
         # this checks if the input sequence is longer than the block size
         assert T <= self.config.seq_len, f"Cannot forward sequence of length {T}, sequence length is only {self.config.seq_len}"
@@ -310,7 +377,8 @@ class CreateMoE(nn.Module):
         # apply the transformer blocks. each block applies layer norm, self-attention, residual connection, layer norm, MoE layer, residual connection
         x = token_embd
         for block in self.transformer.h:
-            x = block(x)
+            x, aux_loss = block(x)
+            aux_loss_total += aux_loss
         
         # apply layer norm to the output of the last transformer block
         x = self.transformer.ln_f(x)
@@ -323,9 +391,11 @@ class CreateMoE(nn.Module):
         if targets is not None:
             # Pytorch's cross-entropy loss expects the logits to be of shape (B*T, vocab_size) and the targets to be of shape (B*T). So we need to reshape the logits and targets to match this shape.
             # reshape the logits: (B, T, vocab_size) -> (B*T, vocab_size) to match the shape of the targets: (B, T) -> (B*T) and then calculate the cross-entropy loss
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+            main_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         
-        return logits, loss
+        total_loss = main_loss + aux_loss_total
+        
+        return logits, total_loss
 
 
 #%%
