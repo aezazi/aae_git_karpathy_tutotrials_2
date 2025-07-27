@@ -15,9 +15,7 @@ assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devic
 
 # %%
 # This is the configuration for the GPT model. It defines the hyperparameters for the model. The block size is the maximum sequence length, vocab size is the size of the vocabulary, n_layer is the number of transformer blocks, n_head is the number of attention heads, and n_embd is the embedding dimension. 
-"""
-Note that in the initialization of the network in the ffn class, we are multiplying n_embd (the dimensions of the original embeddings) by 4. So for the inner layers, the dimensionality of the model is 384 * 4 =1536. 
-"""
+
 
 @dataclass
 class GPTConfig:
@@ -35,7 +33,9 @@ config = GPTConfig()
 
 print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
 
-
+"""
+Note that in the initialization of the network in the ffn class, we are multiplying n_embd (the dimensions of the original embeddings) by 4. So for the inner layers, the dimensionality of the model is 768 * 4  
+"""
 
 #%%
 # FSDP setup
@@ -46,7 +46,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 import functools
 
-# Check if we are running in DDP mode. If so, we will initialize the process group and set the device for each process.
+# Check if we are running in FSDP mode. If so, we will initialize the process group and set the device for each process.
 
 # a simple way to check whether your script is being run under Fully Sharded Data Parallel (FSDP) — specifically when using torchrun with a cuda GPU. Note that you can be in DDP mode even with a single GPU when using torchrun. 
 FSDP_check = int(os.environ.get('RANK', -1)) != -1
@@ -125,9 +125,7 @@ if FSDP_check:
 use_compile = False # set to True to use torch.compile
 model = torch.compile(model) if use_compile else model 
 
-
-# get the raw model from the DDP wrapper. This is useful for accessing the model's parameters and methods directly. the raw_model is the actual model that we want to optimize. The DDP is just a wrapper that allows us to use distributed data parallelism.
-# raw_model = model.module if ddp else model 
+# NOTE: With FSDP, we do not need to pass model.module to the optimizer as we do when using DDP: optimizer = torch.optim.AdamW(model.module.parameters(), lr=lr). DDP is just a wrapper around your model that adds gradient syncing.The actual parameters live inside model.module. FSDP replaces the original module with a wrapped version that manages sharding. The wrapped model itself already exposes the correct sharded parameters.
 
 
 #%%
@@ -209,7 +207,6 @@ log_params = eval_log_utils.LogParamsFilesConfig(
     model = model,
     device = device,
     encoder = tiktoken.get_encoding('gpt2'),
-    # optimizer = optimizer,
     val_loader = val_loader,
     loss_dir = "train_loss",
     hella_accu_dir = "hella_accuracy",

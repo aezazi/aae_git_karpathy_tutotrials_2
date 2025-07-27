@@ -60,7 +60,6 @@ class RotaryPosEmbed(nn.Module):
         
         return x_rot
 
-
 #%%
 class CausalSelfAttention(nn.Module):
 

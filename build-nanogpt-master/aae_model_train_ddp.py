@@ -15,9 +15,7 @@ import aae_model_rotary as model_rotary
 
 # %%
 # This is the configuration for the GPT model. It defines the hyperparameters for the model. The block size is the maximum sequence length, vocab size is the size of the vocabulary, n_layer is the number of transformer blocks, n_head is the number of attention heads, and n_embd is the embedding dimension. 
-"""
-Note that in the initialization of the network in the ffn class, we are multiplying n_embd (the dimensions of the original embeddings) by 4. So for the inner layers, the dimensionality of the model is 384 * 4 =1536. 
-"""
+
 
 @dataclass
 class GPTConfig:
@@ -35,10 +33,13 @@ config = GPTConfig()
 
 print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
 
+"""
+Note that in the initialization of the network in the ffn class, we are multiplying n_embd (the dimensions of the original embeddings) by 4. So for the inner layers, the dimensionality of the model is 768 * 4 
+"""
+
 
 
 #%%
-
 # DDP setup
 from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -53,9 +54,9 @@ if ddp:
     print(f'\nRunning in Distributed Data Parallel (DDP) mode')
     # Note that LOCAL_RANK is the rank of the process on one given machine (when using multiple machine), while RANK is the rank of the process across all machines (when using multiple gpus on multiple machines). When using a setup with just one machine, LOCAL_RANK and RANK are the same. 
     init_process_group(backend='nccl') # initialize the process group for DDP
-    ddp_rank = int(os.environ['RANK']) # get the rank of the current process
+    ddp_rank = dist.get_rank() # get the rank of the current process
     ddp_local_rank = int(os.environ['LOCAL_RANK']) # get the local rank of the current process
-    ddp_world_size = int(os.environ['WORLD_SIZE']) # get the total number of processes
+    ddp_world_size = dist.get_world_size() # get the total number of processes
     
     # set the device to the local rank of the current process
     device = f'cuda:{ddp_local_rank}' 
@@ -63,6 +64,8 @@ if ddp:
 
     # the master process will perform logging and saving checkpoints.
     master_process = (ddp_rank == 0)
+
+    print(f'\nDDP initialized on device: {device}, rank: {ddp_rank}, local rank: {ddp_local_rank}, world size: {ddp_world_size}')
 
 # if not using DDP, just use the next best available option
 else: 
@@ -91,7 +94,6 @@ if torch.cuda.is_available():
 # if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
 
 model = model_rotary_moe.CreateMoE(config=config)
-# model = model_rotary.CreateGPT(config=config)
 
 # compute number of model parameters
 def count_parameters(model):
@@ -109,7 +111,10 @@ if ddp:
     model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=True)
     print(f'\nModel wrapped in DDP on device: {device}')
 
-# get the raw model from the DDP wrapper. This is useful for accessing the model's parameters and methods directly. the raw_model is the actual model that we want to optimize. The DDP is just a wrapper that allows us to use distributed data parallelism.
+
+use_compile = True # set to True to use torch.compile
+model = torch.compile(model) if use_compile else model 
+# get the raw model from the DDP wrapper. DDP is just a wrapper around your model that adds gradient syncing.The actual parameters live inside model.module. So thats what we will need to pass to the optimizer
 raw_model = model.module if ddp else model 
 
 
@@ -185,14 +190,13 @@ print(f'\nScheduler initialized on GPU rank {ddp_rank}, of {ddp_world_size}\n')
 # create log files, loggers, and evaluators to store training loss, learning rate, validation loss, hellaswag eval results, and generate sample text.
 import aae_eval_log_utils as eval_log_utils
 log_params = eval_log_utils.LogParamsFilesConfig(
-    ddp = ddp,
-    ddp_world_size = ddp_world_size,
-    ddp_rank = ddp_rank,
-    # ddp_local_rank = ddp_local_rank
+    fsdp_ddp = ddp,
+    world_size = ddp_world_size,
+    rank = ddp_rank,
+    local_rank = ddp_local_rank,
     model = model,
     device = device,
     encoder = tiktoken.get_encoding('gpt2'),
-    # optimizer = optimizer,
     val_loader = val_loader,
     loss_dir = "train_loss",
     hella_accu_dir = "hella_accuracy",
