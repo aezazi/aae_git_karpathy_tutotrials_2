@@ -44,6 +44,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
+from torch.distributed.fsdp import MixedPrecision
 import functools
 
 # Check if we are running in FSDP mode. If so, we will initialize the process group and set the device for each process.
@@ -96,8 +97,7 @@ if torch.cuda.is_available():
 
 
 model = model_fsdp.CreateMoESharded(config=config)
-model.to(device)
-
+# note the code below for wrapping the model in FSDP is where the model is placed on device as managed by FSDP.
 
 # compute number of model parameters
 def count_parameters(model):
@@ -106,6 +106,12 @@ def count_parameters(model):
 print(f"\nTotal parameters: {count_parameters(model):,}\n")
 
 torch.set_float32_matmul_precision('high')
+
+mixed_precision = MixedPrecision(
+    param_dtype=torch.bfloat16,
+    reduce_dtype=torch.bfloat16,
+    buffer_dtype=torch.bfloat16,
+)
 
 if FSDP_check:
     from aae_model_moe_fsdp import Block
@@ -119,7 +125,7 @@ if FSDP_check:
     torch.cuda.set_device(device_id)
 
     # wrap model in FSDP
-    model = FSDP(model, auto_wrap_policy=auto_wrap_policy, device_id=FSDP_local_rank)
+    model = FSDP(model, auto_wrap_policy=auto_wrap_policy, device_id=FSDP_local_rank, mixed_precision=mixed_precision, use_orig_params=True)
     print(f'\nModel wrapped in FSDP on device: {device}')
 
 use_compile = False # set to True to use torch.compile
