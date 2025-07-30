@@ -115,8 +115,8 @@ class HellaSwag:
         num_correct_norm = 0
         num_total = 0
         for i, example in enumerate(iterate_examples("val")):
-            # only process examples where i % ddp_world_size == ddp_rank
-            if i % self.ddp_world_size != self.ddp_rank:
+            # only process examples where i % world_size == ddp_rank
+            if i % self.world_size != self.rank:
                 continue
             # render the example into tokens and labels
             _, tokens, mask, label = render_example(example)

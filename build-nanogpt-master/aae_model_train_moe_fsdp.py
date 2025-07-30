@@ -25,7 +25,7 @@ class GPTConfig:
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
-    num_experts = 4
+    num_experts = 16
     k = 2
 
 # instantiate and check the config
@@ -139,7 +139,7 @@ model = torch.compile(model) if use_compile else model
 # NOTE: I moved the code for optimizer configuration to a separate file called aae_utils.py.
 from aae_utils import ConfigureOptimizer
 
-base_lr = 6e-4 * 4
+base_lr = 6e-4
 
 # Note that we are using the raw model here, not the DDP wrapped model. This is because the DDP wrapper does not have the optimizer parameters. The raw model is the actual model that we want to optimize.
 optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.1, learning_rate = base_lr, device_type=device)
