@@ -136,18 +136,26 @@ class ExpertMoESwiglu(nn.Module):
     
 # this class implemets top_k sparse gating 
 class TopKMoEGate(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, local_expert_ids):
         super().__init__()
-        self.n_embd = config.n_embd
-        self.num_experts = config.num_experts
+        self.local_expert_ids = local_expert_ids
+        self.num_local_experts = len(self.local_expert_ids)
         self.k = config.k
         self.seq_len = config.seq_len
     
-        # Create a linear layer to project the multi-head attention output to the number of experts. This layer will compute the logits for each expert. the logits will have shape (batch_size, seq_len, num_experts) 
-        self.gate_linear = nn.Linear(config.n_embd, config.num_experts, bias=False)
+        # Create a linear layer to project the multi-head attention output to the number of experts. This layer will compute the logits for each local expert. The local experts are the experts assigned to the GPU running this instance. This is very important. I had  orignally made the mistake of doing nn.Linear(config.n_embd, self.num_experts, bias=False). This was computing logits over all num_experts, regardless of how many experts exist on each GPU.But the MoE layer (MoELayerSharded) only instantiates a subset of those experts per GPU (based on expert_id % world_size == local_rank), and applies only the ones available on that rank.
+
+        # This results in:
+        # 	• These tokens are ignored during the expert loop, i.e., dropped silently.
+        # 	• Tokens being routed to experts that don’t exist locally.
+        # 	• Thus, part of the model output remains zeros.
+        # 	• Consequently, gradients don’t flow to many experts.
+        # 	• Eventually, the gating network settles into a degenerate distribution over the few working experts.
+        # 	• This is why my  loss was stalling at ~8.2 on multi-GPU — it’s only marginally better than random output.This doesn’t happen on single-GPU because all experts exist and are used, so the full distribution of the gating network is valid.
+        self.gate_linear = nn.Linear(config.n_embd, self.num_local_experts, bias=False)
 
         # this is a learnable parameter that will be used to scale the noise added to the logits of each expert. The allows the noise added to each expert to be "customized" and dynamic. It adapts during training depending on the expert. It is initialized to zero and will be learned during training.
-        self.noise_weight = nn.Parameter(torch.zeros(config.num_experts)) 
+        self.noise_weight = nn.Parameter(torch.zeros(self.num_local_experts)) 
 
         # this is the standard deviation of the noise added to the logits of each expert. It is a hyperparameter that can be tuned. Note that unlike the noise_weight it is a global parameter, this is not a learnable parameter.
         self.noisy_std = 1.0
@@ -173,13 +181,13 @@ class TopKMoEGate(nn.Module):
         # We want sparse matrices. We achieve this by keeping the top-k logits for each token and filling the rest with a value that represents "no contribution" (like negative infinity).  This is done to ensure that the softmax function will ignore these values when computing the weights for each expert. So only the values produced by the top-k experts will contribute to the final output. We implement this by first creating a tensor of the same shape as the logits filled with negative infinity, and then using the scatter function to fill in the top-k logits at the indices of the top-k experts. Note that in this context, softmax is being used to compute "weights" for each expert not probabilities as for multiclass classification. Its a subttle difference but I think important to note.
         
         #full_like clones a tensor and fills it with a specified value (like infinity).
-        zeros = torch.full_like(logits_noisy, float('-inf')) 
+        mask = torch.full_like(logits_noisy, float('-inf')) 
 
         # scatter fills the zeros tensor with the top_k_logits at the indices of the top_k_indices along the last dimension (-1). This creates a sparse matrix where only the top-k logits are kept and the rest are filled with negative infinity.
-        sparse_logits_noisy = zeros.scatter(-1, top_k_indices_noisy, top_k_logits_noisy)
+        sparse_logits_noisy = mask.scatter(-1, top_k_indices_noisy, top_k_logits_noisy)
         top_k_gated_weights = F.softmax(sparse_logits_noisy, dim=-1)
 
-        return top_k_gated_weights, top_k_indices_noisy, top_k_logits_noisy
+        return top_k_gated_weights, top_k_indices_noisy
 
 
 # %%
@@ -190,11 +198,10 @@ class MoELayerSharded(nn.Module):
         self.num_experts = config.num_experts
         self.sq_len = config.seq_len
         self.k = config.k
-    
-        # Instantiate top_k gating
-        self.gate = TopKMoEGate(config)
+        self.aux_loss_scale = config.aux_loss_scale
+        self.moe_scale = config.moe_scale
 
-        # note that when on multiple gpus, FSDP or DDP launch identical processes on each gpu. So a separate instance of this module will be launched on each gpu. Each instance will have a different local_rank corresponding to the gpu it was launched on. dist.getrank() returns the local_rank of each process/gpu.
+        # note that when on multiple gpus, FSDP or DDP launch identical processes on each gpu. So a separate instance of this module will be launched on each gpu. Each instance will have a different rank corresponding to the gpu it was launched on. dist.getrank() returns the rank of each process/gpu. In my case, all my gpus are on one on one machine, so local_rank = rank. 
         self.local_rank = dist.get_rank()
         self.world_size = dist.get_world_size()
 
@@ -202,16 +209,21 @@ class MoELayerSharded(nn.Module):
         # This is a clever algo GPT suggested for assigning experts to GPUs. It's called "round robin" assignment. It assigns only a subset of experts to the GPU running this instance of the module. If remainder of expert_idx/world_size == local_rank, create and add an expert to this GPU
         self.local_expert_ids = [e_idx for e_idx in range(self.num_experts) if e_idx % self.world_size == self.local_rank]
                 
+        # Instantiate top_k gating. Note that I am passing the ids of the experts assigned to the GPU running this instance
+        self.gate = TopKMoEGate(config, self.local_expert_ids)
 
-        # create ModuleList with an expert (instance of ExpertMoeSwiglu) for each index in local_experts_ids
-        self.local_experts = nn.ModuleList([ExpertMoESwiglu(config) for _ in self.local_expert_ids])
+        # create ModuleDict with an expert (instance of ExpertMoeSwiglu) for each index in local_experts_ids
+        self.local_experts = nn.ModuleDict({str(i) : ExpertMoESwiglu(config) for i in self.local_expert_ids})
         
        
-
     def forward(self, x):
         batch_size, seq_len, _ = x.shape
-        # Get the top_k gated weights and top-k indices from the gate
-        top_k_gated_weights, top_k_indices, top_k_logits = self.gate(x)
+        # Get the top_k gated weights and top-k indices from the gate for the local experts. Note that the top_k_indices are indexed based on the number of experts assigned to this gpu. So if this gpu has two experts assigned, each the top_k (k=2)indices for each token will be of the form [0,1] or [1,0]. If there are three experts on this gpu, each top_k index would be of the form [1,2] or [2,0]. These local expert indices have to mapped to the global expert indicies 
+        top_k_gated_weights, top_k_local_indices  = self.gate(x)
+
+        # Map local indices to global expert IDs
+        local_expert_id_tensor = torch.tensor(self.local_expert_ids, device=x.device)  # [num_local]
+        top_k_global_indices = local_expert_id_tensor[top_k_local_indices]  # [B, T, k]
 
         # tensor to hold the output from just in the experts in this process
         y_partial_output = torch.zeros_like(x)

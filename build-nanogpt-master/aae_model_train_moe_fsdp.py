@@ -27,6 +27,14 @@ class GPTConfig:
     n_embd: int = 768
     num_experts = 16
     k = 2
+    aux_loss_scale = 0.1
+    
+    def __post_init__(self):
+        # This is a scalar multiplier applied to the output of the MoE layer before adding it to the residual connection (i.e., the transformer block’s output). When using top-k sparse routing, each token’s output comes from just a few experts, possibly trained on very different data subsets. This can cause variance in output magnitude across tokens. To stabilize the training signal (especially at initialization), you can:
+        # •	Set moe_scale = 1 / k (where k = top_k routing)
+        # •	Or anneal this factor during warmup
+        self.moe_scale = 1/self.k
+
 
 # instantiate and check the config
 config = GPTConfig()
