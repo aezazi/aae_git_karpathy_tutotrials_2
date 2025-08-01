@@ -19,12 +19,12 @@ assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devic
 
 @dataclass
 class GPTConfig:
-    seq_len: int = 1024 # max sequence length
+    seq_len: int = 8 # max sequence length
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
     vocab_size: int = 50304
     n_layer: int = 12
-    n_head: int = 12
-    n_embd: int = 768
+    n_head: int = 3
+    n_embd: int = 6
     num_experts = 4
     k = 2
     aux_loss_scale = 0.1
@@ -163,15 +163,15 @@ if FSDP_check:
 from aae_dataloader_utils import DataLoaderShardMultiGPU
 
 # initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
-B = 32 # batch size
+B = 3 # batch size
 
 train_loader = DataLoaderShardMultiGPU(B=B, seq_len=config.seq_len, process_rank = FSDP_rank, num_processes=FSDP_world_size, split='train')
 
 val_loader = DataLoaderShardMultiGPU(B=B, seq_len=config.seq_len, process_rank = FSDP_rank, num_processes=FSDP_world_size, split='val')
 
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
-effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
-
+# effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
+effective_batch_size_desired = train_loader.B * train_loader.seq_len * FSDP_world_size
 
 assert effective_batch_size_desired % (train_loader.B * train_loader.seq_len * FSDP_world_size) == 0, f"effective batch size {effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.T}"
 

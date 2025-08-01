@@ -214,8 +214,10 @@ class MoELayerSharded(nn.Module):
         # Instantiate top_k gating. Note that I am passing the ids of the experts assigned to the GPU running this instance
         self.gate = TopKMoEGate(config, self.local_expert_ids)
 
-        # create ModuleDict with an expert (instance of ExpertMoeSwiglu) for each index in local_experts_ids. 
+        # create ModuleDict with an expert (instance of ExpertMoeSwiglu) for each index in local_experts_ids. Note that nn.ModuleDict accepts only string as a key. So in the foreard method, we have to go through gymnastics of converting the string to an integer for some operations and using the string version to access the dictionary.
         self.local_experts = nn.ModuleDict({str(i) : ExpertMoESwiglu(config) for i in self.local_expert_ids})
+
+        print(f'local experts dict:\n{self.local_experts}')
         
        
     def forward(self, x):
@@ -240,13 +242,13 @@ class MoELayerSharded(nn.Module):
         top_k_gated_weights_flat = top_k_gated_weights.view(batch_size*seq_len, self.num_local_experts)  
 
         # Iterate over each expert  assigned to this GPU and apply it to the input
-        for expert_id_global in self.local_experts.keys():
-            expert_id_global = int(expert_id_global)
+        for expert_id_global_str in self.local_experts.keys():
+            expert_id_global = int(expert_id_global_str)
 
             # Create a mask for the inputs where the current expert is in top-k. the mask will have shape (batch_size, seq_len). top_k_indices have shape (B, seq_len, top_k). Each row of each batch in top_k_indices has the indices of the top two experts for the token corresponding that row in the token sequence. The mask will return True (row wise) if expert i is in the top_k indices. S
             print(f'\nExpert {expert_id_global} with x_flat input shape {x_flat.shape}\n')
             print(f'top_k_indices shape: {top_k_global_indices.shape} \n{top_k_global_indices}\n')
-            expert_mask = (top_k_global_indices == expert_id_global)
+            expert_mask = (top_k_global_indices == expert_id_global).any(dim=-1) #shape (B, seq_len)
             print(f'expert_mask shape: {expert_mask.shape} \n{expert_mask}\n')
 
             # flatten the mask to match the shape of the flattened input x_flat. Note that the shape of flat_mask is a one dimensional (batch_size*seq_len). x_flat has shape (batch_size * seq_len, n_embd). each row in x_flat is a token in the sequence. 
@@ -259,7 +261,7 @@ class MoELayerSharded(nn.Module):
                 print(f'\nexpert_input shape: {expert_input.shape} \n{expert_input}\n')
 
                 # apply expert i to the expert_input. Again, note that based on the mask described above, epxert i is applied only to the tokens where it is in the top_k indices.
-                expert_output = self.experts[expert_id_global](expert_input) # (number of tokens where expert i is in top_k, n_embd)
+                expert_output = self.local_experts[expert_id_global_str](expert_input) # (number of tokens where expert i is in top_k, n_embd)
                 print(f'expert_output shape: {expert_output.shape} \n{expert_output}\n')
 
                 # Now we need to scale the expert output by the gated weights for the tokens where the expert is in the top_k indices. gated_weights_flat has shape (batch_size * seq_len, num_local_experts). We apply the same mask as we used to create expert_input to select all rows from gated_weights_flat where expert i is in the top_k indices, then we select the ith column. This returns the weighting for expert i that is to be applied to the tokens where expert i is in the top_k indices. This is the same as selecting all the non_zero values in the ith column of gated_weights_flat. We  then use unsqueeze(1) to add a dimension to create a column vector of shape (number of tokens where expert i is in top_k, 1). this allows  multiplication with the expert_output which has shape (number of tokens where expert i is in top_k, n_embd). 
