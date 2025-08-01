@@ -210,6 +210,7 @@ class MoELayerSharded(nn.Module):
         self.local_expert_ids = [e_idx for e_idx in range(self.num_experts) if e_idx % self.world_size == self.rank]
 
         self.num_local_experts = len(self.local_expert_ids)
+        print(f'num_local_experst: {self.num_local_experts}')
                 
         # Instantiate top_k gating. Note that I am passing the ids of the experts assigned to the GPU running this instance
         self.gate = TopKMoEGate(config, self.local_expert_ids)
@@ -264,14 +265,14 @@ class MoELayerSharded(nn.Module):
                 expert_output = self.local_experts[expert_id_global_str](expert_input) # (number of tokens where expert i is in top_k, n_embd)
                 print(f'expert_output shape: {expert_output.shape} \n{expert_output}\n')
 
-                # Now we need to scale the expert output by the gated weights for the tokens where the expert is in the top_k indices. gated_weights_flat has shape (batch_size * seq_len, num_local_experts). We apply the same mask as we used to create expert_input to select all rows from gated_weights_flat where expert i is in the top_k indices, then we select the ith column. This returns the weighting for expert i that is to be applied to the tokens where expert i is in the top_k indices. This is the same as selecting all the non_zero values in the ith column of gated_weights_flat. We  then use unsqueeze(1) to add a dimension to create a column vector of shape (number of tokens where expert i is in top_k, 1). this allows  multiplication with the expert_output which has shape (number of tokens where expert i is in top_k, n_embd). 
-                print(f'gated_weights_flat shape: {top_k_gated_weights_flat.shape} \n{top_k_gated_weights_flat}\n')
+                # Now we need to scale the expert output by the gated weights for the tokens where the expert is in the top_k indices. gated_weights_flat has shape (batch_size * seq_len, num_local_experts). We apply the same mask as we used to create expert_input to select all rows from gated_weights_flat where expert i is in the top_k indices, then we select the ith column. This returns the weighting for expert i that is to be applied to the tokens where expert i is in the top_k indices. This is the same as selecting all the non_zero values in the ith column of gated_weights_flat. We  then use unsqueeze(1) to add a dimension to create a column vector of shape (number of tokens where expert i is in top_k, 1). this allows  multiplication with the expert_output which has shape (number of tokens where expert i is in top_k, num_local_experts). 
+                print(f'top_k_gated_weights_flat shape: {top_k_gated_weights_flat.shape} \n{top_k_gated_weights_flat}\n')
                 expert_weights = top_k_gated_weights_flat[flat_mask, expert_id_global].unsqueeze(1)  # (number of tokens where expert i is in top_k, 1)
-                # print(f'expert_weights shape: {expert_weights.shape} \n{expert_weights}\n')
+                print(f'expert_weights shape: {expert_weights.shape} \n{expert_weights}\n')
 
                 # Scale the expert_output by expert_weights.
                 expert_output_weighted = expert_output * expert_weights # (number of tokens where expert i is in top_k, n_embd)
-                # print(f'expert_output_weighted shape: {expert_output_weighted.shape} \n{expert_output_weighted}\n')
+                print(f'expert_output_weighted shape: {expert_output_weighted.shape} \n{expert_output_weighted}\n')
 
                 # the huggingface implementation uses .squeeze(1) to remove any singleton dimensions from  the expert_output_weighted tensor. Not sure why this is needed. I tried removing it and the shapes were still compatible and the result the same
                 y_partial_output[expert_mask] += expert_output_weighted.squeeze(1) # (batch_size, seq_len, n_embd)
@@ -282,7 +283,7 @@ class MoELayerSharded(nn.Module):
                 # final_test[expert_mask] += expert_output_weighted
                 # print(f'{torch.allclose(final_output, final_test)}')
 
-                break
+            break
         
         # each instance
         if self.world_size > 1:
@@ -302,7 +303,7 @@ class MoELayerSharded(nn.Module):
         # refer to literature on why this formula for the load balancing loss
         aux_loss = (avg_tokens_per_expert * avg_weight_per_expert).sum() * self.num_local_experts
 
-
+        return y_partial_output, aux_loss
 
         
 #%%
