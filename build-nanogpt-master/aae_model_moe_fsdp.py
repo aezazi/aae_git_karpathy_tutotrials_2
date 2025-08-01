@@ -210,7 +210,7 @@ class MoELayerSharded(nn.Module):
         self.local_expert_ids = [e_idx for e_idx in range(self.num_experts) if e_idx % self.world_size == self.rank]
 
         self.num_local_experts = len(self.local_expert_ids)
-        print(f'num_local_experst: {self.num_local_experts}')
+        # print(f'num_local_experst: {self.num_local_experts}')
                 
         # Instantiate top_k gating. Note that I am passing the ids of the experts assigned to the GPU running this instance
         self.gate = TopKMoEGate(config, self.local_expert_ids)
@@ -218,7 +218,7 @@ class MoELayerSharded(nn.Module):
         # create ModuleDict with an expert (instance of ExpertMoeSwiglu) for each index in local_experts_ids. Note that nn.ModuleDict accepts only string as a key. So in the foreard method, we have to go through gymnastics of converting the string to an integer for some operations and using the string version to access the dictionary.
         self.local_experts = nn.ModuleDict({str(i) : ExpertMoESwiglu(config) for i in self.local_expert_ids})
 
-        print(f'local experts dict:\n{self.local_experts}')
+        # print(f'local experts dict:\n{self.local_experts}')
         
        
     def forward(self, x):
@@ -247,10 +247,12 @@ class MoELayerSharded(nn.Module):
             expert_id_global = int(expert_id_global_str)
 
             # Create a mask for the inputs where the current expert is in top-k. the mask will have shape (batch_size, seq_len). top_k_indices have shape (B, seq_len, top_k). Each row of each batch in top_k_indices has the indices of the top two experts for the token corresponding that row in the token sequence. The mask will return True (row wise) if expert i is in the top_k indices. S
-            print(f'\nExpert {expert_id_global} with x_flat input shape {x_flat.shape}\n')
-            print(f'top_k_indices shape: {top_k_global_indices.shape} \n{top_k_global_indices}\n')
+            
+            # print(f'\nExperts {expert_id_global} with x_flat input shape {x_flat.shape}\n')
+            # print(f'top_k_indices shape: {top_k_global_indices.shape} \n{top_k_global_indices}\n')
+
             expert_mask = (top_k_global_indices == expert_id_global).any(dim=-1) #shape (B, seq_len)
-            print(f'expert_mask shape: {expert_mask.shape} \n{expert_mask}\n')
+            # print(f'expert_mask shape: {expert_mask.shape} \n{expert_mask}\n')
 
             # flatten the mask to match the shape of the flattened input x_flat. Note that the shape of flat_mask is a one dimensional (batch_size*seq_len). x_flat has shape (batch_size * seq_len, n_embd). each row in x_flat is a token in the sequence. 
             flat_mask = expert_mask.view(-1) # (batch_size * seq_len)
@@ -259,20 +261,21 @@ class MoELayerSharded(nn.Module):
             if flat_mask.any():
                 # If the flat mask has any True values, Apply the expert to the inputs selected by the mask. x_flat[flat_mask] picks the rows(tokens) of x_flat where the mask is True. This allows us to activate the expert only for the tokens where the expert with expert_id_global is in the top_k indices.
                 expert_input = x_flat[flat_mask] # (number of tokens where expert_id_global is in top_k, n_embd)
-                print(f'\nexpert_input shape: {expert_input.shape} \n{expert_input}\n')
+                # print(f'\nexpert_input shape: {expert_input.shape} \n{expert_input}\n')
 
                 # apply expert i to the expert_input. Again, note that based on the mask described above, epxert i is applied only to the tokens where it is in the top_k indices.
                 expert_output = self.local_experts[expert_id_global_str](expert_input) # (number of tokens where expert i is in top_k, n_embd)
-                print(f'expert_output shape: {expert_output.shape} \n{expert_output}\n')
+                # print(f'expert_output shape: {expert_output.shape} \n{expert_output}\n')
 
                 # Now we need to scale the expert output by the gated weights for the tokens where the expert is in the top_k indices. gated_weights_flat has shape (batch_size * seq_len, num_local_experts). We apply the same mask as we used to create expert_input to select all rows from gated_weights_flat where expert i is in the top_k indices, then we select the ith column. This returns the weighting for expert i that is to be applied to the tokens where expert i is in the top_k indices. This is the same as selecting all the non_zero values in the ith column of gated_weights_flat. We  then use unsqueeze(1) to add a dimension to create a column vector of shape (number of tokens where expert i is in top_k, 1). this allows  multiplication with the expert_output which has shape (number of tokens where expert i is in top_k, num_local_experts). 
-                print(f'top_k_gated_weights_flat shape: {top_k_gated_weights_flat.shape} \n{top_k_gated_weights_flat}\n')
+                # print(f'top_k_gated_weights_flat shape: {top_k_gated_weights_flat.shape} \n{top_k_gated_weights_flat}\n')
+
                 expert_weights = top_k_gated_weights_flat[flat_mask, expert_id_global].unsqueeze(1)  # (number of tokens where expert i is in top_k, 1)
-                print(f'expert_weights shape: {expert_weights.shape} \n{expert_weights}\n')
+                # print(f'expert_weights shape: {expert_weights.shape} \n{expert_weights}\n')
 
                 # Scale the expert_output by expert_weights.
                 expert_output_weighted = expert_output * expert_weights # (number of tokens where expert i is in top_k, n_embd)
-                print(f'expert_output_weighted shape: {expert_output_weighted.shape} \n{expert_output_weighted}\n')
+                # print(f'expert_output_weighted shape: {expert_output_weighted.shape} \n{expert_output_weighted}\n')
 
                 # the huggingface implementation uses .squeeze(1) to remove any singleton dimensions from  the expert_output_weighted tensor. Not sure why this is needed. I tried removing it and the shapes were still compatible and the result the same
                 y_partial_output[expert_mask] += expert_output_weighted.squeeze(1) # (batch_size, seq_len, n_embd)
