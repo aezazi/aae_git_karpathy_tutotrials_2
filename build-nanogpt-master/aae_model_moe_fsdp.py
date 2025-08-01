@@ -198,8 +198,8 @@ class MoELayerSharded(nn.Module):
         self.num_experts = config.num_experts
         self.sq_len = config.seq_len
         self.k = config.k
-        self.aux_loss_scale = config.aux_loss_scale
-        self.moe_scale = config.moe_scale
+        # self.aux_loss_scale = config.aux_loss_scale
+        # self.moe_scale = config.moe_scale
 
         # note that when on multiple gpus, FSDP or DDP launch identical processes on each gpu. So a separate instance of this module will be launched on each gpu. Each instance will have a different rank corresponding to the gpu it was launched on. dist.getrank() returns the rank of each process/gpu. In my case, all my gpus are on one on one machine, so local_rank = rank. 
         self.rank = dist.get_rank()
@@ -208,6 +208,8 @@ class MoELayerSharded(nn.Module):
 
         # This is a clever algo GPT suggested for assigning experts to GPUs. It's called "round robin" assignment. It assigns only a subset of experts to the GPU running this instance of the module. If remainder of expert_idx/world_size == local_rank, create and add an expert to this GPU
         self.local_expert_ids = [e_idx for e_idx in range(self.num_experts) if e_idx % self.world_size == self.rank]
+
+        self.num_local_experts = len(self.local_expert_ids)
                 
         # Instantiate top_k gating. Note that I am passing the ids of the experts assigned to the GPU running this instance
         self.gate = TopKMoEGate(config, self.local_expert_ids)
@@ -226,7 +228,7 @@ class MoELayerSharded(nn.Module):
         # map the top_k_local_indices to the global id
         top_k_global_indices = local_expert_id_tensor[top_k_local_indices]  # [B, T, k]
 
-        # tensor to hold the output from just in the experts in this process
+        # tensor to hold the output from just the experts in this process
         y_partial_output = torch.zeros_like(x)
         # print(f'\ninput x shape: {x.shape} \n{x}\n')
 
@@ -234,41 +236,40 @@ class MoELayerSharded(nn.Module):
         x_flat = x.view(batch_size*seq_len, -1) 
         # print(f'\ninput x_flat shape: {x_flat.shape} \n{x_flat}\n')
 
-        # flatten the gated weights to (batch_size * seq_len, num_experts) for batch processing
-        top_k_gated_weights_flat = top_k_gated_weights.view(batch_size*seq_len, self.num_experts)  
+        # flatten the gated weights to (batch_size * seq_len, num_local_experts) for batch processing
+        top_k_gated_weights_flat = top_k_gated_weights.view(batch_size*seq_len, self.num_local_experts)  
 
         # Iterate over each expert  assigned to this GPU and apply it to the input
-        for expert_id, expert_module in zip(self.local_expert_ids, self.local_experts):
+        for expert_id_global in self.local_experts.keys():
+            expert_id_global = int(expert_id_global)
+
             # Create a mask for the inputs where the current expert is in top-k. the mask will have shape (batch_size, seq_len). top_k_indices have shape (B, seq_len, top_k). Each row of each batch in top_k_indices has the indices of the top two experts for the token corresponding that row in the token sequence. The mask will return True (row wise) if expert i is in the top_k indices. S
-            # print(f'\nExpert {i} with x_flat input shape {x_flat.shape}\n')
-            # print(f'top_k_indices shape: {top_k_indices.shape} \n{top_k_indices}\n')
-            expert_mask = (top_k_indices == expert_id).any(dim=-1)
-            # print(f'expert_mask shape: {expert_mask.shape} \n{expert_mask}\n')
+            print(f'\nExpert {expert_id_global} with x_flat input shape {x_flat.shape}\n')
+            print(f'top_k_indices shape: {top_k_global_indices.shape} \n{top_k_global_indices}\n')
+            expert_mask = (top_k_global_indices == expert_id_global)
+            print(f'expert_mask shape: {expert_mask.shape} \n{expert_mask}\n')
 
             # flatten the mask to match the shape of the flattened input x_flat. Note that the shape of flat_mask is a one dimensional (batch_size*seq_len). x_flat has shape (batch_size * seq_len, n_embd). each row in x_flat is a token in the sequence. 
             flat_mask = expert_mask.view(-1) # (batch_size * seq_len)
-            # print(f'flat_mask shape: {flat_mask.shape} \n{flat_mask}\n')
+            print(f'flat_mask shape: {flat_mask.shape} \n{flat_mask}\n')
 
             if flat_mask.any():
-                # Apply the expert to the inputs selected by the mask. x_flat[flat_mask] picks the rows(tokens) of x_flat where the mask is True. This allows us to activate the expert only for the tokens where the expert is in the top_k indices.
-                expert_input = x_flat[flat_mask] # (number of tokens where expert i is in top_k, n_embd)
-                # print(f'\nexpert_input shape: {expert_input.shape} \n{expert_input}\n')
-                
-                # apply expert i to the expert_input. Again, note that based on the mask described above, epxert i is applied only to the tokens where it is in the top_k indices.
-                expert_output = expert_module(expert_input) # (number of tokens where expert i is in top_k, n_embd)
-                # print(f'expert_output shape: {expert_output.shape} \n{expert_output}\n')
+                # If the flat mask has any True values, Apply the expert to the inputs selected by the mask. x_flat[flat_mask] picks the rows(tokens) of x_flat where the mask is True. This allows us to activate the expert only for the tokens where the expert with expert_id_global is in the top_k indices.
+                expert_input = x_flat[flat_mask] # (number of tokens where expert_id_global is in top_k, n_embd)
+                print(f'\nexpert_input shape: {expert_input.shape} \n{expert_input}\n')
 
-                # Now we need to scale the expert output by the gated weights for the tokens where the expert is in the top_k indices. gated_weights_flat has shape (batch_size * seq_len, num_experts). We apply the same mask as we used to create expert_input to select all rows from gated_weights_flat where expert i is in the top_k indices, then we select the ith column. This returns the weighting for expert i that is to be applied to the tokens where expert i is in the top_k indices. This is the same as selecting all the non_zero values in the ith column of gated_weights_flat. We  then use unsqueeze(1) to add a dimension to create a column vector of shape (number of tokens where expert i is in top_k, 1). this allows  multiplication with the expert_output which has shape (number of tokens where expert i is in top_k, n_embd). 
-                # print(f'gated_weights_flat shape: {gated_weights_flat.shape} \n{gated_weights_flat}\n')
-                expert_weights = top_k_gated_weights_flat[flat_mask, expert_id].unsqueeze(1)  # (number of tokens where expert i is in top_k, 1)
+                # apply expert i to the expert_input. Again, note that based on the mask described above, epxert i is applied only to the tokens where it is in the top_k indices.
+                expert_output = self.experts[expert_id_global](expert_input) # (number of tokens where expert i is in top_k, n_embd)
+                print(f'expert_output shape: {expert_output.shape} \n{expert_output}\n')
+
+                # Now we need to scale the expert output by the gated weights for the tokens where the expert is in the top_k indices. gated_weights_flat has shape (batch_size * seq_len, num_local_experts). We apply the same mask as we used to create expert_input to select all rows from gated_weights_flat where expert i is in the top_k indices, then we select the ith column. This returns the weighting for expert i that is to be applied to the tokens where expert i is in the top_k indices. This is the same as selecting all the non_zero values in the ith column of gated_weights_flat. We  then use unsqueeze(1) to add a dimension to create a column vector of shape (number of tokens where expert i is in top_k, 1). this allows  multiplication with the expert_output which has shape (number of tokens where expert i is in top_k, n_embd). 
+                print(f'gated_weights_flat shape: {top_k_gated_weights_flat.shape} \n{top_k_gated_weights_flat}\n')
+                expert_weights = top_k_gated_weights_flat[flat_mask, expert_id_global].unsqueeze(1)  # (number of tokens where expert i is in top_k, 1)
                 # print(f'expert_weights shape: {expert_weights.shape} \n{expert_weights}\n')
 
                 # Scale the expert_output by expert_weights.
                 expert_output_weighted = expert_output * expert_weights # (number of tokens where expert i is in top_k, n_embd)
                 # print(f'expert_output_weighted shape: {expert_output_weighted.shape} \n{expert_output_weighted}\n')
-
-                # Now we need to add the expert_output_weighted to final_output at positions where the expert is in the top_k indices. We use expert_mask to select the rows where expert i is in the top_k indices. Note that here we use expert_mask (not flat_mask) with shape (batch_size, seq_len, hidden_dim) to match the shape of final_output. final_output will have shape (batch_size, seq_len, n_embd), the same as input x.
-                # print(f'final_output shape before adding expert_output_weighted:{final_output.shape} \n{final_output}\n')
 
                 # the huggingface implementation uses .squeeze(1) to remove any singleton dimensions from  the expert_output_weighted tensor. Not sure why this is needed. I tried removing it and the shapes were still compatible and the result the same
                 y_partial_output[expert_mask] += expert_output_weighted.squeeze(1) # (batch_size, seq_len, n_embd)
@@ -278,6 +279,8 @@ class MoELayerSharded(nn.Module):
                 # final_test = torch.zeros_like(x)
                 # final_test[expert_mask] += expert_output_weighted
                 # print(f'{torch.allclose(final_output, final_test)}')
+
+                break
         
         # each instance
         if self.world_size > 1:
@@ -288,8 +291,6 @@ class MoELayerSharded(nn.Module):
         avg_weight_per_expert = top_k_gated_weights_flat.mean(0) # shape(num_experts)
         # print(f'\navg_weight_per_expert:\n {avg_weight_per_expert}\n')
 
-        # compute average number of tokens processed by each expert. This is  how many tokens were actually sent to each expert. To compute this, I use the gated_weights_flat (batch_size*seq_len, num_experts) with non_zero elements only for tokens where the expert was in the top_k. I replace the non-zero element with 1.0 which serves as a counter for the expert having processed that token. Finally, I take the mean to compute the average number of tokens processed by each expert across all batches.
-       
         # Replaces elements != 0 with 1.0 and takes the mean over (batch*seq_len).result has shape(num_experts)
         avg_tokens_per_expert = torch.where(top_k_gated_weights_flat != 0, 1.0, 0).mean(0)
 
@@ -297,11 +298,11 @@ class MoELayerSharded(nn.Module):
 
 
         # refer to literature on why this formula for the load balancing loss
-        aux_loss = (avg_tokens_per_expert * avg_weight_per_expert).sum() * self.num_experts
-            
+        aux_loss = (avg_tokens_per_expert * avg_weight_per_expert).sum() * self.num_local_experts
 
-        return y_partial_output, aux_loss
 
+
+        
 #%%
 class Block(nn.Module):
     def __init__(self, config):
@@ -321,9 +322,7 @@ class Block(nn.Module):
 class CreateMoESharded(nn.Module):
     def __init__(self, config):
         super().__init__()
-        # self.config = config
-        self.aux_loss_scale = config.aux_loss_scale
-        self.moe_scale = config.moe_scale
+        self.config = config
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
@@ -391,7 +390,7 @@ class CreateMoESharded(nn.Module):
             # reshape the logits: (B, T, vocab_size) -> (B*T, vocab_size) to match the shape of the targets: (B, T) -> (B*T) and then calculate the cross-entropy loss
             main_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         
-        total_loss = main_loss + (self.aux_loss_scale * aux_loss_total)
+        total_loss = main_loss + (.01*aux_loss_total)
         
         return logits, total_loss
 
