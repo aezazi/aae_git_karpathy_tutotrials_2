@@ -64,6 +64,8 @@ if FSDP_check:
     print(f'\nRunning in Distributed Data Parallel (FSDP) mode')
     # Note that LOCAL_RANK is the rank of the process on one given machine (when using multiple machine), while RANK is the rank of the process across all machines (when using multiple gpus on multiple machines). When using a setup with just one machine, LOCAL_RANK and RANK are the same. 
     init_process_group(backend='nccl') # initialize the process group for FSDP
+
+    # Note that you should use dist.get_rank and dist.get_world_size only after init_process_group() has launched all processes. The local rank always needs to be obtained with int(os.environ['LOCAL_RANK'])
     FSDP_rank = dist.get_rank() # get the rank of the current process
     FSDP_local_rank = int(os.environ['LOCAL_RANK']) # get the local rank of the current process
     FSDP_world_size = dist.get_world_size() # get the total number of processes
