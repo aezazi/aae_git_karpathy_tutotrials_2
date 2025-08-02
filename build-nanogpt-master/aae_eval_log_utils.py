@@ -130,7 +130,7 @@ class HellaSwag:
             num_total += 1
             num_correct_norm += int(pred_norm == label)
         # reduce the stats across all processes
-        if self.ddp:
+        if self.fsdp_ddp:
             num_total = torch.tensor(num_total, dtype=torch.long, device=self.device)
             num_correct_norm = torch.tensor(num_correct_norm, dtype=torch.long, device=self.device)
             dist.all_reduce(num_total, op=dist.ReduceOp.SUM)
@@ -154,9 +154,9 @@ class Validation:
     def __init__(self, log_params=None):
         self.model = log_params.model
         self.val_loader = log_params.val_loader
-        self.ddp = log_params.ddp
+        self.fsdp_ddp = log_params.fsdp_ddp
         self.device = log_params.device
-        self.master_process = log_params.ddp_rank == 0
+        self.master_process = log_params.rank == 0
         self.step = log_params.step
         self.shard_idx = log_params.shard_idx
         self.lr = log_params.lr
@@ -180,7 +180,7 @@ class Validation:
                 val_loss = val_loss / val_loss_steps # divide the loss by the number of accumulation steps to get the average loss. This computes the averaage loss on one gpu.
                 val_loss_accum += val_loss.detach() # detach the loss from the computation graph to avoid memory leaks.
 
-        if self.ddp:
+        if self.fsdp_ddp:
             # synchronize the validation loss across all gpu processes
             dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
             if self.master_process:
@@ -190,7 +190,7 @@ class GenerateSample:
     def __init__(self, log_params):
         self.model = log_params.model
         self.device = log_params.device
-        self.ddp_rank = log_params.ddp_rank
+        self.rank = log_params.rank
         self.enc = log_params.encoder
 
     def generate(self, context="Hello, I'm a language model,", sample_max_length=32):  
@@ -202,7 +202,7 @@ class GenerateSample:
         self.tokens = self.tokens.unsqueeze(0).repeat(self.num_return_sequences, 1)
         self.xgen = self.tokens.to(self.device)
         self.sample_rng = torch.Generator(device=self.device)
-        self.sample_rng.manual_seed(42 + self.ddp_rank)
+        self.sample_rng.manual_seed(42 + self.rank)
 
         while self.xgen.size(1) < sample_max_length:
             # forward the model to get the logits
@@ -227,4 +227,4 @@ class GenerateSample:
         for i in range(self.num_return_sequences):
             self.tokens = self.xgen[i, :sample_max_length].tolist()
             decoded = self.enc.decode(self.tokens)
-            print(f"\nrank {self.ddp_rank} sample {i}: {decoded}\n")
+            print(f"\nrank {self.rank} sample {i}: {decoded}\n")

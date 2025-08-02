@@ -285,8 +285,7 @@ class MoELayerSharded(nn.Module):
                 # final_test = torch.zeros_like(x)
                 # final_test[expert_mask] += expert_output_weighted
                 # print(f'{torch.allclose(final_output, final_test)}')
-
-            break
+             
         
         # each instance
         if self.world_size > 1:
@@ -322,14 +321,14 @@ class Block(nn.Module):
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
         moe_out, aux_loss = self.moe(self.ln_2(x))  
-        x = x + moe_out * self.config.moe_scale
+        x = x + (moe_out * self.moe_scale)
         return x, aux_loss
 
 # %%
 class CreateMoESharded(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.aux_loss_scale = config.aux_loss_scale
+        self.config = config
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
@@ -391,13 +390,13 @@ class CreateMoESharded(nn.Module):
         logits = self.lm_head(x) # (B, T, vocab_size)
         
         # if targets are provided, calculate the loss
-        loss = None
+        main_loss = 0
         if targets is not None:
             # Pytorch's cross-entropy loss expects the logits to be of shape (B*T, vocab_size) and the targets to be of shape (B*T). So we need to reshape the logits and targets to match this shape.
             # reshape the logits: (B, T, vocab_size) -> (B*T, vocab_size) to match the shape of the targets: (B, T) -> (B*T) and then calculate the cross-entropy loss
             main_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         
-        total_loss = main_loss + (self.aux_loss_scale * aux_loss_total)
+        total_loss = main_loss + (self.config.aux_loss_scale * aux_loss_total)
         
         return logits, total_loss
 
