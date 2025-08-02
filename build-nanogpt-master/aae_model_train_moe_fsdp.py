@@ -25,6 +25,7 @@ class GPTConfig:
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
+    base_lr = 6e-4 * 4
     num_experts = 4
     k = 2
     aux_loss_scale = 0.1
@@ -149,10 +150,8 @@ model = torch.compile(model) if use_compile else model
 # NOTE: I moved the code for optimizer configuration to a separate file called aae_utils.py.
 from aae_utils import ConfigureOptimizer
 
-base_lr = 6e-4
-
 # Note that we are using the raw model here, not the DDP wrapped model. This is because the DDP wrapper does not have the optimizer parameters. The raw model is the actual model that we want to optimize.
-optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.1, learning_rate = base_lr, device_type=device)
+optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.1, learning_rate = config.base_lr, device_type=device)
 
 if FSDP_check:
     print(f'\nOptimizer initialized on GPU rank {FSDP_rank}, device {device}')
@@ -194,7 +193,7 @@ training_steps = 19703
 # the number of iterations over which lr is reduced to the minimum
 T_max = training_steps 
 
-max_lr = base_lr # max learning rate
+max_lr = config.base_lr # max learning rate
 min_lr = max_lr * 0.1 # min learning rate
 
 # modified from gpt paper per AK suggestion to be more aggresive with startup steps than paper

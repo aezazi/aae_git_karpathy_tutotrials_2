@@ -256,7 +256,7 @@ class MoELayerSharded(nn.Module):
 
             # flatten the mask to match the shape of the flattened input x_flat. Note that the shape of flat_mask is a one dimensional (batch_size*seq_len). x_flat has shape (batch_size * seq_len, n_embd). each row in x_flat is a token in the sequence. 
             flat_mask = expert_mask.view(-1) # (batch_size * seq_len)
-            print(f'flat_mask shape: {flat_mask.shape} \n{flat_mask}\n')
+            # print(f'flat_mask shape: {flat_mask.shape} \n{flat_mask}\n')
 
             if flat_mask.any():
                 # If the flat mask has any True values, Apply the expert to the inputs selected by the mask. x_flat[flat_mask] picks the rows(tokens) of x_flat where the mask is True. This allows us to activate the expert only for the tokens where the expert with expert_id_global is in the top_k indices.
@@ -317,18 +317,19 @@ class Block(nn.Module):
         self.attn = CausalSelfAttention(config)
         self.ln_2 = nn.LayerNorm(config.n_embd)
         self.moe = MoELayerSharded(config)
+        self.moe_scale = config.moe_scale
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
         moe_out, aux_loss = self.moe(self.ln_2(x))  
-        x = x + moe_out
+        x = x + moe_out * self.config.moe_scale
         return x, aux_loss
 
 # %%
 class CreateMoESharded(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.config = config
+        self.aux_loss_scale = config.aux_loss_scale
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
@@ -396,7 +397,7 @@ class CreateMoESharded(nn.Module):
             # reshape the logits: (B, T, vocab_size) -> (B*T, vocab_size) to match the shape of the targets: (B, T) -> (B*T) and then calculate the cross-entropy loss
             main_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         
-        total_loss = main_loss + (.01*aux_loss_total)
+        total_loss = main_loss + (self.aux_loss_scale * aux_loss_total)
         
         return logits, total_loss
 
