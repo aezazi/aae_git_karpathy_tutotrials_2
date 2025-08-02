@@ -305,13 +305,19 @@ print(f"\ncolumn wise Boolean mask:\n{mask}")
 # 3. Apply the mask to select cols
 selected_cols = data[:,mask]
 print(f"\nSelected cols:\n{selected_cols}")
+
+
 # %%
-exeprt_indices_global = torch.tensor([3, 11, 4, 12])
+expert_id_global = torch.tensor([3, 11, 4, 12])
 top_k_lcl_indices = torch.tensor([2,0])
 
-top_k_global_indices = exeprt_indices_global[top_k_lcl_indices]
+top_k_global_indices = expert_id_global[top_k_lcl_indices]
 
-top_k_global_indices 
+print(top_k_global_indices)
+
+for expert_id_global in 
+expert_mask = (top_k_global_indices == expert_id_global).any(dim=-1)
+print(expert_mask)
 
 
 
