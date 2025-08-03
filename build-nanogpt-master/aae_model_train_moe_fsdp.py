@@ -27,6 +27,7 @@ class GPTConfig:
     n_head: int = 12
     n_embd: int = 768
     base_lr = 3e-4
+    warm_up_steps = 1000
     num_experts = 8
     k = 2
     aux_loss_scale = 0.1
@@ -209,7 +210,7 @@ T_0 = T_max // 4
 T_mult = 3 # the factor by which T_0 is multiplied at each restart.
 
 # instantiate and create learning rate scheduler
-scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=T_max, restart=restart, warm_up_steps=warm_up_steps, max_lr=max_lr, min_lr=min_lr, T_mult=T_mult, T_0=T_0)
+scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=T_max, restart=restart, warm_up_steps=config.warm_up_steps, max_lr=max_lr, min_lr=min_lr, T_mult=T_mult, T_0=T_0)
 print(f'\nScheduler initialized on GPU rank {FSDP_rank}, of {FSDP_world_size}\n')
 
 #%%
