@@ -342,3 +342,13 @@ for id_str in D.keys():
 
 
 # %%
+D ={
+    '1' : "exper dummy",
+    '3' : "exper dummy",
+    '5' : "exper dummy",
+    '7' : "exper dummy",
+}
+
+for i , key in enumerate(D):
+    print(i, key)
+# %%

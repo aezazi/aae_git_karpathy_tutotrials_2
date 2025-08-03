@@ -27,7 +27,7 @@ class GPTConfig:
     n_head: int = 12
     n_embd: int = 768
     base_lr = 3e-4
-    num_experts = 4
+    num_experts = 8
     k = 2
     aux_loss_scale = 0.1
     

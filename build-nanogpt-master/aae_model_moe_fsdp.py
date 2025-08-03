@@ -136,10 +136,10 @@ class ExpertMoESwiglu(nn.Module):
     
 # this class implemets top_k sparse gating 
 class TopKMoEGate(nn.Module):
-    def __init__(self, config, local_expert_ids):
+    def __init__(self, config, local_expert_global_ids):
         super().__init__()
-        self.local_expert_ids = local_expert_ids
-        self.num_local_experts = len(self.local_expert_ids)
+        self.local_expert_global_ids = local_expert_global_ids
+        self.num_local_experts = len(self.local_expert_global_ids)
         self.k = config.k
         self.seq_len = config.seq_len
     
@@ -207,18 +207,19 @@ class MoELayerSharded(nn.Module):
 
 
         # This is a clever algo GPT suggested for assigning experts to GPUs. It's called "round robin" assignment. It assigns only a subset of experts to the GPU running this instance of the module. If remainder of expert_idx/world_size == local_rank, create and add an expert to this GPU
-        self.local_expert_ids = [e_idx for e_idx in range(self.num_experts) if e_idx % self.world_size == self.rank]
+        self.local_expert_global_ids = [e_idx for e_idx in range(self.num_experts) if e_idx % self.world_size == self.rank]
+        print(f'\nlocal_expert_global_ids: {self.local_expert_global_ids}\n')
 
-        self.num_local_experts = len(self.local_expert_ids)
+        self.num_local_experts = len(self.local_expert_global_ids)
         # print(f'num_local_experst: {self.num_local_experts}')
                 
         # Instantiate top_k gating. Note that I am passing the ids of the experts assigned to the GPU running this instance
-        self.gate = TopKMoEGate(config, self.local_expert_ids)
+        self.gate = TopKMoEGate(config, self.local_expert_global_ids)
 
         # create ModuleDict with an expert (instance of ExpertMoeSwiglu) for each index in local_experts_ids. Note that nn.ModuleDict accepts only string as a key. So in the foreard method, we have to go through gymnastics of converting the string to an integer for some operations and using the string version to access the dictionary.
-        self.local_experts = nn.ModuleDict({str(i) : ExpertMoESwiglu(config) for i in self.local_expert_ids})
+        self.local_experts = nn.ModuleDict({str(id) : ExpertMoESwiglu(config) for id in self.local_expert_global_ids})
 
-        # print(f'local experts dict:\n{self.local_experts}')
+        print(f'local experts dict:\n{self.local_experts}')
         
        
     def forward(self, x):
@@ -227,7 +228,7 @@ class MoELayerSharded(nn.Module):
         top_k_gated_weights, top_k_local_indices  = self.gate(x)
 
         # Put the  global id of the experts on this gpu into a tensor
-        local_expert_id_tensor = torch.tensor(self.local_expert_ids, device=x.device)  # [num experts assigned to this gpu]
+        local_expert_id_tensor = torch.tensor(self.local_expert_global_ids, device=x.device)  # [num experts assigned to this gpu]
         # map the top_k_local_indices to the global id
         top_k_global_indices = local_expert_id_tensor[top_k_local_indices]  # [B, T, k]
 
@@ -241,6 +242,7 @@ class MoELayerSharded(nn.Module):
 
         # flatten the gated weights to (batch_size * seq_len, num_local_experts) for batch processing
         top_k_gated_weights_flat = top_k_gated_weights.view(batch_size*seq_len, self.num_local_experts)  
+        if dist.get_rank() == 0: print(f'\ntop_k_gated_weights_flat shape ; {top_k_gated_weights_flat.shape}\n')
 
         # Iterate over each expert  assigned to this GPU and apply it to the input
         for expert_id_global_str in self.local_experts.keys():
@@ -261,15 +263,15 @@ class MoELayerSharded(nn.Module):
             if flat_mask.any():
                 # If the flat mask has any True values, Apply the expert to the inputs selected by the mask. x_flat[flat_mask] picks the rows(tokens) of x_flat where the mask is True. This allows us to activate the expert only for the tokens where the expert with expert_id_global is in the top_k indices.
                 expert_input = x_flat[flat_mask] # (number of tokens where expert_id_global is in top_k, n_embd)
-                print(f'\nexpert_input shape: {expert_input.shape} \n{expert_input}\n')
+                if dist.get_rank() == 0: print(f'\nexpert_input shape: {expert_input.shape} \n{expert_input}\n')
 
                 # apply expert i to the expert_input. Again, note that based on the mask described above, epxert i is applied only to the tokens where it is in the top_k indices.
                 expert_output = self.local_experts[expert_id_global_str](expert_input) # (number of tokens where expert i is in top_k, n_embd)
                 if dist.get_rank() == 0: print(f'expert_output shape: {expert_output.shape} \n{expert_output}\n')
 
                 # Now we need to scale the expert output by the gated weights for the tokens where the expert is in the top_k indices. gated_weights_flat has shape (batch_size * seq_len, num_local_experts). We apply the same mask as we used to create expert_input to select all rows from gated_weights_flat where expert i is in the top_k indices, then we select the ith column. This returns the weighting for expert i that is to be applied to the tokens where expert i is in the top_k indices. This is the same as selecting all the non_zero values in the ith column of gated_weights_flat. We  then use unsqueeze(1) to add a dimension to create a column vector of shape (number of tokens where expert i is in top_k, 1). this allows  multiplication with the expert_output which has shape (number of tokens where expert i is in top_k, num_local_experts). 
-                print(f'top_k_gated_weights_flat shape: {top_k_gated_weights_flat.shape} \n{top_k_gated_weights_flat}\n')
-                print(f'\nexpert_id_global: {expert_id_global}\n')
+                if dist.get_rank() == 0: print(f'top_k_gated_weights_flat shape: {top_k_gated_weights_flat.shape} \n{top_k_gated_weights_flat}\n')
+                if dist.get_rank() == 0: print(f'\nexpert_id_global: {expert_id_global}\n')
 
                 expert_weights = top_k_gated_weights_flat[flat_mask, expert_id_global].unsqueeze(1)  # (number of tokens where expert i is in top_k, 1)
                 # print(f'expert_weights shape: {expert_weights.shape} \n{expert_weights}\n')
