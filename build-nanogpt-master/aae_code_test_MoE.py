@@ -308,16 +308,36 @@ print(f"\nSelected cols:\n{selected_cols}")
 
 
 # %%
-expert_id_global = torch.tensor([3, 11, 4, 12])
-top_k_lcl_indices = torch.tensor([2,0])
+D ={
+    '1' : "exper dummy",
+    '3' : "exper dummy",
+    '5' : "exper dummy",
+    '7' : "exper dummy",
+}
+B=3
+T=5
+expert_id_global = torch.tensor([1, 3, 5, 7])
+top_k_lcl_indices = torch.tensor([
+                                [[2,3],[1,0], [3,1], [2,1], [3,0]],
+                                 [[1,2],[1,3], [0,1], [2,0,], [3,2]],
+                                 [[1,3],[2,0], [3,3], [1,0], [0,2]]
+                                 ])
 
 top_k_global_indices = expert_id_global[top_k_lcl_indices]
 
 print(top_k_global_indices)
+# print(top_k_global_indices.view((B*T), -1))
 
-for expert_id_global in 
-expert_mask = (top_k_global_indices == expert_id_global).any(dim=-1)
-print(expert_mask)
+for id_str in D.keys():
+    id = int(id_str)
+    # print(id.shape)
+    print(top_k_global_indices.shape)
+    print(id)
+    expert_mask = (top_k_global_indices == id).any(dim=-1)
+    print(expert_mask)
+    flat_mask = expert_mask.view(-1)
+    print(flat_mask)
+    break
 
 
 

@@ -164,16 +164,16 @@ class TopKMoEGate(nn.Module):
     def forward(self, x):
         
         # In each batch, there is a logit for each token in the sequence and for each expert. 
-        logits = self.gate_linear(x) # (batch_size, seq_len, num_experts)
+        logits = self.gate_linear(x) # (batch_size, seq_len, num_local_experts)
 
         # The global noise to be added to the logits of each expert. This is a random noise tensor of the same shape as the logits. 
-        noise = torch.randn_like(logits) * self.noisy_std # (batch_size, seq_len, num_experts)
+        noise = torch.randn_like(logits) * self.noisy_std # (batch_size, seq_len, num_local_experts)
 
         # Per-expert noise scaling using self.weights. 
         noise = noise * self.noise_weight
 
         # Add the noise to the logits. 
-        logits_noisy = logits + noise  # (batch_size, seq_len, num_experts)
+        logits_noisy = logits + noise  # (batch_size, seq_len, num_local_experts)
 
         # Get the top-k logits and their corresponding indices. The pytorch top_k method returns the top-k values and their indices along the last dimension (num_experts). In each batch, for each token in the sequence, it selects the top-k logits and their indices from the logits produced by each expert.
         top_k_logits_noisy, top_k_indices_noisy = logits_noisy.topk(self.k, dim=-1)  # (batch_size, seq_len, top_k) 
