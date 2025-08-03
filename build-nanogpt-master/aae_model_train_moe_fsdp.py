@@ -21,6 +21,7 @@ assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devic
 class GPTConfig:
     seq_len: int = 1024 # max sequence length
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
+    batch_size = 16
     vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
@@ -164,7 +165,7 @@ from aae_dataloader_utils import DataLoaderShardMultiGPU
 # initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
 B = 32 # batch size
 
-train_loader = DataLoaderShardMultiGPU(B=B, seq_len=config.seq_len, process_rank = FSDP_rank, num_processes=FSDP_world_size, split='train')
+train_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = FSDP_rank, num_processes=FSDP_world_size, split='train')
 
 val_loader = DataLoaderShardMultiGPU(B=B, seq_len=config.seq_len, process_rank = FSDP_rank, num_processes=FSDP_world_size, split='val')
 
