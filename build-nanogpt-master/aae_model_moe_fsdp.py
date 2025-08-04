@@ -221,12 +221,17 @@ class MoELayerSharded(nn.Module):
 
         # print(f'local experts dict:\n{self.local_experts}')
 
-        self.register_buffer("accum_topk_expert_count", torch.zeros(self.world_size, dtype=torch.int16))
+        self.register_buffer("accum_topk_expert_count", torch.zeros(self.num_global_experts, dtype=torch.int64))
+       
 
     def token_count(self, top_k_global_ids):
         topk_flat = torch.flatten(top_k_global_ids)
-        bin_count = torch.bincount(topk_flat)
-        self.accum_topk_expert_count += bin_count
+        # print(f'topk_global_id:\n{topk_flat}\n')
+        bin_count = torch.bincount(topk_flat, minlength=4)
+        print(f'bin count:\n{bin_count}\n')
+        # print(f'accum_topk_expert_count:\n{self.accum_topk_expert_count}\n')
+        # self.accum_topk_expert_count += bin_count
+        return bin_count
 
         
        
@@ -240,7 +245,11 @@ class MoELayerSharded(nn.Module):
         # map the top_k_local_ids to the global id
         top_k_global_ids = local_expert_global_id_tensor[top_k_local_ids]  # [B, T, k]
 
-        
+        bin_count = self.token_count(top_k_global_ids)
+        self.accum_topk_expert_count += bin_count
+        print(f'accum_topk_expert_count:\n{self.accum_topk_expert_count}\n')
+
+
         # tensor to hold the output from just the experts in this process
         y_partial_output = torch.zeros_like(x)
         # print(f'\ninput x shape: {x.shape} \n{x}\n')
