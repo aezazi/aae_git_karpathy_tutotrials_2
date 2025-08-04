@@ -241,6 +241,8 @@ log_params = eval_log_utils.LogParamsFilesConfig(
 # Run the training loop.
 model.train() # set the model to training mode
 
+accum_topk_expert_count = [torch.zeros(config.num_experts, device=device, dtype=torch.long) for _ in range(config.n_layer)]
+
 for step in range(training_steps):
     t0 = time.time()
     last_step = (step == training_steps - 1)
@@ -260,9 +262,14 @@ for step in range(training_steps):
 
         # we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs. The device must be cuda.
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-            logits, loss = model(x, y)
+            logits, loss, top_k_all = model(x, y)
         
         
+        with torch.no_grad():
+            for layer_idx, top_k_global_ids in enumerate(top_k_all):
+                counts = torch.bincount(top_k_global_ids, minlength=config.num_experts)
+                accum_topk_expert_count[layer_idx] += counts
+
         # divide the loss by the number of micro steps to get the average loss of the accumulated micro steps
         loss = loss / micro_steps 
         
@@ -302,12 +309,6 @@ for step in range(training_steps):
         # print processing stats
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
 
-        # print(f'accumulated_topk_expert_count: {model.accum_topk_expert_count}')
-
-    # if master_process and (step % 10 == 0):
-    #     moe_layers = [module for module in model.modules() if hasattr(module, "accum_topk_expert_count")]
-    #     for i, moe in enumerate(moe_layers):
-    #         print(f"Step {step} | MoE Layer {i} expert usage: {moe.accum_topk_expert_count.tolist()}")
 
     # every x steps evaluate, print, and log hellaswag.
     if ((step > 0 and step % 250 == 0) or last_step):

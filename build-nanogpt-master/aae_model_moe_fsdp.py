@@ -245,16 +245,6 @@ class MoELayerSharded(nn.Module):
         # map the top_k_local_ids to the global id
         top_k_global_ids = local_expert_global_id_tensor[top_k_local_ids]  # [B, T, k]
 
-        # bin_count = self.token_count(top_k_global_ids)
-        # self.accum_topk_expert_count += bin_count
-        if self.training and hasattr(self, "expert_selection_counts"):
-            with torch.no_grad():
-                counts = torch.bincount(top_k_global_ids.flatten(), minlength=self.num_global_experts)
-                self.expert_selection_counts += counts
-
-            # print(f'expert_selection_counts:\n{counts}\n')
-
-
         # tensor to hold the output from just the experts in this process
         y_partial_output = torch.zeros_like(x)
         # print(f'\ninput x shape: {x.shape} \n{x}\n')
@@ -332,7 +322,7 @@ class MoELayerSharded(nn.Module):
         # refer to literature on why this formula for the load balancing loss
         aux_loss = (avg_tokens_per_expert * avg_weight_per_expert).sum() * self.num_local_experts
 
-        return y_partial_output, aux_loss
+        return y_partial_output, aux_loss, top_k_global_ids
 
         
 #%%
@@ -347,9 +337,9 @@ class Block(nn.Module):
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
-        moe_out, aux_loss = self.moe(self.ln_2(x))  
+        moe_out, aux_loss, top_k_global_ids = self.moe(self.ln_2(x))
         x = x + (moe_out * self.moe_scale)
-        return x, aux_loss
+        return x, aux_loss, top_k_global_ids
 
 # %%
 class CreateMoESharded(nn.Module):
@@ -406,9 +396,11 @@ class CreateMoESharded(nn.Module):
         
         # apply the transformer blocks. each block applies layer norm, self-attention, residual connection, layer norm, MoE layer, residual connection
         x = token_embd
+        top_k_all = []
         for block in self.transformer.h:
-            x, aux_loss = block(x)
+            x, aux_loss, top_k_global_ids = block(x)
             aux_loss_total += aux_loss
+            top_k_all.append(torch.flatten(top_k_global_ids))
         
         # apply layer norm to the output of the last transformer block
         x = self.transformer.ln_f(x)
@@ -425,7 +417,7 @@ class CreateMoESharded(nn.Module):
         
         total_loss = main_loss + (self.config.aux_loss_scale * aux_loss_total)
         
-        return logits, total_loss
+        return logits, total_loss, top_k_all
 
 
 #%%
