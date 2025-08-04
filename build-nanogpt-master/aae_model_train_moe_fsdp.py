@@ -241,6 +241,7 @@ log_params = eval_log_utils.LogParamsFilesConfig(
 # Run the training loop.
 model.train() # set the model to training mode
 
+total_tokens_seen = 0
 accum_topk_expert_count = [torch.zeros(config.num_experts, device=device, dtype=torch.long) for _ in range(config.n_layer)]
 
 for step in range(training_steps):
@@ -293,6 +294,7 @@ for step in range(training_steps):
     dt = (t1 - t0)
     tokens_processed = train_loader.B * train_loader.seq_len * micro_steps * FSDP_world_size
     tokens_per_sec = tokens_processed / dt
+    total_tokens_seen += tokens_processed
     
     # update log_params, log traing loss and learning rate to file, print processing stats.
     if master_process:
@@ -308,7 +310,15 @@ for step in range(training_steps):
 
         # print processing stats
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
-
+    
+    if step % 100 == 0 and master_process:
+        print(f'\n')
+        for i, c in enumerate(accum_topk_expert_count):
+            print(f"Layer {i}: {c.tolist()}")
+        print(f'\n')
+        for i, c in enumerate(accum_topk_expert_count):
+            print(f"Layer {i} normalized: {(c / total_tokens_seen)}")
+        print(f'\n')
 
     # every x steps evaluate, print, and log hellaswag.
     if ((step > 0 and step % 250 == 0) or last_step):
