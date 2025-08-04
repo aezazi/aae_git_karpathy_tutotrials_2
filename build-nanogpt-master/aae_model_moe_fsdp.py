@@ -247,11 +247,12 @@ class MoELayerSharded(nn.Module):
 
         # bin_count = self.token_count(top_k_global_ids)
         # self.accum_topk_expert_count += bin_count
-        if self.training and self.rank == 0:
-            counts = torch.bincount(top_k_global_ids.flatten(), minlength=self.num_global_experts)
-            self.expert_selection_counts += counts
+        if self.training and hasattr(self, "expert_selection_counts"):
+            with torch.no_grad():
+                counts = torch.bincount(top_k_global_ids.flatten(), minlength=self.num_global_experts)
+                self.expert_selection_counts += counts
 
-        print(f'expert_selection_counts:\n{self.expert_selection_counts}\n')
+            # print(f'expert_selection_counts:\n{counts}\n')
 
 
         # tensor to hold the output from just the experts in this process

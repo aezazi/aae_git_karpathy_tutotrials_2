@@ -246,7 +246,6 @@ for step in range(training_steps):
     last_step = (step == training_steps - 1)
 
     # Main training loop
-    model.train()
     optimizer.zero_grad()
     loss_accum  = 0.0
     micro_steps = accumulation_steps_desired # set the number of mirco steps to accumulate gradients over
@@ -270,7 +269,7 @@ for step in range(training_steps):
         # Look at Pytorch documentation for more details on tensor.detach() vs. tensor.item()
         loss_accum += loss.detach() 
         loss.backward()
-
+    
 
     if FSDP_check:
         dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG)
@@ -304,6 +303,11 @@ for step in range(training_steps):
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
 
         # print(f'accumulated_topk_expert_count: {model.accum_topk_expert_count}')
+
+    # if master_process and (step % 10 == 0):
+    #     moe_layers = [module for module in model.modules() if hasattr(module, "accum_topk_expert_count")]
+    #     for i, moe in enumerate(moe_layers):
+    #         print(f"Step {step} | MoE Layer {i} expert usage: {moe.accum_topk_expert_count.tolist()}")
 
     # every x steps evaluate, print, and log hellaswag.
     if ((step > 0 and step % 250 == 0) or last_step):
