@@ -221,19 +221,6 @@ class MoELayerSharded(nn.Module):
 
         # print(f'local experts dict:\n{self.local_experts}')
 
-        self.register_buffer("expert_selection_counts", torch.zeros(config.num_experts, dtype=torch.long))
-       
-
-    def token_count(self, top_k_global_ids):
-        topk_flat = torch.flatten(top_k_global_ids)
-        # print(f'topk_global_id:\n{topk_flat}\n')
-        bin_count = torch.bincount(topk_flat, minlength=4)
-        print(f'bin count:\n{bin_count}\n')
-        # print(f'accum_topk_expert_count:\n{self.accum_topk_expert_count}\n')
-        # self.accum_topk_expert_count += bin_count
-        return bin_count
-
-        
        
     def forward(self, x):
         batch_size, seq_len, _ = x.shape
@@ -259,15 +246,15 @@ class MoELayerSharded(nn.Module):
 
         # Iterate over each expert  assigned to this GPU and apply it to the input
         for i, key in enumerate(self.local_experts):
-            local_expert_local_id = i
-            local_expert_global_id = int(key)
+            local_id = i
+            global_id = int(key)
             
             # Create a mask for the inputs where the current expert is in top-k. the mask will have shape (batch_size, seq_len). top_k_indices have shape (B, seq_len, top_k). Each row of each batch in top_k_indices has the indices of the top two experts for the token corresponding that row in the token sequence. The mask will return True (row wise) if expert i is in the top_k indices. S
             
             # print(f'\nExperts {local_expert_global_id} with x_flat input shape {x_flat.shape}\n')
             # print(f'top_k_indices shape: {top_k_global_ids.shape} \n{top_k_global_ids}\n')
 
-            expert_mask = (top_k_global_ids == local_expert_global_id).any(dim=-1) #shape (B, seq_len)
+            expert_mask = (top_k_local_ids == local_id).any(dim=-1) #shape (B, seq_len)
             # print(f'expert_mask shape: {expert_mask.shape} \n{expert_mask}\n')
 
             # flatten the mask to match the shape of the flattened input x_flat. Note that the shape of flat_mask is a one dimensional (batch_size*seq_len). x_flat has shape (batch_size * seq_len, n_embd). each row in x_flat is a token in the sequence. 
@@ -287,7 +274,7 @@ class MoELayerSharded(nn.Module):
                 # if dist.get_rank() == 0: print(f'top_k_gated_weights_flat shape: {top_k_gated_weights_flat.shape} \n{top_k_gated_weights_flat}\n')
                 # if dist.get_rank() == 0: print(f'\nlocal_expert_global_id: {local_expert_global_id}\n')
 
-                expert_weights = top_k_gated_weights_flat[flat_mask, local_expert_local_id].unsqueeze(1)  # (number of tokens where expert i is in top_k, 1)
+                expert_weights = top_k_gated_weights_flat[flat_mask, local_id].unsqueeze(1)  # (number of tokens where expert i is in top_k, 1)
                 # print(f'expert_weights shape: {expert_weights.shape} \n{expert_weights}\n')
 
                 # Scale the expert_output by expert_weights.
