@@ -27,7 +27,7 @@ class GPTConfig:
     n_head: int = 12
     n_embd: int = 768
     base_lr = 3e-4
-    warm_up_steps = 1000
+    warm_up_steps = 300
     num_experts = 8
     k = 2
     aux_loss_scale = 0.1
@@ -302,6 +302,8 @@ for step in range(training_steps):
 
         # print processing stats
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
+
+        print(f'accumulated_topk_expert_count: {model.accum_topk_expert_count}')
 
     # every x steps evaluate, print, and log hellaswag.
     if ((step > 0 and step % 250 == 0) or last_step):

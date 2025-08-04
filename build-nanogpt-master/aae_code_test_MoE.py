@@ -352,3 +352,23 @@ D ={
 for i , key in enumerate(D):
     print(i, key)
 # %%
+print(torch.zeros(5, dtype=torch.int16))
+
+# %%
+accum = torch.zeros(13, dtype=torch.int16)
+print(f'\naccum:\n{accum}\n')
+f = torch.tensor([[1, 2, 3],
+                     [4, 5, 6],
+                     [5, 1, 5],
+                     [10, 1, 12]])
+
+f = torch.flatten(f)
+print(f'\ndata_flat:\n{f}\n')
+bin_count = torch.bincount(f, minlength=13)
+print(f'\nbin_count:\n{bin_count}\n')
+accum += bin_count
+
+print(f'\naccum updated:\n{accum}\n')
+
+
+# %%
