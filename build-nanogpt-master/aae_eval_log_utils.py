@@ -125,7 +125,7 @@ class HellaSwag:
             # get the logits
             with torch.no_grad():
                 with torch.autocast(device_type=self.device, dtype=torch.bfloat16):
-                    logits, loss = self.model(tokens)
+                    logits, loss, _ = self.model(tokens)
                 pred_norm = self.get_most_likely_row(tokens, mask, logits)
             num_total += 1
             num_correct_norm += int(pred_norm == label)
@@ -208,7 +208,7 @@ class GenerateSample:
             # forward the model to get the logits
             with torch.no_grad():
                 with torch.autocast(device_type=self.device, dtype=torch.bfloat16):
-                    logits, loss = self.model(self.xgen) # (B, T, vocab_size)
+                    logits, loss, _ = self.model(self.xgen) # (B, T, vocab_size)
                 # take the logits at the last position
                 logits = logits[:, -1, :] # (B, vocab_size)
                 # get the probabilities

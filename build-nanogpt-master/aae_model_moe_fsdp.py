@@ -226,9 +226,9 @@ class MoELayerSharded(nn.Module):
         batch_size, seq_len, _ = x.shape
         # Get the top_k gated weights and top-k indices from the gate for the local experts. Note that the top_k_indices are indexed based on the number of experts assigned to this gpu. So if this gpu has two experts assigned, each the top_k (k=2)indices for each token will be of the form [0,1] or [1,0]. If there are four experts on this gpu, each top_k index would be of the form [1,2] or [2,3]. These local expert indices have to mapped to the global expert ids. So as an example, if we have 8 experts and 2 gpus, and experts [1, 3, 5, 7] are assigned to this gpu, and the top_k_local_ids returned by the gate for a token are [2,0], this would make the  the top_k_global_ids [5,1] which means experts 5 and 1 were the top 2 picked by the gate for that token on this gpu.
         top_k_gated_weights, top_k_local_ids  = self.gate(x)
-        print(f'\ntop_k_gated_weights: {top_k_gated_weights.shape} \n{top_k_gated_weights}\n')
-        print(f'\ntop_k_local_ids: {top_k_local_ids.shape} \n{top_k_local_ids}\n')
         
+        # this is just for print statements to check against top_k_gated_weights flat 
+        top_k_local_ids_flat = top_k_local_ids.view(batch_size*seq_len, -1)  
 
         # Put the  global id of the experts on this gpu into a tensor
         local_expert_global_id_tensor = torch.tensor(self.expert_global_ids, device=x.device)  # [num experts assigned to this gpu]
@@ -245,12 +245,18 @@ class MoELayerSharded(nn.Module):
 
         # flatten the gated weights to (batch_size * seq_len, num_local_experts) for batch processing
         top_k_gated_weights_flat = top_k_gated_weights.view(batch_size*seq_len, self.num_local_experts)  
-        # if dist.get_rank() == 0: print(f'\ntop_k_gated_weights_flat shape ; {top_k_gated_weights_flat.shape}\n')
+
+        # this is just for print statements to check against top_k_gated_weights flat 
+        # top_k_local_ids_flat = top_k_local_ids.view(batch_size*seq_len, -1) 
+        # if dist.get_rank() == 0: print(f'\ntop_k_local_ids_flat ; {top_k_local_ids_flat.shape}\n{top_k_local_ids_flat[0:6,:]}\n')
+        # if dist.get_rank() == 0: print(f'\ntop_k_gated_weights_flat shape ; {top_k_gated_weights_flat.shape}\n{top_k_gated_weights_flat[0:6,:]}\n')
+        
+        
 
         # Iterate over each expert  assigned to this GPU and apply it to the input
         for i, key in enumerate(self.local_experts):
             local_id = i
-            global_id = int(key)
+            global_id = key
             
             # Create a mask for the inputs where the current expert is in top-k. the mask will have shape (batch_size, seq_len). top_k_indices have shape (B, seq_len, top_k). Each row of each batch in top_k_indices has the indices of the top two experts for the token corresponding that row in the token sequence. The mask will return True (row wise) if expert i is in the top_k indices. S
             
@@ -308,13 +314,11 @@ class MoELayerSharded(nn.Module):
 
         # print(f'\navg_tokens_per_expert: \n {avg_tokens_per_expert}\n')
 
-
         # refer to literature on why this formula for the load balancing loss
         aux_loss = (avg_tokens_per_expert * avg_weight_per_expert).sum() * self.num_local_experts
 
         return y_partial_output, aux_loss, top_k_global_ids
 
-        
 #%%
 class Block(nn.Module):
     def __init__(self, config):
