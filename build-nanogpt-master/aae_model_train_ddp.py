@@ -219,7 +219,6 @@ for step in range(training_steps):
     last_step = (step == training_steps - 1)
 
     # Main training loop
-    model.train()
     optimizer.zero_grad()
     loss_accum  = 0.0
     micro_steps = accumulation_steps_desired # set the number of mirco steps to accumulate gradients over

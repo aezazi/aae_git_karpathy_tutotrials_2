@@ -21,16 +21,16 @@ assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devic
 class GPTConfig:
     seq_len: int = 1024 # max sequence length
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
-    batch_size = 16
+    batch_size = 32
     vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
-    base_lr = 3e-4 * 2
+    base_lr = 6e-4 * 3
     warm_up_steps = 300
-    num_experts = 4
+    num_experts = 8
     k = 2
-    aux_loss_scale = 0.01
+    aux_loss_scale = 0.005
     print_token_routing = True
     
     def __post_init__(self):
@@ -312,7 +312,7 @@ for step in range(training_steps):
         # print processing stats
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
     
-    if config.print_token_routing and step % 100 == 0 and master_process:
+    if config.print_token_routing and step % 100 == 0:
         print(f'\n')
         for i, c in enumerate(accum_topk_expert_count):
             print(f"Layer {i}: {c.tolist()}")
