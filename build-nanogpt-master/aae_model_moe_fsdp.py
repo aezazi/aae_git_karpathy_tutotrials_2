@@ -226,6 +226,9 @@ class MoELayerSharded(nn.Module):
         batch_size, seq_len, _ = x.shape
         # Get the top_k gated weights and top-k indices from the gate for the local experts. Note that the top_k_indices are indexed based on the number of experts assigned to this gpu. So if this gpu has two experts assigned, each the top_k (k=2)indices for each token will be of the form [0,1] or [1,0]. If there are four experts on this gpu, each top_k index would be of the form [1,2] or [2,3]. These local expert indices have to mapped to the global expert ids. So as an example, if we have 8 experts and 2 gpus, and experts [1, 3, 5, 7] are assigned to this gpu, and the top_k_local_ids returned by the gate for a token are [2,0], this would make the  the top_k_global_ids [5,1] which means experts 5 and 1 were the top 2 picked by the gate for that token on this gpu.
         top_k_gated_weights, top_k_local_ids  = self.gate(x)
+        print(f'\ntop_k_gated_weights: {top_k_gated_weights.shape} \n{top_k_gated_weights}\n')
+        print(f'\ntop_k_local_ids: {top_k_local_ids.shape} \n{top_k_local_ids}\n')
+        
 
         # Put the  global id of the experts on this gpu into a tensor
         local_expert_global_id_tensor = torch.tensor(self.expert_global_ids, device=x.device)  # [num experts assigned to this gpu]

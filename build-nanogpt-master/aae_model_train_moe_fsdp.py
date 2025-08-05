@@ -28,7 +28,7 @@ class GPTConfig:
     n_embd: int = 768
     base_lr = 3e-4
     warm_up_steps = 300
-    num_experts = 4
+    num_experts = 16
     k = 2
     aux_loss_scale = 0.1
     
@@ -311,14 +311,14 @@ for step in range(training_steps):
         # print processing stats
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
     
-    if step % 100 == 0 and master_process:
-        print(f'\n')
-        for i, c in enumerate(accum_topk_expert_count):
-            print(f"Layer {i}: {c.tolist()}")
-        print(f'\n')
-        for i, c in enumerate(accum_topk_expert_count):
-            print(f"Layer {i} normalized: {(c / total_tokens_seen)}")
-        print(f'\n')
+    # if step % 100 == 0 and master_process:
+    #     print(f'\n')
+    #     for i, c in enumerate(accum_topk_expert_count):
+    #         print(f"Layer {i}: {c.tolist()}")
+    #     print(f'\n')
+    #     for i, c in enumerate(accum_topk_expert_count):
+    #         print(f"Layer {i} normalized: {(c / total_tokens_seen)}")
+    #     print(f'\n')
 
     # every x steps evaluate, print, and log hellaswag.
     if ((step > 0 and step % 250 == 0) or last_step):
