@@ -28,7 +28,7 @@ class GPTConfig:
     n_embd: int = 768
     base_lr = 6e-4 * 3
     warm_up_steps = 300
-    num_experts = 8
+    num_experts = 4
     k = 2
     aux_loss_scale = 0.005
     print_token_routing = True

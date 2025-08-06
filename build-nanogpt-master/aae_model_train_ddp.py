@@ -28,9 +28,9 @@ class GPTConfig:
     n_embd: int = 768
     base_lr = 6e-4 * 3
     warm_up_steps = 300
-    num_experts = 8
+    num_experts = 4
     k = 2
-    print_token_routing = False
+    print_token_routing = True
 
 # instantiate and check the config
 config = GPTConfig()
@@ -115,9 +115,6 @@ if ddp:
     model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=True)
     print(f'\nModel wrapped in DDP on device: {device}')
 
-
-use_compile = True # set to True to use torch.compile
-model = torch.compile(model) if use_compile else model 
 # get the raw model from the DDP wrapper. DDP is just a wrapper around your model that adds gradient syncing.The actual parameters live inside model.module. So thats what we will need to pass to the optimizer
 raw_model = model.module if ddp else model 
 
@@ -126,8 +123,6 @@ raw_model = model.module if ddp else model
 # Instantiate the optimizer.
 # NOTE: I moved the code for optimizer configuration to a separate file called aae_utils.py.
 from aae_utils import ConfigureOptimizer
-
-
 
 # Note that we are using the raw model here, not the DDP wrapped model. This is because the DDP wrapper does not have the optimizer parameters. The raw model is the actual model that we want to optimize.
 optimizer = ConfigureOptimizer(raw_model).create_optimizer(weight_decay=0.1, learning_rate = config.base_lr, device_type=device)
@@ -288,7 +283,7 @@ for step in range(training_steps):
         # print processing stats
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
 
-    if config.print_token_routing and step % 20 == 0:
+    if config.print_token_routing and step % 450 == 0:
         print(f'\n')
         for i, c in enumerate(accum_topk_expert_count):
             print(f"Layer {i}: {c.tolist()}")
@@ -298,15 +293,15 @@ for step in range(training_steps):
         print(f'\n')
 
     # every x steps evaluate, print, and log hellaswag.
-    if ((step > 0 and step % 30 == 0) or last_step):
+    if ((step > 0 and step % 350 == 0) or last_step):
         eval_log_utils.HellaSwag(log_params=log_params).log_print_hella_accuracy()
 
     # Every x steps, put the model in validation mode and use the validation dataset to compute loss. This is to help us catch any over fitting issues. 
-    if step % 10 == 0 and step > 0:
+    if step % 250 == 0 and step > 0:
         eval_log_utils.Validation(log_params=log_params).check_validation_loss()
     
     # every x steps generate from the model.
-    if ((step % 17 == 0 and step > 0) or last_step):
+    if ((step % 500 == 0 and step > 0) or last_step):
         eval_log_utils.GenerateSample(log_params=log_params).generate(context="Hello, I'm a language model,", sample_max_length=32)
 
 if ddp:
