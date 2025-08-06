@@ -11,12 +11,10 @@ import aae_model_moe_ddp as model_rotary_moe
 
 
 # #%%
-# assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
+assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
 
 # %%
 # This is the configuration for the GPT model. It defines the hyperparameters for the model. The block size is the maximum sequence length, vocab size is the size of the vocabulary, n_layer is the number of transformer blocks, n_head is the number of attention heads, and n_embd is the embedding dimension. 
-
-
 @dataclass
 class GPTConfig:
     seq_len: int = 1024 # max sequence length
@@ -28,7 +26,7 @@ class GPTConfig:
     n_embd: int = 768
     base_lr = 6e-4 * 3
     warm_up_steps = 300
-    num_experts = 4
+    num_experts = 8
     k = 2
     print_token_routing = True
 
