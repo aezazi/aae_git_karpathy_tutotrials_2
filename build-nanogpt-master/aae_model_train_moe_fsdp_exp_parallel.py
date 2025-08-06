@@ -7,7 +7,7 @@ from torch.nn import functional as F
 from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
-import aae_model_moe_fsdp as model_fsdp
+import aae_model_moe_fsdp_exp_parallel as model_fsdp
 
 
 #%%
@@ -128,7 +128,7 @@ mixed_precision = MixedPrecision(
 )
 
 if FSDP_check:
-    from aae_model_moe_fsdp import Block
+    from aae_model_moe_fsdp_exp_parallel import Block
     # wrap only full transformer blocks
     auto_wrap_policy = functools.partial(
         transformer_auto_wrap_policy,
@@ -165,11 +165,10 @@ if FSDP_check:
 from aae_dataloader_utils import DataLoaderShardMultiGPU
 
 # initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
-B = 32 # batch size
 
 train_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = FSDP_rank, num_processes=FSDP_world_size, split='train')
 
-val_loader = DataLoaderShardMultiGPU(B=B, seq_len=config.seq_len, process_rank = FSDP_rank, num_processes=FSDP_world_size, split='val')
+val_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = FSDP_rank, num_processes=FSDP_world_size, split='val')
 
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
 effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
@@ -242,6 +241,7 @@ log_params = eval_log_utils.LogParamsFilesConfig(
 # Run the training loop.
 model.train() # set the model to training mode
 
+# counter and container for tracking how many tokens are assigned to each expert by transformer layer
 total_tokens_seen = 0
 accum_topk_expert_count = [torch.zeros(config.num_experts, device=device, dtype=torch.long) for _ in range(config.n_layer)]
 

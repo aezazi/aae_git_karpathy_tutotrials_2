@@ -8,7 +8,7 @@ from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
 import aae_model_moe_ddp as model_rotary_moe
-import aae_model_rotary as model_rotary
+
 
 # #%%
 # assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
@@ -21,12 +21,16 @@ import aae_model_rotary as model_rotary
 class GPTConfig:
     seq_len: int = 1024 # max sequence length
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
+    batch_size = 32
     vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
+    base_lr = 6e-4 * 3
+    warm_up_steps = 300
     num_experts = 8
     k = 2
+    print_token_routing = True
 
 # instantiate and check the config
 config = GPTConfig()
@@ -123,10 +127,10 @@ raw_model = model.module if ddp else model
 # NOTE: I moved the code for optimizer configuration to a separate file called aae_utils.py.
 from aae_utils import ConfigureOptimizer
 
-base_lr = 6e-4 * 4
+
 
 # Note that we are using the raw model here, not the DDP wrapped model. This is because the DDP wrapper does not have the optimizer parameters. The raw model is the actual model that we want to optimize.
-optimizer = ConfigureOptimizer(raw_model).create_optimizer(weight_decay=0.1, learning_rate = base_lr, device_type=device)
+optimizer = ConfigureOptimizer(raw_model).create_optimizer(weight_decay=0.1, learning_rate = config.base_lr, device_type=device)
 
 if ddp:
     print(f'\nOptimizer initialized on GPU rank {ddp_rank}, device {device}')
@@ -137,11 +141,10 @@ if ddp:
 from aae_dataloader_utils import DataLoaderShardMultiGPU
 
 # initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
-B = 32 # batch size
 
-train_loader = DataLoaderShardMultiGPU(B=B, seq_len=config.seq_len, process_rank = ddp_rank, num_processes=ddp_world_size, split='train')
+train_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = ddp_rank, num_processes=ddp_world_size, split='train')
 
-val_loader = DataLoaderShardMultiGPU(B=B, seq_len=config.seq_len, process_rank = ddp_rank, num_processes=ddp_world_size, split='val')
+val_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = ddp_rank, num_processes=ddp_world_size, split='val')
 
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
 effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
@@ -168,7 +171,7 @@ training_steps = 19703
 # the number of iterations over which lr is reduced to the minimum
 T_max = training_steps 
 
-max_lr = base_lr # max learning rate
+max_lr = config.base_lr # max learning rate
 min_lr = max_lr * 0.1 # min learning rate
 
 # modified from gpt paper per AK suggestion to be more aggresive with startup steps than paper
@@ -214,6 +217,10 @@ log_params = eval_log_utils.LogParamsFilesConfig(
 # Run the training loop.
 model.train() # set the model to training mode
 
+# counter and container for tracking how many tokens are assigned to each expert by transformer layer
+total_tokens_seen = 0
+accum_topk_expert_count = [torch.zeros(config.num_experts, device=device, dtype=torch.long) for _ in range(config.n_layer)]
+
 for step in range(training_steps):
     t0 = time.time()
     last_step = (step == training_steps - 1)
@@ -233,7 +240,7 @@ for step in range(training_steps):
 
         # we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs. The device must be cuda.
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-            logits, loss = model(x, y)
+            logits, loss, top_k_all = model(x, y)
         
         
         # divide the loss by the number of micro steps to get the average loss of the accumulated micro steps
@@ -274,6 +281,15 @@ for step in range(training_steps):
 
         # print processing stats
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
+
+    if config.print_token_routing and step % 100 == 0:
+        print(f'\n')
+        for i, c in enumerate(accum_topk_expert_count):
+            print(f"Layer {i}: {c.tolist()}")
+        print(f'\n')
+        for i, c in enumerate(accum_topk_expert_count):
+            print(f"Layer {i} normalized: {(c / total_tokens_seen)}")
+        print(f'\n')
 
     # every x steps evaluate, print, and log hellaswag.
     if ((step > 0 and step % 250 == 0) or last_step):

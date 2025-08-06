@@ -101,7 +101,7 @@ class CausalSelfAttention(nn.Module):
         # Pytorch implementation of Flash attention algorithim. This is the scaled dot-product attention built-in pytorch function. It takes the dot product of the query and key, scales it by the square root of the head size, and then applies a softmax to get the attention weights. The attention weights are then multiplied by the value to get the output. the is_causal=True argument ensures that the attention is only applied to the left of the current position in the sequence (i.e. it is causal). This is done by applying a mask to the attention weights. See Karpathy's video tutorial at 2:00:00 for more details. 
         y = F.scaled_dot_product_attention(q_rot, k_rot, v, is_causal=True) # (B, n_heads, seq_len, dim_heads)
         
-        # transpose back to (B, seq_len, n_heads*dim_heads) and combine heads. Note that the y vector returned by scaled_dot_product is not contiguous and therefor view cannot be applied to until we make it . For view() to work, the original tensor must be contiguous in memory. reshape() can work with both contiguous and non-contiguous tensors, automatically handling the necessary memory operations. 
+        # transpose back to (B, seq_len, n_heads*dim_heads) and combine heads. Note that the y vector returned by scaled_dot_product is not contiguous. For view() to work, the original tensor must be contiguous in memory. reshape() can work with both contiguous and non-contiguous tensors, automatically handling the necessary memory operations. 
         y = y.transpose(1, 2).contiguous().view(B, seq_len, n_embd)
 
         y = self.c_proj(y)
@@ -115,9 +115,13 @@ class ExpertMoESwiglu(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.hidden_dim = config.n_embd * 4 # hidden dimension for the expert
+       
         self.linear_1 = nn.Linear(config.n_embd, self.hidden_dim) 
+        self.linear_1._am_expert =True
         self.linear_2 = nn.Linear(config.n_embd, self.hidden_dim)
+        self.linear_2._am_expert =True
         self.c_proj = nn.Linear(self.hidden_dim, config.n_embd)
+        self.c_proj._am_expert =True
         # torch.manual_seed(42)
 
     def forward(self, x):
@@ -249,7 +253,7 @@ class MoELayer(nn.Module):
 
             # break
 
-        return final_output
+        return final_output, top_k_indices
 
 #%%
 class Block(nn.Module):
@@ -262,8 +266,10 @@ class Block(nn.Module):
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
+        moe_out, top_k_indices = self.moe(self.ln_2(x))
+        x = x + moe_out
         x = x + self.moe(self.ln_2(x))
-        return x
+        return x, top_k_indices
 
 # %%
 class CreateMoE(nn.Module):
@@ -284,18 +290,28 @@ class CreateMoE(nn.Module):
         # initialization
         self.apply(self._init_weights)
 
-    # this Karpathy's weight initialization code that I dont really follow
+    #weight initialization. Mostly from GPT suggestions
     def _init_weights(self, module):
+    # Standard GPT-style init
+        std = 0.02
+
         if isinstance(module, nn.Linear):
-            std = 0.02
+            # ✅ Detect if this linear is inside an MoE expert
+            if hasattr(module, "_am_expert"):
+                # Experts get smaller init for stability
+                std = 0.01
+            
+            # ✅ GPT residual scaling (e.g. output projection)
             if hasattr(module, 'NANOGPT_SCALE_INIT'):
                 std *= (2 * self.config.n_layer) ** -0.5
-                # print('i am here')
-            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+            
+            nn.init.normal_(module.weight, mean=0.0, std=std)
+
             if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
+                nn.init.zeros_(module.bias)
+
         elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, idx, targets=None):
         # idx is the input sequence of token ids
@@ -310,8 +326,10 @@ class CreateMoE(nn.Module):
         
         # apply the transformer blocks. each block applies layer norm, self-attention, residual connection, layer norm, MoE layer, residual connection
         x = token_embd
+        top_k_all = []
         for block in self.transformer.h:
-            x = block(x)
+            x, top_k_indices = block(x)
+            top_k_all.append[top_k_indices]
         
         # apply layer norm to the output of the last transformer block
         x = self.transformer.ln_f(x)
@@ -326,7 +344,7 @@ class CreateMoE(nn.Module):
             # reshape the logits: (B, T, vocab_size) -> (B*T, vocab_size) to match the shape of the targets: (B, T) -> (B*T) and then calculate the cross-entropy loss
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         
-        return logits, loss
+        return logits, loss, top_k_all
 
 
 #%%
