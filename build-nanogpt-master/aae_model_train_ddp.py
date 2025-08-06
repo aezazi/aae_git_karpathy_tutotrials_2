@@ -30,7 +30,7 @@ class GPTConfig:
     warm_up_steps = 300
     num_experts = 8
     k = 2
-    print_token_routing = True
+    print_token_routing = False
 
 # instantiate and check the config
 config = GPTConfig()
@@ -302,11 +302,11 @@ for step in range(training_steps):
         eval_log_utils.HellaSwag(log_params=log_params).log_print_hella_accuracy()
 
     # Every x steps, put the model in validation mode and use the validation dataset to compute loss. This is to help us catch any over fitting issues. 
-    if step % 30 == 0 and step > 0:
+    if step % 10 == 0 and step > 0:
         eval_log_utils.Validation(log_params=log_params).check_validation_loss()
     
     # every x steps generate from the model.
-    if ((step % 30 == 0 and step > 0) or last_step):
+    if ((step % 17 == 0 and step > 0) or last_step):
         eval_log_utils.GenerateSample(log_params=log_params).generate(context="Hello, I'm a language model,", sample_max_length=32)
 
 if ddp:

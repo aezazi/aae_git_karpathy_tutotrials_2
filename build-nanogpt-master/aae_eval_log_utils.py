@@ -175,7 +175,7 @@ class Validation:
 
                 # see training loop for details on the use of autocast. 
                 with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-                    logits, val_loss = self.model(x, y)
+                    logits, val_loss, _ = self.model(x, y)
                 
                 val_loss = val_loss / val_loss_steps # divide the loss by the number of accumulation steps to get the average loss. This computes the averaage loss on one gpu.
                 val_loss_accum += val_loss.detach() # detach the loss from the computation graph to avoid memory leaks.
