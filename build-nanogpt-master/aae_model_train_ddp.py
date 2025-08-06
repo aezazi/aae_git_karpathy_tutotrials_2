@@ -61,7 +61,7 @@ if ddp:
     ddp_rank = dist.get_rank() # get the rank of the current process
     ddp_local_rank = int(os.environ['LOCAL_RANK']) # get the local rank of the current process
     ddp_world_size = dist.get_world_size() # get the total number of processes
-    
+    print('here')
     # set the device to the local rank of the current process
     device = f'cuda:{ddp_local_rank}' 
     torch.cuda.set_device(device) # set the device for the current process
@@ -242,7 +242,12 @@ for step in range(training_steps):
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
             logits, loss, top_k_all = model(x, y)
         
+        with torch.no_grad():
+            for layer_idx, top_k_global_ids in enumerate(top_k_all):
+                counts = torch.bincount(top_k_global_ids, minlength=config.num_experts)
+                accum_topk_expert_count[layer_idx] += counts
         
+
         # divide the loss by the number of micro steps to get the average loss of the accumulated micro steps
         loss = loss / micro_steps 
         
@@ -266,6 +271,7 @@ for step in range(training_steps):
     dt = (t1 - t0)
     tokens_processed = train_loader.B * train_loader.seq_len * micro_steps * ddp_world_size
     tokens_per_sec = tokens_processed / dt
+    total_tokens_seen += tokens_processed
     
     # update log_params, log traing loss and learning rate to file, print processing stats.
     if master_process:
@@ -282,7 +288,7 @@ for step in range(training_steps):
         # print processing stats
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
 
-    if config.print_token_routing and step % 100 == 0:
+    if config.print_token_routing and step % 20 == 0:
         print(f'\n')
         for i, c in enumerate(accum_topk_expert_count):
             print(f"Layer {i}: {c.tolist()}")
@@ -292,15 +298,15 @@ for step in range(training_steps):
         print(f'\n')
 
     # every x steps evaluate, print, and log hellaswag.
-    if ((step > 0 and step % 250 == 0) or last_step):
+    if ((step > 0 and step % 30 == 0) or last_step):
         eval_log_utils.HellaSwag(log_params=log_params).log_print_hella_accuracy()
 
     # Every x steps, put the model in validation mode and use the validation dataset to compute loss. This is to help us catch any over fitting issues. 
-    if step % 250 == 0 and step > 0:
+    if step % 30 == 0 and step > 0:
         eval_log_utils.Validation(log_params=log_params).check_validation_loss()
     
     # every x steps generate from the model.
-    if ((step % 500 == 0 and step > 0) or last_step):
+    if ((step % 30 == 0 and step > 0) or last_step):
         eval_log_utils.GenerateSample(log_params=log_params).generate(context="Hello, I'm a language model,", sample_max_length=32)
 
 if ddp:

@@ -268,7 +268,6 @@ class Block(nn.Module):
         x = x + self.attn(self.ln_1(x))
         moe_out, top_k_indices = self.moe(self.ln_2(x))
         x = x + moe_out
-        x = x + self.moe(self.ln_2(x))
         return x, top_k_indices
 
 # %%
@@ -329,7 +328,7 @@ class CreateMoE(nn.Module):
         top_k_all = []
         for block in self.transformer.h:
             x, top_k_indices = block(x)
-            top_k_all.append[top_k_indices]
+            top_k_all.append(torch.flatten(top_k_indices))
         
         # apply layer norm to the output of the last transformer block
         x = self.transformer.ln_f(x)
