@@ -290,7 +290,7 @@ for step in range(training_steps):
         dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG)
 
     # clip the gradients to prevent exploding gradients
-    norm = nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+    norm = nn.utils.clip_grad_norm_(model_FSDP.parameters(), 1.0)
     optimizer.step()
     scheduler.set_lr(step)
 
