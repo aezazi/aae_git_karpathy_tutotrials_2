@@ -10,6 +10,21 @@ import time
 import aae_model_moe_fsdp as model
 from aae_model_moe_fsdp import Block
 
+from torch.distributed import init_process_group, destroy_process_group
+from torch.distributed.fsdp.wrap import (transformer_auto_wrap_policy,)
+from torch.distributed.fsdp.fully_sharded_data_parallel import (
+    FullyShardedDataParallel as FSDP_wrap,
+    MixedPrecision,
+    BackwardPrefetch,
+    ShardingStrategy,
+    FullStateDictConfig,
+    StateDictType
+
+)
+import torch.distributed as dist
+import functools
+from aae_model_moe_fsdp import Block
+
 
  #%%
 # assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
@@ -28,7 +43,7 @@ class GPTConfig:
     n_embd: int = 768
     base_lr = 6e-4 * 3
     warm_up_steps = 300
-    num_experts = 4
+    num_experts = 8
     k = 2
     print_token_routing = True
 
@@ -43,23 +58,7 @@ print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: 
 
 #%%
 # FSDP setup
-from torch.distributed import init_process_group, destroy_process_group
-from torch.distributed.fsdp.wrap import (transformer_auto_wrap_policy,)
-from torch.distributed.fsdp.fully_sharded_data_parallel import (
-    FullyShardedDataParallel as FSDP_wrap,
-    MixedPrecision,
-    BackwardPrefetch,
-    ShardingStrategy,
-    FullStateDictConfig,
-    StateDictType
 
-)
-import torch.distributed as dist
-import functools
-from aae_model_moe_fsdp import Block
-
-
-#%%
 # Check if we are running in FSDP mode. If so, we will initialize the process group and set the device for each process.
 
 # a simple way to check whether your script is being run under Distributed Data Parallel (FSDP) — specifically when using torchrun with a cuda GPU. Note that you can be in FSDP mode even with a single GPU when using torchrun. 
