@@ -317,7 +317,7 @@ for step in range(training_steps):
         # print processing stats
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
 
-    if config.print_token_routing and step % 450 == 0:
+    if config.print_token_routing and step % 1000 == 0:
         print(f'\n')
         for i, c in enumerate(accum_topk_expert_count):
             print(f"Layer {i}: {c.tolist()}")
@@ -327,15 +327,15 @@ for step in range(training_steps):
         print(f'\n')
 
     # every x steps evaluate, print, and log hellaswag.
-    if ((step > 0 and step % 15 == 0) or last_step):
+    if ((step > 0 and step % 250 == 0) or last_step):
         eval_log_utils.HellaSwag(log_params=log_params).log_print_hella_accuracy()
 
     # Every x steps, put the model in validation mode and use the validation dataset to compute loss. This is to help us catch any over fitting issues. 
-    if step % 10 == 0 and step > 0:
+    if step % 250 == 0 and step > 0:
         eval_log_utils.Validation(log_params=log_params).check_validation_loss()
     
     # every x steps generate from the model.
-    if ((step % 20 == 0 and step > 0) or last_step):
+    if ((step % 1000 == 0 and step > 0) or last_step):
         eval_log_utils.GenerateSample(log_params=log_params).generate(context="Hello, I'm a language model,", sample_max_length=32)
 
 if FSDP:
