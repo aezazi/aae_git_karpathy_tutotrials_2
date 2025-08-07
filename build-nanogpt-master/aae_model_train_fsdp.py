@@ -117,7 +117,7 @@ print(f"\nTotal parameters: {count_parameters(model):,}\n")
 model.to(device)
 
 # if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details. NOTE   that comiple may not play well with FSDP. So will have to experiment.
-use_compile = False # set to True to use torch.compile
+use_compile = True # set to True to use torch.compile
 model = torch.compile(model) if use_compile else model 
 
 # With FSDP, we can wrap different parts of the model. Here I am following a strategy presented in a pytorch tutorial to wrap the transformer block. It's possibel to separately wrap the Moe layer. Will experiment when I get this working.
