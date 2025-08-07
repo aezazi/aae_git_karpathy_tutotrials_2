@@ -269,7 +269,7 @@ for step in range(training_steps):
         # we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs. The device must be cuda.
         
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-            logits, loss, top_k_all = model(x, y)
+            logits, loss, top_k_all = model_FSDP(x, y)
 
        
         with torch.no_grad():
