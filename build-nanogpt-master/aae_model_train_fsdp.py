@@ -46,7 +46,7 @@ print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: 
 from torch.distributed import init_process_group, destroy_process_group
 from torch.distributed.fsdp.wrap import (transformer_auto_wrap_policy,)
 from torch.distributed.fsdp.fully_sharded_data_parallel import (
-    FullyShardedDataParallel as FSDP,
+    FullyShardedDataParallel as FSDP_wrap,
     MixedPrecision,
     BackwardPrefetch,
     ShardingStrategy,
@@ -113,7 +113,7 @@ def count_parameters(model):
 
 print(f"\nTotal parameters: {count_parameters(model):,}\n")
 
-torch.set_float32_matmul_precision('high')
+# torch.set_float32_matmul_precision('high')
 model.to(device)
 
 # if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details. NOTE   that comiple may not play well with FSDP. So will have to experiment.
@@ -123,7 +123,7 @@ model = torch.compile(model) if use_compile else model
 # With FSDP, we can wrap different parts of the model. Here I am following a strategy presented in a pytorch tutorial to wrap the transformer block. It's possibel to separately wrap the Moe layer. Will experiment when I get this working.
 transformer_wrapper_policy = functools.partial(
     transformer_auto_wrap_policy,
-    trasformer_layer_cls = {Block} # transformer layer class as per pytorch tutorial video
+    transformer_layer_cls = {Block} # transformer layer class as per pytorch tutorial video
 )
 
 # FSDP  allows us to define a mixed prescision policy. Here, I am just using bf16 for aeverything, but we can use hybrid. refer to this tutorial for more good info and nuances https://www.youtube.com/watch?v=-caN92JtKqA&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=4
@@ -135,7 +135,7 @@ precision_policy = MixedPrecision(
 )
 
 # wrap model per wrapper policy
-model_FSDP = FSDP(model,
+model_FSDP = FSDP_wrap(model,
                   auto_wrap_policy=transformer_wrapper_policy,
                   mixed_precision=precision_policy,
                 
@@ -267,9 +267,11 @@ for step in range(training_steps):
             model.require_backward_grad_sync = (micro_step == micro_steps - 1) 
 
         # we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs. The device must be cuda.
+        
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
             logits, loss, top_k_all = model(x, y)
-        
+
+       
         with torch.no_grad():
             for layer_idx, top_k_global_ids in enumerate(top_k_all):
                 counts = torch.bincount(top_k_global_ids, minlength=config.num_experts)
@@ -342,6 +344,6 @@ if FSDP:
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
 
-# torchrun --standalone --nproc_per_node=1 aae_model_train_FSDP.py
+# torchrun --standalone --nproc_per_node=1 aae_model_train_fsdp.py
 
 

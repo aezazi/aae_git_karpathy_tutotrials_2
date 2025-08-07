@@ -243,7 +243,15 @@ class MoELayer(nn.Module):
                 # print(f'final_output shape before adding expert_output_weighted:{final_output.shape} \n{final_output}\n')
 
                 # the huggingface implementation uses .squeeze(1) to remove any singleton dimensions from  the expert_output_weighted tensor. Not sure why this is needed. I tried removing it and the shapes were still compatible and the result the same
-                final_output[expert_mask] += expert_output_weighted.squeeze(1) # (batch_size, seq_len, n_embd)
+                
+                # final_output[expert_mask] += expert_output_weighted.squeeze(1) # (batch_size, seq_len, n_embd)
+                
+                
+                expert_contribution = torch.zeros_like(final_output)
+                expert_contribution[expert_mask] = expert_output_weighted.squeeze(1)
+                final_output = final_output + expert_contribution
+                
+                
                 # print(f'final_output shape after adding expert_output_weighted:{final_output.shape} \n{final_output}\n')
 
                 ## just a test to see if .squeeze(1) is necessary
@@ -341,7 +349,9 @@ class CreateMoE(nn.Module):
         if targets is not None:
             # Pytorch's cross-entropy loss expects the logits to be of shape (B*T, vocab_size) and the targets to be of shape (B*T). So we need to reshape the logits and targets to match this shape.
             # reshape the logits: (B, T, vocab_size) -> (B*T, vocab_size) to match the shape of the targets: (B, T) -> (B*T) and then calculate the cross-entropy loss
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+            # loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+
+            loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
         
         return logits, loss, top_k_all
 
