@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 @dataclass
 class LogParamsFilesConfig:
-    fsdp_ddp: bool 
+    FSDP: bool 
     world_size: int 
     rank: int 
     local_rank: int
