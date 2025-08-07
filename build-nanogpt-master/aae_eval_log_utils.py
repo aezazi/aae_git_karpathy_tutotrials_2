@@ -85,7 +85,7 @@ class HellaSwag:
     def __init__(self, log_params):
         self.model = log_params.model
         self.device = log_params.device
-        self.fsdp_ddp = log_params.fsdp_ddp
+        self.FSDP = log_params.FSDP
         self.world_size = log_params.world_size
         self.rank = log_params.rank
         self.master_process = log_params.rank == 0
@@ -130,7 +130,7 @@ class HellaSwag:
             num_total += 1
             num_correct_norm += int(pred_norm == label)
         # reduce the stats across all processes
-        if self.fsdp_ddp:
+        if self.FSDP:
             num_total = torch.tensor(num_total, dtype=torch.long, device=self.device)
             num_correct_norm = torch.tensor(num_correct_norm, dtype=torch.long, device=self.device)
             dist.all_reduce(num_total, op=dist.ReduceOp.SUM)
@@ -154,7 +154,7 @@ class Validation:
     def __init__(self, log_params=None):
         self.model = log_params.model
         self.val_loader = log_params.val_loader
-        self.fsdp_ddp = log_params.fsdp_ddp
+        self.FSDP = log_params.FSDP
         self.device = log_params.device
         self.master_process = log_params.rank == 0
         self.step = log_params.step
@@ -180,7 +180,7 @@ class Validation:
                 val_loss = val_loss / val_loss_steps # divide the loss by the number of accumulation steps to get the average loss. This computes the averaage loss on one gpu.
                 val_loss_accum += val_loss.detach() # detach the loss from the computation graph to avoid memory leaks.
 
-        if self.fsdp_ddp:
+        if self.FSDP:
             # synchronize the validation loss across all gpu processes
             dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
             if self.master_process:

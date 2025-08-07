@@ -225,7 +225,7 @@ log_params = eval_log_utils.LogParamsFilesConfig(
     world_size = FSDP_world_size,
     rank = FSDP_rank,
     local_rank = FSDP_local_rank,
-    model = model,
+    model = model_FSDP,
     device = device,
     encoder = tiktoken.get_encoding('gpt2'),
     val_loader = val_loader,
@@ -328,15 +328,15 @@ for step in range(training_steps):
         print(f'\n')
 
     # every x steps evaluate, print, and log hellaswag.
-    if ((step > 0 and step % 350 == 0) or last_step):
+    if ((step > 0 and step % 15 == 0) or last_step):
         eval_log_utils.HellaSwag(log_params=log_params).log_print_hella_accuracy()
 
     # Every x steps, put the model in validation mode and use the validation dataset to compute loss. This is to help us catch any over fitting issues. 
-    if step % 250 == 0 and step > 0:
+    if step % 10 == 0 and step > 0:
         eval_log_utils.Validation(log_params=log_params).check_validation_loss()
     
     # every x steps generate from the model.
-    if ((step % 500 == 0 and step > 0) or last_step):
+    if ((step % 20 == 0 and step > 0) or last_step):
         eval_log_utils.GenerateSample(log_params=log_params).generate(context="Hello, I'm a language model,", sample_max_length=32)
 
 if FSDP:
