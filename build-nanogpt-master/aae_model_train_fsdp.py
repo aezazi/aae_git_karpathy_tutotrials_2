@@ -127,28 +127,26 @@ transformer_wrapper_policy = functools.partial(
 
 # FSDP  allows us to define a mixed prescision policy. Here, I am just using bf16 for aeverything, but we can use hybrid. refer to this tutorial for more good info and nuances https://www.youtube.com/watch?v=-caN92JtKqA&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=4
 precision_policy = MixedPrecision(
-    # param precision
-    param_dtype=torch.bfloat16, # param precision
-    reduce_dtype=torch.bfloat16, # gradient communication precision
-    buffer_dtype=torch.bfloat16 # buffer precision
-)
+            # param precision
+            param_dtype=torch.bfloat16, # param precision
+            reduce_dtype=torch.bfloat16, # gradient communication precision
+            buffer_dtype=torch.bfloat16 # buffer precision
+            )
 
 # wrap model per wrapper policy
 model_FSDP = FSDP_wrap(model,
-                  auto_wrap_policy=transformer_wrapper_policy,
-                  mixed_precision=precision_policy,
-                
-                  # reccommendation and other good info from tutorial: https://www.youtube.com/watch?v=sDM56HOziE4&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=8
-                  backward_prefetch=BackwardPrefetch.BACKWARD_PRE,
+            auto_wrap_policy=transformer_wrapper_policy,
+            mixed_precision=precision_policy,
+        
+            # reccommendation and other good info from tutorial: https://www.youtube.com/watch?v=sDM56HOziE4&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=8
+            backward_prefetch=BackwardPrefetch.BACKWARD_PRE,
 
-                  # note that ShardingStrategy.NO_SHARD is the equivalent of having the model run DDP mode
-                  sharding_strategy=ShardingStrategy.FULL_SHARD,
-                  
-                  device_id=torch.cuda.current_device(),
-                  forward_prefetch=True
-                  
-                  )
-
+            # note that ShardingStrategy.NO_SHARD is the equivalent of having the model run DDP mode
+            sharding_strategy=ShardingStrategy.FULL_SHARD,
+            
+            device_id=torch.cuda.current_device(),
+            forward_prefetch=True
+            )
 
 
 #%%
@@ -177,7 +175,7 @@ val_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len
 effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
 
 
-assert effective_batch_size_desired % (train_loader.B * train_loader.seq_len * FSDP_world_size) == 0, f"effective batch size {effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.T}"
+assert effective_batch_size_desired % (train_loader.B * train_loader.seq_len * FSDP_world_size) == 0, f"effective batch size {effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.seq_len}"
 
 # this is the desired number of micro steps to accumulate gradients over. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU.
 accumulation_steps_desired = effective_batch_size_desired // (train_loader.B * train_loader.seq_len * FSDP_world_size) 

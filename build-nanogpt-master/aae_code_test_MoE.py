@@ -372,3 +372,5 @@ print(f'\naccum updated:\n{accum}\n')
 
 
 # %%
+54288 %(1024*32*8) == 0
+# %%
