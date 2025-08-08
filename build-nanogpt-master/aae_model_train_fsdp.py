@@ -43,8 +43,9 @@ class GPTConfig:
     n_embd: int = 768
     base_lr = 6e-4 * 3
     warm_up_steps = 300
-    num_experts = 8
+    num_experts = 4
     k = 2
+    load_balance_scale = .01
     print_token_routing = True
 
 # instantiate and check the config

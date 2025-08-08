@@ -137,6 +137,7 @@ class TopKMoEGate(nn.Module):
         self.num_experts = config.num_experts
         self.k = config.k
         self.seq_len = config.seq_len
+        self.load_balance_scale = config.load_balance_scale
     
         # Create a linear layer to project the multi-head attention output to the number of experts. This layer will compute the logits for each expert. the logits will have shape (batch_size, seq_len, num_experts) 
         self.gate_linear = nn.Linear(config.n_embd, config.num_experts, bias=False)
@@ -164,7 +165,7 @@ class TopKMoEGate(nn.Module):
         # std_usage = expert_usage.std()
         # load_balance_loss = std_usage / (mean_usage + 1e-8)
         
-        return load_balance_loss * self.load_balance_weight
+        return load_balance_loss * self.load_balance_scale
 
 
     def forward(self, x):
@@ -173,12 +174,12 @@ class TopKMoEGate(nn.Module):
         # In each batch, there is a logit for each token in the sequence and for each expert. 
         logits = self.gate_linear(x) # (batch_size, seq_len, num_experts)
 
-        # 2. Calculate load balancing loss using clean logits
+        # 2. Calculate load balancing loss using clean logits before noise and topk
         gate_weights = F.softmax(logits, dim=-1)
         gate_weights_flat = gate_weights.view(batch_size*seq_len, -1)
         expert_usage = gate_weights_flat.mean(0)  # (num_experts,)
         load_balance_loss = self._compute_load_balance_loss(expert_usage)
-        print(f'load balancing loss shape: {load_balance_loss.shape}')
+        # print(f'load balancing loss: {load_balance_loss}')
 
         # The global noise to be added to the logits of each expert. This is a random noise tensor of the same shape as the logits. 
         noise = torch.randn_like(logits) * self.noisy_std # (batch_size, seq_len, num_experts)
@@ -367,7 +368,7 @@ class CreateMoE(nn.Module):
         for block in self.transformer.h:
             x, top_k_indices, load_balance_loss = block(x)
             top_k_all.append(torch.flatten(top_k_indices))
-            # load_balance_losses.append(load_balance_loss)
+            load_balance_losses.append(load_balance_loss)
         
         # apply layer norm to the output of the last transformer block
         x = self.transformer.ln_f(x)
@@ -376,15 +377,17 @@ class CreateMoE(nn.Module):
         logits = self.lm_head(x) # (B, T, vocab_size)
         
         # if targets are provided, calculate the loss
-        loss = None
+        total_load_balance_loss = sum(load_balance_losses) / len(load_balance_losses)
+        main_loss = None
         if targets is not None:
             # Pytorch's cross-entropy loss expects the logits to be of shape (B*T, vocab_size) and the targets to be of shape (B*T). So we need to reshape the logits and targets to match this shape.
             # reshape the logits: (B, T, vocab_size) -> (B*T, vocab_size) to match the shape of the targets: (B, T) -> (B*T) and then calculate the cross-entropy loss
             # loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
 
-            loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
+            main_loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
         
-        return logits, loss, top_k_all
+        total_loss = main_loss + total_load_balance_loss
+        return logits, total_loss, top_k_all
 
 
 #%%
