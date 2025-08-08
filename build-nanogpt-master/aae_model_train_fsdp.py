@@ -36,14 +36,14 @@ from aae_model_moe_fsdp import Block
 class GPTConfig:
     seq_len: int = 1024 # max sequence length
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
-    batch_size = 32
+    batch_size = 42
     vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
     base_lr = 6e-4 * 3
     warm_up_steps = 300
-    num_experts = 32
+    num_experts = 8
     k = 2
     print_token_routing = True
 
@@ -165,14 +165,18 @@ if FSDP:
 # Instantiate the dataloader and load the data. 
 from aae_dataloader_utils import DataLoaderShardMultiGPU
 
-# initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
 
+# we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
+effective_batch_size_desired = 983040
+ # 2^19 ~ .5M to match the original GPT-2 paper. 
+config.batch_size = 40
+
+
+# initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
 train_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = FSDP_rank, num_processes=FSDP_world_size, split='train')
 
 val_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = FSDP_rank, num_processes=FSDP_world_size, split='val')
 
-# we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
-effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
 
 
 assert effective_batch_size_desired % (train_loader.B * train_loader.seq_len * FSDP_world_size) == 0, f"effective batch size {effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.seq_len}"
