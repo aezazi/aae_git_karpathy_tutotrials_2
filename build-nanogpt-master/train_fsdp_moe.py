@@ -7,8 +7,8 @@ from torch.nn import functional as F
 from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
-import aae_model_moe_fsdp as model
-from aae_model_moe_fsdp import Block
+import model_moe_fsdp as model
+from model_moe_fsdp import Block
 
 from torch.distributed import init_process_group, destroy_process_group
 from torch.distributed.fsdp.wrap import (transformer_auto_wrap_policy,)
@@ -23,7 +23,7 @@ from torch.distributed.fsdp.fully_sharded_data_parallel import (
 )
 import torch.distributed as dist
 import functools
-from aae_model_moe_fsdp import Block
+
 
 
  #%%
@@ -163,7 +163,7 @@ if FSDP:
 
 # %%
 # Instantiate the dataloader and load the data. 
-from aae_dataloader_utils import DataLoaderShardMultiGPU
+from dataloader_utils import DataLoaderShardMultiGPU
 
 
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
@@ -220,7 +220,7 @@ print(f'\nScheduler initialized on GPU rank {FSDP_rank}, of {FSDP_world_size}\n'
 
 #%%
 # create log files, loggers, and evaluators to store training loss, learning rate, validation loss, hellaswag eval results, and generate sample text.
-import aae_eval_log_utils as eval_log_utils
+import eval_log_utils as eval_log_utils
 log_params = eval_log_utils.LogParamsFilesConfig(
     FSDP = FSDP,
     world_size = FSDP_world_size,

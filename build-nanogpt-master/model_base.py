@@ -288,7 +288,7 @@ print(f'\nOptimizer initialized on GPU rank {ddp_rank}, device {device}')
 # Instantiate the dataloader and load the data.
 
 # NOTE: I moved the code for the dataloader to a separate file  aae_dataloader_til.py. 
-from aae_dataloader_utils import DataLoaderShardMultiGPU
+from dataloader_utils import DataLoaderShardMultiGPU
 
 # initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
 B = 64 # batch size
@@ -343,7 +343,7 @@ print(f'\nScheduler initialized on GPU rank {ddp_rank}, of {ddp_world_size}\n')
 
 #%%
 # create log files, loggers, and evaluators to store training loss, learning rate, validation loss, hellaswag eval results, and generate sample text.
-import aae_eval_log_utils as eval_log_utils
+import eval_log_utils as eval_log_utils
 
 log_params = eval_log_utils.LogParamsFilesConfig(
     ddp = ddp,

@@ -7,7 +7,7 @@ from torch.nn import functional as F
 from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
-import aae_model_moe_ddp as model_rotary_moe
+import model_moe_ddp as model_rotary_moe
 
 
 # #%%
@@ -131,7 +131,7 @@ if ddp:
 
 # %%
 # Instantiate the dataloader and load the data. 
-from aae_dataloader_utils import DataLoaderShardMultiGPU
+from dataloader_utils import DataLoaderShardMultiGPU
 
 # initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
 
@@ -184,7 +184,7 @@ print(f'\nScheduler initialized on GPU rank {ddp_rank}, of {ddp_world_size}\n')
 
 #%%
 # create log files, loggers, and evaluators to store training loss, learning rate, validation loss, hellaswag eval results, and generate sample text.
-import aae_eval_log_utils as eval_log_utils
+import eval_log_utils as eval_log_utils
 log_params = eval_log_utils.LogParamsFilesConfig(
     fsdp_ddp = ddp,
     world_size = ddp_world_size,
