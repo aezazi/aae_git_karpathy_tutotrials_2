@@ -147,11 +147,38 @@ class TopKMoEGate(nn.Module):
         # this is the standard deviation of the noise added to the logits of each expert. It is a hyperparameter that can be tuned. Note that unlike the noise_weight it is a global parameter, this is not a learnable parameter.
         self.noisy_std = 1.0
         
-    # x has shape (batch_size, sequence_length, embedding dimension) and is the output of the multi-head attention layer. 
-    def forward(self, x):
+    
+
+    def _compute_load_balance_loss(self, expert_usage):
+        """Compute load balancing loss to encourage uniform expert usage"""
         
+        # Method 1: Variance-based (simpler)
+        uniform_usage = torch.ones_like(expert_usage) / self.num_experts
+        load_balance_loss = F.mse_loss(expert_usage, uniform_usage)
+        
+        # Method 2: Entropy-based (more principled)
+        # load_balance_loss = -torch.sum(expert_usage * torch.log(expert_usage + 1e-8))
+        
+        # Method 3: Coefficient of variation (Switch Transformer style)
+        # mean_usage = expert_usage.mean()
+        # std_usage = expert_usage.std()
+        # load_balance_loss = std_usage / (mean_usage + 1e-8)
+        
+        return load_balance_loss * self.load_balance_weight
+
+
+    def forward(self, x):
+        # x has shape (batch_size, sequence_length, embedding dimension) and is the output of the multi-head attention layer. 
+        batch_size, seq_len, _ = x.shape
         # In each batch, there is a logit for each token in the sequence and for each expert. 
         logits = self.gate_linear(x) # (batch_size, seq_len, num_experts)
+
+        # 2. Calculate load balancing loss using clean logits
+        gate_weights = F.softmax(logits, dim=-1)
+        gate_weights_flat = gate_weights.view(batch_size*seq_len, -1)
+        expert_usage = gate_weights_flat.mean(0)  # (num_experts,)
+        load_balance_loss = self._compute_load_balance_loss(expert_usage)
+        print(f'load balancing loss shape: {load_balance_loss.shape}')
 
         # The global noise to be added to the logits of each expert. This is a random noise tensor of the same shape as the logits. 
         noise = torch.randn_like(logits) * self.noisy_std # (batch_size, seq_len, num_experts)
@@ -172,9 +199,11 @@ class TopKMoEGate(nn.Module):
 
         # scatter fills the zeros tensor with the top_k_logits at the indices of the top_k_indices along the last dimension (-1). This creates a sparse matrix where only the top-k logits are kept and the rest are filled with negative infinity.
         sparse_logits_noisy = zeros.scatter(-1, top_k_indices_noisy, top_k_logits_noisy)
-        gated_weights = F.softmax(sparse_logits_noisy, dim=-1)
+        
+        # Note top_k_gated_weights has shape #(B, seq_len, num_experts). The top_k experts will have weights that sum to 1, the other experts will have weights-inf
+        top_k_gated_weights = F.softmax(sparse_logits_noisy, dim=-1) 
 
-        return gated_weights, top_k_indices_noisy, top_k_logits_noisy
+        return top_k_gated_weights, top_k_indices_noisy, load_balance_loss
 
 
 # %%
@@ -195,8 +224,8 @@ class MoELayer(nn.Module):
 
     def forward(self, x):
         batch_size, seq_len, _ = x.shape
-        # Get the gated weights and top-k indices from the gate
-        gated_weights, top_k_indices, top_k_logits = self.gate(x)
+        # Get the top_k_gated weights and top-k indices from the gate. 
+        top_k_gated_weights, top_k_indices, load_balance_loss = self.gate(x)
 
         # Initialize the fianl output tensor
         final_output = torch.zeros_like(x)
@@ -206,8 +235,8 @@ class MoELayer(nn.Module):
         x_flat = x.view(batch_size*seq_len, -1) 
         # print(f'\ninput x_flat shape: {x_flat.shape} \n{x_flat}\n')
 
-        # flatten the gated weights to (batch_size * seq_len, num_experts) for batch processing
-        gated_weights_flat = gated_weights.view(batch_size*seq_len, self.num_experts)  
+        # flatten the gated weights to (batch_size * seq_len, num_experts) for batch processing. Note that The top_k experts will have weights that sum to 1, the other experts will have weights -inf
+        top_k_gated_weights_flat = top_k_gated_weights.view(batch_size*seq_len, self.num_experts)  
 
         # Iterate over each expert and apply it to the input
         for i, expert in enumerate(self.experts):
@@ -232,7 +261,7 @@ class MoELayer(nn.Module):
 
                 # Now we need to scale the expert output by the gated weights for the tokens where the expert is in the top_k indices. gated_weights_flat has shape (batch_size * seq_len, num_experts). We apply the same mask as we used to create expert_input to select all rows from gated_weights_flat where expert i is in the top_k indices, then we select the ith column. This returns the weighting for expert i that is to be applied to the tokens where expert i is in the top_k indices. This is the same as selecting all the non_zero values in the ith column of gated_weights_flat. We  then use unsqueeze(1) to add a dimension to create a column vector of shape (number of tokens where expert i is in top_k, 1). this allows  multiplication with the expert_output which has shape (number of tokens where expert i is in top_k, n_embd). 
                 # print(f'gated_weights_flat shape: {gated_weights_flat.shape} \n{gated_weights_flat}\n')
-                expert_weights = gated_weights_flat[flat_mask, i].unsqueeze(1)  # (number of tokens where expert i is in top_k, 1)
+                expert_weights = top_k_gated_weights_flat[flat_mask, i].unsqueeze(1)  # (number of tokens where expert i is in top_k, 1)
                 # print(f'expert_weights shape: {expert_weights.shape} \n{expert_weights}\n')
 
                 # Scale the expert_output by expert_weights.
@@ -261,7 +290,7 @@ class MoELayer(nn.Module):
 
             # break
 
-        return final_output, top_k_indices
+        return final_output, top_k_indices, load_balance_loss
 
 #%%
 class Block(nn.Module):
@@ -274,9 +303,9 @@ class Block(nn.Module):
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
-        moe_out, top_k_indices = self.moe(self.ln_2(x))
+        moe_out, top_k_indices, load_balance_loss = self.moe(self.ln_2(x))
         x = x + moe_out
-        return x, top_k_indices
+        return x, top_k_indices, load_balance_loss
 
 # %%
 class CreateMoE(nn.Module):
@@ -334,9 +363,11 @@ class CreateMoE(nn.Module):
         # apply the transformer blocks. each block applies layer norm, self-attention, residual connection, layer norm, MoE layer, residual connection
         x = token_embd
         top_k_all = []
+        load_balance_losses = []
         for block in self.transformer.h:
-            x, top_k_indices = block(x)
+            x, top_k_indices, load_balance_loss = block(x)
             top_k_all.append(torch.flatten(top_k_indices))
+            # load_balance_losses.append(load_balance_loss)
         
         # apply layer norm to the output of the last transformer block
         x = self.transformer.ln_f(x)
