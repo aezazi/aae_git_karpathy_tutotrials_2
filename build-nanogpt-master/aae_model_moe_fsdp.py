@@ -378,16 +378,19 @@ class CreateMoE(nn.Module):
         
         # if targets are provided, calculate the loss
         total_load_balance_loss = sum(load_balance_losses) / len(load_balance_losses)
-        main_loss = None
+        loss = None
         if targets is not None:
             # Pytorch's cross-entropy loss expects the logits to be of shape (B*T, vocab_size) and the targets to be of shape (B*T). So we need to reshape the logits and targets to match this shape.
             # reshape the logits: (B, T, vocab_size) -> (B*T, vocab_size) to match the shape of the targets: (B, T) -> (B*T) and then calculate the cross-entropy loss
             # loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
 
-            main_loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
+            loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
         
-        total_loss = main_loss + total_load_balance_loss
-        return logits, total_loss, top_k_all
+            total_loss = loss + total_load_balance_loss
+        
+            return logits, total_loss, top_k_all
+        
+        return logits, loss, top_k_all
 
 
 #%%
