@@ -374,3 +374,21 @@ print(f'\naccum updated:\n{accum}\n')
 # %%
 54288 %(1024*32*8) == 0
 # %%
+num_experts = 32
+world_size = 8
+rank = 0
+experts_per_gpu = num_experts // world_size
+
+for rank in range(8):
+    start = (rank * experts_per_gpu)
+    end = start + experts_per_gpu -1
+    print(f'rank: {rank}  ids {start} - {end}')
+
+for rank in range(8):
+    start = (rank * experts_per_gpu)
+    end = (rank+1) * experts_per_gpu
+    print(f'rank: {rank}  ids {start} - {end}')
+# %%
+import torch.distributed as dist
+dist.is_initialized()
+# %%

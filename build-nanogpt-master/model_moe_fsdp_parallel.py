@@ -135,287 +135,108 @@ class ExpertMoESwiglu(nn.Module):
         return x
     
 # this class implemets top_k sparse gating 
-class TopKMoEGate(nn.Module):
-    def __init__(self, config, expert_global_ids):
+class TopKGateParallel(nn.Module):
+    def __init__(self, config):
         super().__init__()
-        self.expert_global_ids = expert_global_ids
-        self.num_local_experts = len(self.expert_global_ids)
+        self.n_embd = config.n_embd
+        self.num_experts = config.num_experts
         self.k = config.k
         self.seq_len = config.seq_len
-    
-        # Create a linear layer to project the multi-head attention output to the number of experts. This layer will compute the logits for each local expert. The local experts are the experts assigned to the GPU running this instance. This is very important. I had  orignally made the mistake of doing nn.Linear(config.n_embd, self.num_global_experts, bias=False). This was computing logits over all num_experts, regardless of how many experts exist on each GPU.But the MoE layer (MoELayerSharded) only instantiates a subset of those experts per GPU (based on expert_id % world_size == local_rank), and applies only the ones available on that rank.
+        self.load_balance_scale = config.load_balance_scale
 
-        # This results in:
-        # 	• These tokens are ignored during the expert loop, i.e., dropped silently.
-        # 	• Tokens being routed to experts that don’t exist locally.
-        # 	• Thus, part of the model output remains zeros.
-        # 	• Consequently, gradients don’t flow to many experts.
-        # 	• Eventually, the gating network settles into a degenerate distribution over the few working experts.
-        # 	• This is why my  loss was stalling at ~8.2 on multi-GPU — it’s only marginally better than random output.This doesn’t happen on single-GPU because all experts exist and are used, so the full distribution of the gating network is valid.
-        self.gate_linear = nn.Linear(config.n_embd, self.num_local_experts, bias=False)
+        # expert parallelization parameters
+        self.world_size = dist.get_world_size() if dist.is_initialized() else 1
+        self.rank = dist.get_rank() if dist.is_initialized() else 0
+
+        # compute num experts per gpu
+        assert self.num_experts % self.world_size == 0, f'num_experts ({self.num_experts}) must be divisible by world size ({self.world_size})'
+
+        # local expert range for this gpu. Clever approach suggested by Claude for indexing local gpus to match global ids. Note that this generates ids for input into range(). So if there are 4 experts per gpu, for rank=0 ,this logic produces start=0, end=4. When input into range(0,4) will produce ids 0,1,2,3. For rank=2, start=8 end=12 range(8,12) will produce ids 8,9,10,11
+        self.experts_per_gpu = self.num_experts // self.world_size
+        self.local_expert_id_start = self.rank * self.experts_per_gpu
+        self.local_expert_id_end = (self.rank +1) * self.experts_per_gpu 
+
+        # Create a linear layer to project the multi-head attention output to the number of experts. This layer will compute the logits for each expert. the logits will have shape (batch_size, seq_len, num_experts) 
+        self.gate_linear = nn.Linear(self.n_embd, self.num_experts, bias=False)
 
         # this is a learnable parameter that will be used to scale the noise added to the logits of each expert. The allows the noise added to each expert to be "customized" and dynamic. It adapts during training depending on the expert. It is initialized to zero and will be learned during training.
-        self.noise_weight = nn.Parameter(torch.zeros(self.num_local_experts)) 
+        self.noise_weight = nn.Parameter(torch.zeros(config.num_experts)) 
 
         # this is the standard deviation of the noise added to the logits of each expert. It is a hyperparameter that can be tuned. Note that unlike the noise_weight it is a global parameter, this is not a learnable parameter.
         self.noisy_std = 1.0
+
+    def _compute_load_balance_loss(self, gate_weights_mean):
+        # the code here was suggested by Claude
+        """Compute load balancing loss to encourage uniform expert usage"""
         
-    # x has shape (batch_size, sequence_length, embedding dimension) and is the output of the multi-head attention layer. 
+        # Method 1: Variance-based (simpler)
+        uniform_usage = torch.ones_like(gate_weights_mean) / self.num_experts
+        load_balance_loss = F.mse_loss(gate_weights_mean, uniform_usage)
+        
+        # Method 2: Entropy-based (more principled)
+        # load_balance_loss = -torch.sum(gate_weights_mean * torch.log(gate_weights_mean + 1e-8))
+        
+        # Method 3: Coefficient of variation (Switch Transformer style)
+        # mean_usage = gate_weights_mean.mean()
+        # std_usage = gate_weights_mean.std()
+        # load_balance_loss = std_usage / (mean_usage + 1e-8)
+        
+        return load_balance_loss * self.load_balance_scale
+    
     def forward(self, x):
-        
+        # x has shape (batch_size, sequence_length, embedding dimension) and is the output of the multi-head attention layer. 
+        batch_size, seq_len, _ = x.shape
         # In each batch, there is a logit for each token in the sequence and for each expert. 
-        logits = self.gate_linear(x) # (batch_size, seq_len, num_local_experts)
+        logits = self.gate_linear(x) # (batch_size, seq_len, num_experts)
 
-        # The global noise to be added to the logits of each expert. This is a random noise tensor of the same shape as the logits. 
-        noise = torch.randn_like(logits) * self.noisy_std # (batch_size, seq_len, num_local_experts)
+        # compute load balancing loss using clean logits before noise and topk
+        gate_weights = F.softmax(logits, dim=-1)
+        gate_weights_flat = gate_weights.view(batch_size*seq_len, -1)
+        gate_weights_mean= gate_weights_flat.mean(0)  # (num_experts,) the mean of gate_weights over all tokens
+        load_balance_loss = self._compute_load_balance_loss(gate_weights_mean)
+        # print(f'load balancing loss: {load_balance_loss}')
 
-        # Per-expert noise scaling using self.weights. 
+        # The global noise to be added to the logits of each expert. This is a random noise tensor of the same shape as the logits multiplied by noisy_std to create desired level of variance
+        noise = torch.randn_like(logits) * self.noisy_std # (batch_size, seq_len, num_experts)
+
+        # Per-expert noise scaling using self.noise_weights. 
         noise = noise * self.noise_weight
 
         # Add the noise to the logits. 
-        logits_noisy = logits + noise  # (batch_size, seq_len, num_local_experts)
+        logits_noisy = logits + noise  # (batch_size, seq_len, num_experts)
 
-        # Get the top-k logits and their corresponding indices. The pytorch top_k method returns the top-k values and their indices along the last dimension (num_experts). In each batch, for each token in the sequence, it selects the top-k logits and their indices from the logits produced by each expert.
-        top_k_logits_noisy, top_k_indices_noisy = logits_noisy.topk(self.k, dim=-1)  # (batch_size, seq_len, top_k) 
+         # Get the top-k logits and their corresponding indices. The pytorch top_k method returns the top-k values and their indices along the last dimension (num_experts). In each batch, for each token in the sequence, it selects the top-k logits and their indices from the logits produced by each expert. Note that the top_k ids are global and not necessarily on this gpu.
+        top_k_logits_noisy, top_k_ids_global_noisy = logits_noisy.topk(self.k, dim=-1)  # (batch_size, seq_len, top_k) 
 
         # We want sparse matrices. We achieve this by keeping the top-k logits for each token and filling the rest with a value that represents "no contribution" (like negative infinity).  This is done to ensure that the softmax function will ignore these values when computing the weights for each expert. So only the values produced by the top-k experts will contribute to the final output. We implement this by first creating a tensor of the same shape as the logits filled with negative infinity, and then using the scatter function to fill in the top-k logits at the indices of the top-k experts. Note that in this context, softmax is being used to compute "weights" for each expert not probabilities as for multiclass classification. Its a subttle difference but I think important to note.
         
         #full_like clones a tensor and fills it with a specified value (like infinity).
-        mask = torch.full_like(logits_noisy, float('-inf')) 
+        zeros = torch.full_like(logits_noisy, float('-inf')) 
 
-        # scatter fills the zeros tensor with the top_k_logits at the indices of the top_k_indices along the last dimension (-1). This creates a sparse matrix where only the top-k logits are kept and the rest are filled with negative infinity.
-        sparse_logits_noisy = mask.scatter(-1, top_k_indices_noisy, top_k_logits_noisy)
-        top_k_gated_weights = F.softmax(sparse_logits_noisy, dim=-1)
+        # scatter fills the zeros tensor with the top_k_logits at the indices of the top_k_ids_global_noisy along the last dimension (-1). This creates a sparse matrix where only the top-k logits are kept and the rest are filled with negative infinity.
+        sparse_logits_noisy = zeros.scatter(-1, top_k_ids_global_noisy, top_k_logits_noisy)
 
-        return top_k_gated_weights, top_k_indices_noisy
+        # Note top_k_gated_weights has shape #(B, seq_len, num_experts). The top_k experts will have weights that sum to 1, the other experts will have weights-inf
+        top_k_gated_weights = F.softmax(sparse_logits_noisy, dim=-1) 
 
-
-# %%
-# this class implements the full MoE layer. It uses the TopKMoEGate class to compute the gated weights and the top-k indices, and then applies each expert to the input based on these indices. The output is a weighted sum of the expert outputs, where the weights are the gated weights.
-class MoELayerSharded(nn.Module):
+        return top_k_gated_weights, top_k_ids_global_noisy, load_balance_loss
+    
+class MoELayerParallel(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.num_global_experts = config.num_experts
-        self.sq_len = config.seq_len
+        self.num_experts = config.num_experts
+        self.seq_len = config.seq_len
         self.k = config.k
-        # self.aux_loss_scale = config.aux_loss_scale
-        # self.moe_scale = config.moe_scale
+        self.n_embd = config.n_embd
 
-        # note that when on multiple gpus, FSDP or DDP launch identical processes on each gpu. So a separate instance of this module will be launched on each gpu. Each instance will have a different rank corresponding to the gpu it was launched on. dist.getrank() returns the rank of each process/gpu. In my case, all my gpus are on one on one machine, so local_rank = rank. 
-        self.rank = dist.get_rank()
-        self.world_size = dist.get_world_size()
+        # expert parallelization parameters
+        self.world_size = config.world_size
+        self.rank = dist.get_rank() if dist.is_initialized() else 0
+        self.experts_per_gpu = config.experts_per_gpu
+
+        # Local expert range for this GPU
+        self.local_expert_start = self.rank * self.experts_per_gpu
+        self.local_expert_end = (self.rank + 1) * self.experts_per_gpu
 
 
-        # This is a clever algo GPT suggested for assigning experts to GPUs. It's called "round robin" assignment. It assigns only a subset of experts to the GPU running this instance of the module. If remainder of expert_idx/world_size == local_rank, create and add an expert to this GPU
-        self.expert_global_ids = [e_idx for e_idx in range(self.num_global_experts) if e_idx % self.world_size == self.rank]
-        # print(f'\nexpert_global_ids: {self.expert_global_ids}\n')
-
-        self.num_local_experts = len(self.expert_global_ids)
-        # print(f'num_local_experst: {self.num_local_experts}')
-                
-        # Instantiate top_k gating. Note that I am passing the ids of the experts assigned to the GPU running this instance
-        self.gate = TopKMoEGate(config, self.expert_global_ids)
-
-        # create ModuleDict with an expert (instance of ExpertMoeSwiglu) for each index in local_experts_ids. Note that nn.ModuleDict accepts only string as a key. So in the foreard method, we have to go through gymnastics of converting the string to an integer for some operations and using the string version to access the dictionary.
-        self.local_experts = nn.ModuleDict({str(id) : ExpertMoESwiglu(config) for id in self.expert_global_ids})
-
-        # print(f'local experts dict:\n{self.local_experts}')
-
-       
-    def forward(self, x):
-        batch_size, seq_len, _ = x.shape
-        # Get the top_k gated weights and top-k ids from the gate for the local experts. Note that the top_k_ids are 0 to num_experts on this gpu -1. So if this gpu has two experts assigned, each the top_k (k=2)indices for each token will be of the form [0,1] or [1,0]. If there are four experts on this gpu, each top_k index would be of the form [1,2] or [2,3]. These local expert ids have to mapped to the global expert ids. So as an example, if we have 8 experts and 2 gpus, and experts [1, 3, 5, 7] are assigned to this gpu, and the top_k_local_ids returned by the gate for a token are [2,0], this would make the  the top_k_global_ids [5,1] which means experts 5 and 1 were the top 2 picked by the gate for that token on this gpu.
-        top_k_gated_weights, top_k_local_ids  = self.gate(x)
         
-        # this is just for print statements to check against top_k_gated_weights flat 
-        top_k_local_ids_flat = top_k_local_ids.view(batch_size*seq_len, -1)  
-
-        # Put the  global id of the experts on this gpu into a tensor
-        local_expert_global_id_tensor = torch.tensor(self.expert_global_ids, device=x.device)  # [num experts assigned to this gpu]
-        # map the top_k_local_ids to the global id
-        top_k_global_ids = local_expert_global_id_tensor[top_k_local_ids]  # [B, T, k]
-
-        # tensor to hold the output from just the experts in this process
-        y_partial_output = torch.zeros_like(x)
-        # print(f'\ninput x shape: {x.shape} \n{x}\n')
-
-        # flatten the input to (batch_size * seq_len, n_embd) for batch processing
-        x_flat = x.view(batch_size*seq_len, -1) 
-        # print(f'\ninput x_flat shape: {x_flat.shape} \n{x_flat}\n')
-
-        # flatten the gated weights to (batch_size * seq_len, num_local_experts) for batch processing
-        top_k_gated_weights_flat = top_k_gated_weights.view(batch_size*seq_len, self.num_local_experts)  
-
-        # this is just for print statements to check against top_k_gated_weights flat 
-        # top_k_local_ids_flat = top_k_local_ids.view(batch_size*seq_len, -1) 
-        # if dist.get_rank() == 0: print(f'\ntop_k_local_ids_flat ; {top_k_local_ids_flat.shape}\n{top_k_local_ids_flat[0:6,:]}\n')
-        # if dist.get_rank() == 0: print(f'\ntop_k_gated_weights_flat shape ; {top_k_gated_weights_flat.shape}\n{top_k_gated_weights_flat[0:6,:]}\n')
-        
-        
-
-        # Iterate over each expert  assigned to this GPU and apply it to the input
-        for i, key in enumerate(self.local_experts):
-            local_id = i
-            global_id = key
-            
-            # Create a mask for the inputs where the current expert is in top-k. the mask will have shape (batch_size, seq_len). top_k_indices have shape (B, seq_len, top_k). Each row of each batch in top_k_indices has the indices of the top two experts for the token corresponding that row in the token sequence. The mask will return True (row wise) if expert i is in the top_k indices. S
-            
-            # print(f'\nExperts {local_expert_global_id} with x_flat input shape {x_flat.shape}\n')
-            # print(f'top_k_indices shape: {top_k_global_ids.shape} \n{top_k_global_ids}\n')
-
-            expert_mask = (top_k_local_ids == local_id).any(dim=-1) #shape (B, seq_len)
-            # print(f'expert_mask shape: {expert_mask.shape} \n{expert_mask}\n')
-
-            # flatten the mask to match the shape of the flattened input x_flat. Note that the shape of flat_mask is a one dimensional (batch_size*seq_len). x_flat has shape (batch_size * seq_len, n_embd). each row in x_flat is a token in the sequence. 
-            flat_mask = expert_mask.view(-1) # (batch_size * seq_len)
-            # if dist.get_rank() == 0: print(f'flat_mask shape: {flat_mask.shape} \n{flat_mask}\n')
-
-            if flat_mask.any():
-                # If the flat mask has any True values, Apply the expert to the inputs selected by the mask. x_flat[flat_mask] picks the rows(tokens) of x_flat where the mask is True. This allows us to activate the expert only for the tokens where the expert with global_id is in the top_k indices.
-                expert_input = x_flat[flat_mask] # (number of tokens where lexpert global_id is in top_k, n_embd)
-                # if dist.get_rank() == 0: print(f'\nexpert_input shape: {expert_input.shape} \n{expert_input}\n')
-
-                # apply the expert with global_id to the expert_input. .
-                expert_output = self.local_experts[global_id](expert_input) # (number of tokens where expert on this gpu with global_id is in top_k, n_embd)
-                # if dist.get_rank() == 0: print(f'expert_output shape: {expert_output.shape} \n{expert_output}\n')
-
-                # Now we need to scale the expert output by the gated weights for the tokens where the expert is in the top_k indices. gated_weights_flat has shape (batch_size * seq_len, num_local_experts). Note that gated_weights flat is indexed 0 to num_local_experts-1. We apply the same mask as we used to create expert_input to select all rows from gated_weights_flat where the expert with global_id is in the top_k indices. Then we select the ith column  (which is defined by local_id). This returns the weighting for the expert with global_id that is to be applied to the tokens where the expert is in the top_k indices. This is the same as selecting all the rows with non_zero values in the ith column of gated_weights_flat. We  then use unsqueeze(1) to add a dimension to create a column vector of shape (number of tokens where expert i is in top_k, 1). this allows  multiplication with the expert_output which has shape (number of tokens where expert global_id is in top_k, num_local_experts). 
-                # if dist.get_rank() == 0: print(f'top_k_gated_weights_flat shape: {top_k_gated_weights_flat.shape} \n{top_k_gated_weights_flat}\n')
-                # if dist.get_rank() == 0: print(f'\nlocal_expert_global_id: {local_expert_global_id}\n')
-
-                expert_weights = top_k_gated_weights_flat[flat_mask, local_id].unsqueeze(1)  # (number of tokens where expert i is in top_k, 1)
-                # print(f'expert_weights shape: {expert_weights.shape} \n{expert_weights}\n')
-
-                # Scale the expert_output by expert_weights.
-                expert_output_weighted = expert_output * expert_weights # (number of tokens where expert i is in top_k, n_embd)
-                # print(f'expert_output_weighted shape: {expert_output_weighted.shape} \n{expert_output_weighted}\n')
-
-                # the huggingface implementation uses .squeeze(1) to remove any singleton dimensions from  the expert_output_weighted tensor. Not sure why this is needed. I tried removing it and the shapes were still compatible and the result the same
-                y_partial_output[expert_mask] += expert_output_weighted.squeeze(1) # (batch_size, seq_len, n_embd)
-                # print(f'final_output shape after adding expert_output_weighted:{final_output.shape} \n{final_output}\n')
-
-                ## just a test to see if .squeeze(1) is necessary
-                # final_test = torch.zeros_like(x)
-                # final_test[expert_mask] += expert_output_weighted
-                # print(f'{torch.allclose(final_output, final_test)}')
-            
-        
-        # each instance
-        if self.world_size > 1:
-            dist.all_reduce(y_partial_output, op=dist.ReduceOp.SUM)
-
-        # compute auxiliary load balancing loss
-        # first compute the average weight given to each expert by the top_k router. This is how much the router wanted to send to each expert.
-        avg_weight_per_expert = top_k_gated_weights_flat.mean(0) # shape(num_experts)
-        # print(f'\navg_weight_per_expert:\n {avg_weight_per_expert}\n')
-
-        # Replaces elements != 0 with 1.0 and takes the mean over (batch*seq_len).result has shape(num_experts)
-        avg_tokens_per_expert = torch.where(top_k_gated_weights_flat != 0, 1.0, 0).mean(0)
-
-        # print(f'\navg_tokens_per_expert: \n {avg_tokens_per_expert}\n')
-
-        # refer to literature on why this formula for the load balancing loss
-        aux_loss = (avg_tokens_per_expert * avg_weight_per_expert).sum() * self.num_local_experts
-
-        return y_partial_output, aux_loss, top_k_global_ids
-
-#%%
-class Block(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.ln_1 = nn.LayerNorm(config.n_embd)
-        self.attn = CausalSelfAttention(config)
-        self.ln_2 = nn.LayerNorm(config.n_embd)
-        self.moe = MoELayerSharded(config)
-        self.moe_scale = config.moe_scale
-
-    def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
-        moe_out, aux_loss, top_k_global_ids = self.moe(self.ln_2(x))
-        x = x + (moe_out * self.moe_scale)
-        return x, aux_loss, top_k_global_ids
-
-# %%
-class CreateMoESharded(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-
-        self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.n_embd),
-            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            ln_f = nn.LayerNorm(config.n_embd)
-        ))
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # final classifier projects from embedding dimension to vocab_size
-
-        # weight tying design. the idea is to tie the weights of the input and output embeddings so that they are the same. This is done to reduce the number of parameters in the model and to improve generalization. 
-        self.transformer.wte.weight = self.lm_head.weight
-
-        # initialization
-        self.apply(self._init_weights)
-
-    #weight initialization. Mostly from GPT suggestions
-    def _init_weights(self, module):
-    # Standard GPT-style init
-        std = 0.02
-
-        if isinstance(module, nn.Linear):
-            # ✅ Detect if this linear is inside an MoE expert
-            if hasattr(module, "_am_expert"):
-                # Experts get smaller init for stability
-                std = 0.01
-            
-            # ✅ GPT residual scaling (e.g. output projection)
-            if hasattr(module, 'NANOGPT_SCALE_INIT'):
-                std *= (2 * self.config.n_layer) ** -0.5
-            
-            nn.init.normal_(module.weight, mean=0.0, std=std)
-
-            if module.bias is not None:
-                nn.init.zeros_(module.bias)
-
-        elif isinstance(module, nn.Embedding):
-            nn.init.normal_(module.weight, mean=0.0, std=0.02)
-
-    def forward(self, idx, targets=None):
-        # idx is the input sequence of token ids
-        B, T = idx.shape
-
-        aux_loss_total = 0 # varible to carry accumulated aux_loss from ech transformer block
-
-        # this checks if the input sequence is longer than the block size
-        assert T <= self.config.seq_len, f"Cannot forward sequence of length {T}, sequence length is only {self.config.seq_len}"
-
-        # this creates the embedding table for the token ids.
-        token_embd = self.transformer.wte(idx) # (B, T, n_embd)
-        
-        # apply the transformer blocks. each block applies layer norm, self-attention, residual connection, layer norm, MoE layer, residual connection
-        x = token_embd
-        top_k_all = []
-        for block in self.transformer.h:
-            x, aux_loss, top_k_global_ids = block(x)
-            aux_loss_total += aux_loss
-            top_k_all.append(torch.flatten(top_k_global_ids))
-        
-        # apply layer norm to the output of the last transformer block
-        x = self.transformer.ln_f(x)
-
-        # apply the final linear layer to get the logits for the next token prediction
-        logits = self.lm_head(x) # (B, T, vocab_size)
-        
-        # if targets are provided, calculate the loss
-        main_loss = 0
-        if targets is not None:
-            # Pytorch's cross-entropy loss expects the logits to be of shape (B*T, vocab_size) and the targets to be of shape (B*T). So we need to reshape the logits and targets to match this shape.
-            # reshape the logits: (B, T, vocab_size) -> (B*T, vocab_size) to match the shape of the targets: (B, T) -> (B*T) and then calculate the cross-entropy loss
-            main_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
-        
-        total_loss = main_loss + (self.config.aux_loss_scale * aux_loss_total)
-        
-        return logits, total_loss, top_k_all
-
-
-#%%
-
-
-
