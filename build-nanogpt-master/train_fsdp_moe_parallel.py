@@ -22,7 +22,7 @@ from torch.distributed.fsdp.fully_sharded_data_parallel import (
 
 )
 import torch.distributed as dist
-# from torchtune.utils import is_distributed
+import torchtune
 import functools
 
 
@@ -31,6 +31,10 @@ import functools
 
 # Check if we are running in FSDP mode. If so, we will initialize the process group and set the device for each process. a simple way to check whether your script is being run under Distributed Data Parallel (FSDP) — specifically when using torchrun with a cuda GPU. Note that you can be in FSDP mode even with a single GPU when using torchrun. 
 FSDP = int(os.environ.get('RANK', -1)) != -1
+print(f'karpathy check: {FSDP}\n')
+print(f'dist.is_initialized: {dist.is_initialized()}\n')
+# print(f'dist.is_distributed: {dist.is_distributed()}')
+
 
 if FSDP:
     print(f'\nRunning in FSDP) mode')
