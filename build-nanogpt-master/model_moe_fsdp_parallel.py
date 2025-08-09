@@ -238,5 +238,32 @@ class MoELayerParallel(nn.Module):
         self.local_expert_start = self.rank * self.experts_per_gpu
         self.local_expert_end = (self.rank + 1) * self.experts_per_gpu
 
+        print(f"Rank {self.rank}: Managing experts {self.local_expert_start} to {self.local_expert_end-1}")
+
+        # Create a linear layer to project the multi-head attention output to the number of experts. This layer will compute the logits for each expert. the logits will have shape (batch_size, seq_len, num_experts) 
+        self.gate = TopKGateParallel(config)
+
+        # create local experts for this GPU
+        self.local_experts = nn.ModuleList([
+            ExpertMoESwiglu(config) for _ in range(self.experts_per_gpu)
+        ])
+
+        # create communication buffers for all to all communication
+        self.send_buffer = None
+        self.receive_buffer = None
+
+        def _get_expert_assignments(self, top_k_ids_global, config):
+            """
+            determine which tokens are assgined to which gpy by the topk gate.
+            returns a dictionary that maps gpu global rank --> (token_indices, expert_local_id)
+            """
+            assignments = {}
+        
+            # flatten topk expert ids to 1D tensor for easier processing. 
+            top_k_ids_flat = top_k_ids_global.view(-1)
+
+            for gpu_rank in range(self.world_size):
+                gpu_local_expert_start = gpu_rank * self.experts_per_gpu
+                gpu_local_expert_end = (gpu_rank+1) * self.experts_per_gpu
 
         

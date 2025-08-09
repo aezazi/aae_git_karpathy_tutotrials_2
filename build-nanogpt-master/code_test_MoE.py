@@ -325,8 +325,9 @@ top_k_lcl_indices = torch.tensor([
 
 top_k_global_indices = expert_id_global[top_k_lcl_indices]
 
-print(top_k_global_indices)
-# print(top_k_global_indices.view((B*T), -1))
+print(f'top_k_global_indices\n{top_k_global_indices}\n')
+# print(f'{top_k_global_indices.view((B*T), -1)}\n')
+print(f'{top_k_global_indices.view(-1)}\n')
 
 for id_str in D.keys():
     id = int(id_str)

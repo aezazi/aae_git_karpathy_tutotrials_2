@@ -50,8 +50,9 @@ class GPTConfig:
     n_embd: int = 768
     base_lr = 6e-4 * 3
     warm_up_steps = 300
-    num_experts = 8
+    num_experts = 4
     k = 2
+    load_balance_scale = .01
     print_token_routing = True
 
     def __post_init__(self):
@@ -76,6 +77,7 @@ print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: 
 if config.FSDP:
    
     # FSDP_local_rank = int(os.environ['LOCAL_RANK']) # get the local rank of the current process
+    
     # set the device to the local rank of the current process
     device = f'cuda:{config.local_rank}' 
     torch.cuda.set_device(device) # set the device for the current process
@@ -83,7 +85,7 @@ if config.FSDP:
     # the master process will perform logging and saving checkpoints.
     master_process = (config.rank == 0)
 
-    print(f'\nFSDP initialized on device: {device}, rank: {config.rank}, local rank: {config.local_rank}, world size: {config.world_size}')
+    print(f'\nFSDP initialized on device: {device}, rank: {config.rank}, local rank: {config.local_rank}, world size: {config.world_size}\n')
 
 # if not using FSDP, just use the next best available option
 else: 
@@ -161,8 +163,8 @@ from aae_utils import ConfigureOptimizer
 # Note that we are using the raw model here, not the DDP wrapped model. This is because the DDP wrapper does not have the optimizer parameters. The raw model is the actual model that we want to optimize.
 optimizer = ConfigureOptimizer(model_FSDP).create_optimizer(weight_decay=0.1, learning_rate = config.base_lr, device_type=device)
 
-if FSDP:
-    print(f'\nOptimizer initialized on GPU rank {FSDP_rank}, device {device}')
+if config.FSDP:
+    print(f'\nOptimizer initialized on GPU rank {config.rank}, device {device}')
 
 
 # %%
@@ -177,16 +179,16 @@ config.batch_size = 40
 
 
 # initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
-train_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = FSDP_rank, num_processes=FSDP_world_size, split='train')
+train_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = config.rank, num_processes=config.world_size, split='train')
 
-val_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = FSDP_rank, num_processes=FSDP_world_size, split='val')
+val_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = config.rank, num_processes=config.world_size, split='val')
 
 
 
-assert effective_batch_size_desired % (train_loader.B * train_loader.seq_len * FSDP_world_size) == 0, f"effective batch size {effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.seq_len}"
+assert effective_batch_size_desired % (train_loader.B * train_loader.seq_len * config.world_size) == 0, f"effective batch size {effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.seq_len}"
 
 # this is the desired number of micro steps to accumulate gradients over. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU.
-accumulation_steps_desired = effective_batch_size_desired // (train_loader.B * train_loader.seq_len * FSDP_world_size) 
+accumulation_steps_desired = effective_batch_size_desired // (train_loader.B * train_loader.seq_len * config.world_size) 
 
 if master_process:
     print(f"\neffective batch size desired: {effective_batch_size_desired}")
@@ -220,16 +222,16 @@ T_mult = 3 # the factor by which T_0 is multiplied at each restart.
 
 # instantiate and create learning rate scheduler
 scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=T_max, restart=restart, warm_up_steps=warm_up_steps, max_lr=max_lr, min_lr=min_lr, T_mult=T_mult, T_0=T_0)
-print(f'\nScheduler initialized on GPU rank {FSDP_rank}, of {FSDP_world_size}\n')
+print(f'\nScheduler initialized on GPU rank {config.rank}, of {config.world_size}\n')
 
 #%%
 # create log files, loggers, and evaluators to store training loss, learning rate, validation loss, hellaswag eval results, and generate sample text.
 import eval_log_utils as eval_log_utils
 log_params = eval_log_utils.LogParamsFilesConfig(
-    FSDP = FSDP,
-    world_size = FSDP_world_size,
-    rank = FSDP_rank,
-    local_rank = FSDP_local_rank,
+    FSDP = config.FSDP,
+    world_size = config.world_size,
+    rank = config.rank,
+    local_rank = config.local_rank,
     model = model_FSDP,
     device = device,
     encoder = tiktoken.get_encoding('gpt2'),
@@ -268,7 +270,7 @@ for step in range(training_steps):
         x, y = x.to(device), y.to(device) # move the data to the device. 
 
         # By default, FSDP synchronizes the loss from each process after each micro step by taking an average of all the processes and making that average the loss for all the processes for that step. Its very inefficient to do this at each micro_step. So we want to only synchronize gradients among all the processes on the last micro step. See Karpathy's video tutorial at 2:57:00 for more details. The code below sets the require_backward_grad_sync attribute of the model to True only on the last micro step. 
-        if FSDP:
+        if config.FSDP:
             model.require_backward_grad_sync = (micro_step == micro_steps - 1) 
 
         # we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs. The device must be cuda.
@@ -291,7 +293,7 @@ for step in range(training_steps):
         loss.backward()
 
 
-    if FSDP:
+    if config.FSDP:
         dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG)
 
     # clip the gradients to prevent exploding gradients
@@ -304,7 +306,7 @@ for step in range(training_steps):
     
     t1 = time.time()
     dt = (t1 - t0)
-    tokens_processed = train_loader.B * train_loader.seq_len * micro_steps * FSDP_world_size
+    tokens_processed = train_loader.B * train_loader.seq_len * micro_steps * config.world_size
     tokens_per_sec = tokens_processed / dt
     total_tokens_seen += tokens_processed
     
@@ -344,7 +346,7 @@ for step in range(training_steps):
     if ((step % 1000 == 0 and step > 0) or last_step):
         eval_log_utils.GenerateSample(log_params=log_params).generate(context="Hello, I'm a language model,", sample_max_length=32)
 
-if FSDP:
+if config.FSDP:
     destroy_process_group()
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
