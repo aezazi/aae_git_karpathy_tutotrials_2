@@ -30,14 +30,11 @@ import functools
 # assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
 
 # Check if we are running in FSDP mode. If so, we will initialize the process group and set the device for each process. a simple way to check whether your script is being run under Distributed Data Parallel (FSDP) — specifically when using torchrun with a cuda GPU. Note that you can be in FSDP mode even with a single GPU when using torchrun. 
-FSDP = int(os.environ.get('RANK', -1)) != -1
-
-
-if FSDP:
-    
-    # Note that LOCAL_RANK is the rank of the process on one given machine (when using multiple machine), while RANK is the rank of the process across all machines (when using multiple gpus on multiple machines). When using a setup with just one machine, LOCAL_RANK and RANK are the same. 
+if int(os.environ.get('RANK', -1)) != -1:
     init_process_group(backend='nccl') # initialize the process group for DDP
-    print(f'\nFSDP initialized: {dist.is_initialized()}')
+    
+print(f'\nFSDP initialized') if dist.is_initialized() else print('')
+
  #%%
 
 # This is the configuration for the GPT model. It defines the hyperparameters for the model. The block size is the maximum sequence length, vocab size is the size of the vocabulary, n_layer is the number of transformer blocks, n_head is the number of attention heads, and n_embd is the embedding dimension. 
@@ -65,6 +62,7 @@ class GPTConfig:
 
         self.experts_per_gpu = self.num_experts // self.world_size
         self.rank = dist.get_rank() if dist.is_initialized() else 0
+        self.local_rank =  int(os.environ['LOCAL_RANK']) # get the local rank of the current process
 
 # instantiate and check the config
 config = GPTConfig()
@@ -75,23 +73,17 @@ print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: 
 
 
 #%%
-# FSDP setup
-
-
-
 if config.FSDP:
    
-    FSDP_local_rank = int(os.environ['LOCAL_RANK']) # get the local rank of the current process
-   
-   
+    # FSDP_local_rank = int(os.environ['LOCAL_RANK']) # get the local rank of the current process
     # set the device to the local rank of the current process
-    device = f'cuda:{FSDP_local_rank}' 
+    device = f'cuda:{config.local_rank}' 
     torch.cuda.set_device(device) # set the device for the current process
 
     # the master process will perform logging and saving checkpoints.
     master_process = (config.rank == 0)
 
-    print(f'\nFSDP initialized on device: {device}, rank: {config.rank}, local rank: {FSDP_local_rank}, world size: {config.world_size}')
+    print(f'\nFSDP initialized on device: {device}, rank: {config.rank}, local rank: {config.local_rank}, world size: {config.world_size}')
 
 # if not using FSDP, just use the next best available option
 else: 
