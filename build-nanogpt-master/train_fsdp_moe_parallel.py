@@ -22,7 +22,7 @@ from torch.distributed.fsdp.fully_sharded_data_parallel import (
 
 )
 import torch.distributed as dist
-import torchtune
+# import torchtune
 import functools
 
 
@@ -31,15 +31,13 @@ import functools
 
 # Check if we are running in FSDP mode. If so, we will initialize the process group and set the device for each process. a simple way to check whether your script is being run under Distributed Data Parallel (FSDP) — specifically when using torchrun with a cuda GPU. Note that you can be in FSDP mode even with a single GPU when using torchrun. 
 FSDP = int(os.environ.get('RANK', -1)) != -1
-print(f'karpathy check: {FSDP}\n')
-print(f'dist.is_initialized: {dist.is_initialized()}\n')
-# print(f'dist.is_distributed: {dist.is_distributed()}')
 
 
 if FSDP:
-    print(f'\nRunning in FSDP) mode')
+    
     # Note that LOCAL_RANK is the rank of the process on one given machine (when using multiple machine), while RANK is the rank of the process across all machines (when using multiple gpus on multiple machines). When using a setup with just one machine, LOCAL_RANK and RANK are the same. 
     init_process_group(backend='nccl') # initialize the process group for DDP
+    print(f'\nFSDP initialized: {dist.is_initialized()}')
  #%%
 
 # This is the configuration for the GPT model. It defines the hyperparameters for the model. The block size is the maximum sequence length, vocab size is the size of the vocabulary, n_layer is the number of transformer blocks, n_head is the number of attention heads, and n_embd is the embedding dimension. 
@@ -79,27 +77,21 @@ print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: 
 #%%
 # FSDP setup
 
-# Check if we are running in FSDP mode. If so, we will initialize the process group and set the device for each process.
 
-# a simple way to check whether your script is being run under Distributed Data Parallel (FSDP) — specifically when using torchrun with a cuda GPU. Note that you can be in FSDP mode even with a single GPU when using torchrun. 
-FSDP = int(os.environ.get('RANK', -1)) != -1
 
-if FSDP:
-    print(f'\nRunning in Distributed Data Parallel (FSDP) mode')
-    # Note that LOCAL_RANK is the rank of the process on one given machine (when using multiple machine), while RANK is the rank of the process across all machines (when using multiple gpus on multiple machines). When using a setup with just one machine, LOCAL_RANK and RANK are the same. 
-    init_process_group(backend='nccl') # initialize the process group for DDP
-    FSDP_rank = dist.get_rank() # get the rank of the current process
+if config.FSDP:
+   
     FSDP_local_rank = int(os.environ['LOCAL_RANK']) # get the local rank of the current process
-    FSDP_world_size = dist.get_world_size() # get the total number of processes
+   
    
     # set the device to the local rank of the current process
     device = f'cuda:{FSDP_local_rank}' 
     torch.cuda.set_device(device) # set the device for the current process
 
     # the master process will perform logging and saving checkpoints.
-    master_process = (FSDP_rank == 0)
+    master_process = (config.rank == 0)
 
-    print(f'\nFSDP initialized on device: {device}, rank: {FSDP_rank}, local rank: {FSDP_local_rank}, world size: {FSDP_world_size}')
+    print(f'\nFSDP initialized on device: {device}, rank: {config.rank}, local rank: {FSDP_local_rank}, world size: {config.world_size}')
 
 # if not using FSDP, just use the next best available option
 else: 
@@ -365,6 +357,6 @@ if FSDP:
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
 
-# torchrun --standalone --nproc_per_node=1 aae_model_train_fsdp.py
+# torchrun --standalone --nproc_per_node=1 train_fsdp_moe_parallel.py
 
 
