@@ -30,10 +30,12 @@ import functools
 # assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
 
 # Check if we are running in FSDP mode. If so, we will initialize the process group and set the device for each process. a simple way to check whether your script is being run under Distributed Data Parallel (FSDP) — specifically when using torchrun with a cuda GPU. Note that you can be in FSDP mode even with a single GPU when using torchrun. 
-if int(os.environ.get('RANK', -1)) != -1:
-    init_process_group(backend='nccl') # initialize the process group for DDP
+if os.environ.get('RANK') is not None and os.environ.get('WORLD_SIZE') is not None:
+    print(f'Running in a distributed environment. Initializing FSDP\n')
+    init_process_group(backend='nccl') # initialize the process group 
     
-print(f'\nFSDP initialized') if dist.is_initialized() else print('')
+else:
+    print(f'Running in a non-distributed environment.\n')
 
  #%%
 
@@ -75,9 +77,6 @@ print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: 
 
 #%%
 if config.FSDP:
-   
-    # FSDP_local_rank = int(os.environ['LOCAL_RANK']) # get the local rank of the current process
-    
     # set the device to the local rank of the current process
     device = f'cuda:{config.local_rank}' 
     torch.cuda.set_device(device) # set the device for the current process
@@ -351,6 +350,6 @@ if config.FSDP:
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
 
-# torchrun --standalone --nproc_per_node=1 train_fsdp_moe_parallel.py
+# torchrun --standalone --nproc_per_node=1 train_moe_fsdp_parallel.py
 
 

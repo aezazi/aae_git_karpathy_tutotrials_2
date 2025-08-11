@@ -390,6 +390,71 @@ for rank in range(8):
     end = (rank+1) * experts_per_gpu
     print(f'rank: {rank}  ids {start} - {end}')
 # %%
+import torch
 import torch.distributed as dist
+import os
+
 dist.is_initialized()
+int(os.environ.get('RANK', -1)) != -1
+d =(os.environ.get('RANK'))
+print('in distributed') if os.environ.get('RANK') is not None  else print('not')
+
+# %%
+import torch
+# experiment with how to construct moe masks
+num_experts = 16
+B=3
+T=5
+k=2
+
+experts_on_this_gpu_start = 4
+experts_on_this_gpu_end = 8
+torch.manual_seed(42)
+
+k2 = torch.randint(0,16,size=(B,T,2))
+print(print(f'topk indices shape: {k2.shape}\n{k2}\n'))
+k2_flat = k2.view((B*T),-1)
+print(f'topk indices flat1 shape: {k2_flat.shape}\n{k2_flat}\n')
+
+expert_mask1 = ((k2_flat>=experts_on_this_gpu_start) &(k2_flat<experts_on_this_gpu_end)).any(dim=-1)
+print(f'expert_mask1:\n{expert_mask1}')
+flat_positions1 = torch.where(expert_mask1)[0]
+print(f'\nflat_positions 1: {flat_positions1}\n')
+
+# k2_flat2 = k2.view(-1)
+# print(f'\ntopk indices flat2 shape: {k2_flat2.shape}\n{k2_flat2}\n')
+
+# expert_mask2 = ((k2_flat2>=experts_on_this_gpu_start) &(k2_flat2<experts_on_this_gpu_end))
+# print(f'expert_mask2:\n{expert_mask2}')
+# flat_positions2 = torch.where(expert_mask2)[0]
+# print(f'\nflat_positions 2: {flat_positions2}')
+# token_positions2 = flat_positions2 // k  
+# print(f'token positions: {torch.unique(token_positions2)}\n')
+
+# print(f'are flat positions 1 and token positions from flat positions 2 the same {flat_positions1==torch.unique(token_positions2)}\n')
+
+expert_assignments_for_tokens = []
+for token_idx in flat_positions1:
+    token_experts = k2_flat[token_idx]
+    print(f'token_experts: {token_experts}')
+    # Filter to only experts on this GPU and convert to local indices
+    gpu_expert_mask = ((token_experts >= experts_on_this_gpu_start) & 
+                        (token_experts < experts_on_this_gpu_end))
+    print(f'gpu_expert_mask: {gpu_expert_mask}')
+    token_local_experts = token_experts[gpu_expert_mask] - experts_on_this_gpu_start
+    print(f'token_local_experts: {token_local_experts}\n')
+
+    expert_assignments_for_tokens.append(token_local_experts)
+
+print(expert_assignments_for_tokens)
+print(flat_positions1)
+print('\n')
+
+x_test =torch.rand(3, 8, 7)
+x_test_flat = x_test.view((3*8), -1)
+print(x_test_flat)
+print('\n')
+print(x_test_flat[flat_positions1])
+
+
 # %%

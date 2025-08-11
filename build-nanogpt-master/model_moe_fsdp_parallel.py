@@ -225,6 +225,7 @@ class MoELayerParallel(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.num_experts = config.num_experts
+        self.batch_size = config.batch_size
         self.seq_len = config.seq_len
         self.k = config.k
         self.n_embd = config.n_embd
@@ -234,9 +235,16 @@ class MoELayerParallel(nn.Module):
         self.rank = dist.get_rank() if dist.is_initialized() else 0
         self.experts_per_gpu = config.experts_per_gpu
 
-        # Local expert range for this GPU
-        self.local_expert_start = self.rank * self.experts_per_gpu
-        self.local_expert_end = (self.rank + 1) * self.experts_per_gpu
+        # expert to gpu assginment based on gpu rank. Pre compute expert assginments for all gpus
+        self.gpu_expert_ranges = {} # dictionary to hold gpu --> expert assignment
+        for gpu_rank in range(self.world_size):
+            start = gpu_rank * self.experts_per_gpu
+            end = (gpu_rank+1) * self.experts_per_gpu
+            self.gpu_expert_ranges[gpu_rank] = (start, end)
+
+        # local expert id range for this gou
+        self.local_expert_start, self.local_expert_end = self.gpu_expert_ranges[self.rank]
+    
 
         print(f"Rank {self.rank}: Managing experts {self.local_expert_start} to {self.local_expert_end-1}")
 
@@ -248,22 +256,109 @@ class MoELayerParallel(nn.Module):
             ExpertMoESwiglu(config) for _ in range(self.experts_per_gpu)
         ])
 
-        # create communication buffers for all to all communication
+        # NOTE: What is all-to-all communication: In a MoE setup, the topk gate will assign tokens being processed on this gpu to anyone of the num_experts. The experts assgined to a token may or may not be on this gpu. So we have to identify which gpu is hosting the expert to which a token is assgined, send the token to that gpu/expert for processing  and then receive the result back to rejoin the batch-sequence on this gpu.  
+        
+        # create communication buffers for all to all communication.
         self.send_buffer = None
         self.receive_buffer = None
 
-        def _get_expert_assignments(self, top_k_ids_global, config):
-            """
-            determine which tokens are assgined to which gpy by the topk gate.
-            returns a dictionary that maps gpu global rank --> (token_indices, expert_local_id)
-            """
-            assignments = {}
-        
-            # flatten topk expert ids to 1D tensor for easier processing. 
-            top_k_ids_flat = top_k_ids_global.view(-1)
+    def _get_expert_assignments(self, top_k_ids_global, config):
+        """
+        determine which tokens are assgined to which gpy by the topk gate.
+        returns a dictionary that maps gpu global rank --> (token_indices, expert_local_id)
+        """
+        assignments = {}
+    
+        # flatten topk expert ids to shape (B*T, k) tensor for easier processing. 
+        top_k_ids_flat = top_k_ids_global.view((self.batch_size*self.seq_len), -1)
 
-            for gpu_rank in range(self.world_size):
-                gpu_local_expert_start = gpu_rank * self.experts_per_gpu
-                gpu_local_expert_end = (gpu_rank+1) * self.experts_per_gpu
+        for gpu_rank in range(self.world_size):
+            # get the start and end expert ids assigned to each gpu
+            gpu_expert_start, gpu_expert_end = self.gpu_expert_ranges[gpu_rank]
+
+            # a mask to filter topk expert ids for each gpu. The mask is a 1D tensor that will return TRUE for any row (token) that contains an expert in the range of experts assigned to gpu_rank and FALSE otherwise. Note that for tensors, we need to use bitwise comparison operators. So use "&" instead of "and"
+            expert_mask = ((top_k_ids_flat>=gpu_expert_start) & (top_k_ids_flat < gpu_expert_end)).any(dim=-1) # (batch_size*seq_len,)
+
+            if expert_mask.any():
+                # We extract the positions in expert_mask with value TRUE. These positions correspond to the token positions (indicies) in the sequence that were assigned to gpu_rank. note that using torch.where(condition) without any other arguments returns a tuple. That's what we are doing here, so we need to select the first element of the tuple
+                token_positions = torch.where(expert_mask)[0]
+
+                # For each token which has one or both of its assigned experts this gpu_rank, get its local expert assignments
+                expert_local_id_assignments_for_tokens = []
+                for token_idx in token_positions:
+                    # this returns the the topk (k=2 in this case) experts to which this token is assigned. One or both of the experts might be on this gpu_rank.
+                    token_experts = top_k_ids_flat[token_idx]
+
+                    # create a mask to filter token experts on this gpu_rank. since one or both of the experts to which this token was assigned may be on this gpu_rank, we need to filter for only the experts on this gpu_rank. 
+                    gpu_token_expert_mask = ((token_experts >= gpu_expert_start) & 
+                                      (token_experts < gpu_expert_end))
+                    
+                    # apply the mask get only token experts on this gpu_rank
+                    token_experts_on_this_gpu = token_experts[gpu_token_expert_mask]
+
+                    # the token expert ids we obtained above are global id range (0 - num_experts). we need to convert these to local ids since on each gpu the experts are indexed 0 to experts_per_gpu.
+                    token_experts_local_ids = token_experts_on_this_gpu - gpu_expert_start
+
+                    # by index, each element in expert_local_id_assignments_for_tokens is the local id(s) of experts to which tokens in token_positions was assigned. So token at token_positions[3] was assigned to expert(s) at expert_local_id_assignments_for_tokens[3]
+                    expert_local_id_assignments_for_tokens.append(token_experts_local_ids)
+
+                # finally, package token_positions and their expert_local_id_assignments_for_tokens in a tuple and associate the tuple with this gpu_rank on which the experts reside. for example, assignments[1] carries the token positions and the experts to which the tokens were assigned that can be processed by gpu rank=1
+                assignments[gpu_rank] = (token_positions, expert_local_id_assignments_for_tokens)
+        
+        return assignments
+    
+    
+    def _communicate_tokens(self, x_flat, assginments, config):
+        device = x_flat.device
+
+        # handle case when not in distributed mode or just one gpu
+        if not dist.is_initialized() or self.world_size == 1:
+            # Single GPU case - just return local assignments
+            if self.rank in assignments:
+                token_positions, expert_local_ids = assignments[self.rank]
+                return x_flat[token_positions], expert_local_ids, {self.rank: len(token_positions)}
+            else:
+                return torch.empty(0, self.n_embd, device=device), torch.empty(0, dtype=torch.long, device=device), {}
+
+        # multi-gpu case
+        token_send_counts = []
+        token_receive_counts = []
+
+        #compute send and recieve counts. recall that assignments is a dictionary that maps gpu_rank --> (token_positions, expert_assignment_for_tokens) where token positions is a 1D tensor with positions of tensors to be matched by index with the experts in expert_assignment_for_tokens.
+        for gpu_rank in self.world_size:
+            if gpu_rank in assginments:
+                send_count = len(assginments[gpu_rank][0]) if gpu_rank != self.rank else 0
+                receive_count = len(assginments[gpu_rank][0]) if gpu_rank == self.rank else 0
+            else:
+                send_count = 0
+                receive_count = 0
+            
+            send_counts.append(send_count)
+            receive_counts.append(receive_count)
+
+        # prepare send buffers
+        send_tokens = []
+        send_expert_ids = []
+       
+        for gpu_rank in range(self.world_size):
+            if gpu_rank in assginments and gpu_rank != self.rank:
+                token_positions, expert_local_ids = assginments[gpu_rank]
+                # uses token_positions as mask to select from x_flat tokens for communication
+                send_tokens.append(x_flat[token_positions])
+                send_expert_ids.append(expert_local_ids)
+            else:
+                send_tokens.append(torch.empty(0, self.n_embd, device=device))
+                send_expert_ids.append(torch.empty(0, dtype=torch.long, device=device))
+
+        # all-to-all communication for tokens
+
+
+        # all-to-all communication for expert ids
+            
+                
+
+
+
+
 
         
