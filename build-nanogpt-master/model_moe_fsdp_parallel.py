@@ -17,7 +17,7 @@ from hellaswag import render_example, iterate_examples
 class RotaryPosEmbed(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.head_dim = config.n_embd/config.n_head
+        self.head_dim = config.n_embd // config.n_head
         # self.get_theta()
         theta =  10_000 ** (-torch.arange(0, self.head_dim, 2, dtype=torch.float) / self.head_dim)
         self.register_buffer("theta", theta)
@@ -45,7 +45,7 @@ class RotaryPosEmbed(nn.Module):
         cos = angles.cos().unsqueeze(0).unsqueeze(2)  # [1, seq_len, 1, head_dim/2]
 
         # split input vector x into two vectors from the  even and odd indexed elements of the original vector x. Each element from x1 and x2 will be paired for rotation
-        x1 = x[:, :, :, : :2]
+        x1 = x[:, :, :, 0: :2]
         x2 = x[:, :, :, 1: :2]
 
         # Apply rotation. Note that the elementwise multiplication broadcasts the sin and cos values into batch and num_heads dimensions
@@ -262,9 +262,9 @@ class MoELayerParallel(nn.Module):
         self.send_buffer = None
         self.receive_buffer = None
 
-    def _get_expert_assignments(self, top_k_ids_global, config):
+    def _get_expert_assignments_with_padding(self, top_k_ids_global, gate_weights_global,config):
         """
-        determine which tokens are assgined to which gpy by the topk gate.
+        determine which tokens are assgined to which gpu by the topk gate.
         returns a dictionary that maps gpu global rank --> (token_indices, expert_local_id)
         """
         assignments = {}
@@ -272,91 +272,92 @@ class MoELayerParallel(nn.Module):
         # flatten topk expert ids to shape (B*T, k) tensor for easier processing. 
         top_k_ids_flat = top_k_ids_global.view((self.batch_size*self.seq_len), -1)
 
+        # Note: gate_weights_global is already of shape (batch_size*seq_len, num_experts) so no need to flatten.
+
         for gpu_rank in range(self.world_size):
             # get the start and end expert ids assigned to each gpu
             gpu_expert_start, gpu_expert_end = self.gpu_expert_ranges[gpu_rank]
 
-            # a mask to filter topk expert ids for each gpu. The mask is a 1D tensor that will return TRUE for any row (token) that contains an expert in the range of experts assigned to gpu_rank and FALSE otherwise. Note that for tensors, we need to use bitwise comparison operators. So use "&" instead of "and"
+            # a mask to filter all tokens in the sequence with an assigned topk expert id on this gpu_rank. The mask is a 1D tensor that will return TRUE for any row (token) that contains an expert in the range of experts assigned to this gpu_rank and FALSE otherwise. Note that for tensors, we need to use bitwise comparison operators. So use "&" instead of "and"
             expert_mask = ((top_k_ids_flat>=gpu_expert_start) & (top_k_ids_flat < gpu_expert_end)).any(dim=-1) # (batch_size*seq_len,)
 
             if expert_mask.any():
-                # We extract the positions in expert_mask with value TRUE. These positions correspond to the token positions (indicies) in the sequence that were assigned to gpu_rank. note that using torch.where(condition) without any other arguments returns a tuple. That's what we are doing here, so we need to select the first element of the tuple
+                # We extract the positions in expert_mask with value TRUE. These positions correspond to the token positions (indicies) in the sequence that were assigned to experts on this gpu_rank. note that using torch.where(condition) with just one argument returns a tuple of 1-D tensors, where each tensor represents the indices of the elements in the input condition that evaluate to True along each dimension of the input tensor. The first element in the tuple corresponds to the row indices and the second element corresponds to the column indices. We need the row indices (element 0) which correspond to the token positions in the sequence.
                 token_positions = torch.where(expert_mask)[0]
 
-                # For each token which has one or both of its assigned experts this gpu_rank, get its local expert assignments
-                expert_local_id_assignments_for_tokens = []
+                # For each token which has one or both of its assigned experts on this gpu_rank, get its local expert assignments. The assginments may have different number of experts between 1 and k experts. all to all communication expects all tensors to be of the same size and dtype. So we have to pad all expert assignments to the same length (k). We also need to create a mask that we will eventually use to filter the padding.
+                token_expert_local_id_assignments_padded = []
+                token_weights_padded =[]
+                
                 for token_idx in token_positions:
                     # this returns the the topk (k=2 in this case) experts to which this token is assigned. One or both of the experts might be on this gpu_rank.
                     token_experts = top_k_ids_flat[token_idx]
+
 
                     # create a mask to filter token experts on this gpu_rank. since one or both of the experts to which this token was assigned may be on this gpu_rank, we need to filter for only the experts on this gpu_rank. 
                     gpu_token_expert_mask = ((token_experts >= gpu_expert_start) & 
                                       (token_experts < gpu_expert_end))
                     
-                    # apply the mask get only token experts on this gpu_rank
+                    # apply the mask to get only token experts on this gpu_rank
                     token_experts_on_this_gpu = token_experts[gpu_token_expert_mask]
 
-                    # the token expert ids we obtained above are global id range (0 - num_experts). we need to convert these to local ids since on each gpu the experts are indexed 0 to experts_per_gpu.
+                    # use the token_experts_on_this_gpu to select from gate_weights_global, the weights for this token with an expert on this gpu_rank.
+                    token_weights_on_this_gpu = gate_weights_global[token_idx][token_experts_on_this_gpu]
+
+                    # the token expert ids we obtained above are global id range (0 - num_experts). we need to convert these to local ids since on each gpu the experts are indexed 0 to experts_per_gpu-1.
                     token_experts_local_ids = token_experts_on_this_gpu - gpu_expert_start
 
-                    # by index, each element in expert_local_id_assignments_for_tokens is the local id(s) of experts to which tokens in token_positions was assigned. So token at token_positions[3] was assigned to expert(s) at expert_local_id_assignments_for_tokens[3]
-                    expert_local_id_assignments_for_tokens.append(token_experts_local_ids)
+                    # pad the expert ids and weights to number of experts (k) so that all tensors are of the same size.
+                    token_num_experts = len(token_experts_local_ids) # number of experts assigned to this token that are on this gpu_rank
+                    if token_num_experts < self.k:
+                        # if the number of experts is less than k, pad to length k with -1 to indicate dummy expert
+                        token_expert_local_id_assignments_padded.append(F.pad(token_experts_local_ids, (0, self.k - token_num_experts), value=-1))
 
-                # finally, package token_positions and their expert_local_id_assignments_for_tokens in a tuple and associate the tuple with this gpu_rank on which the experts reside. for example, assignments[1] carries the token positions and the experts to which the tokens were assigned that can be processed by gpu rank=1
-                assignments[gpu_rank] = (token_positions, expert_local_id_assignments_for_tokens)
+                        token_weights_padded.append(F.pad(token_weights_on_this_gpu, (0, self.k - token_num_experts), value=0.0))
+
+                    else:
+                        # if the number of experts is already k, no padding needed
+                         token_expert_local_id_assignments_padded.append(token_experts_local_ids)  
+                         
+                         token_weights_padded.append(token_weights_on_this_gpu)
+
+                    # by index, each element in token_expert_local_id_assignments_padded is the local id(s) of experts to which tokens in token_positions was assigned. So token at token_positions[3] was assigned to expert(s) at token_expert_local_id_assignments_padded[3]
+                    
+
+                # stack the padded experts ids into a tensor. This will have shape (num_tokens, k) where num_tokens is the number of tokens assigned to this gpu_rank and k is the number of experts per token.
+                token_expert_local_id_assignments_padded = torch.stack(token_expert_local_id_assignments_padded)
+
+                # stack the padded weights into a tensor same as done aove for token_expert_local_id_assignments_padded
+                token_weights_padded = torch.stack(token_weights_padded)
+
+                # create a mask to filter the padding. the mask will have shape (num_tokens, k) where num_tokens is the number of tokens assigned to this gpu_rank and k is the number of experts per token. The mask will be True for the experts that were assigned to the token and False for the padding dummy.
+                token_expert_assignment_mask = (token_expert_local_id_assignments_padded >= 0)  # (num_tokens, k)
+                
+                # finally, package token_positions, their token_expert_local_id_assignments_padded, and token_expert_assignment_mask in a tuple and associate the tuple with this gpu_rank on which the experts reside. for example, assignments[1] carries the token positions and the experts to which the tokens were assigned and mask that can be processed by gpu rank=1
+                assignments[gpu_rank] = (token_positions, token_expert_local_id_assignments_padded,
+                token_weights_padded,
+                token_expert_assignment_mask)
         
         return assignments
     
-    
-    def _communicate_tokens(self, x_flat, assginments, config):
-        device = x_flat.device
-
-        # handle case when not in distributed mode or just one gpu
-        if not dist.is_initialized() or self.world_size == 1:
-            # Single GPU case - just return local assignments
-            if self.rank in assignments:
-                token_positions, expert_local_ids = assignments[self.rank]
-                return x_flat[token_positions], expert_local_ids, {self.rank: len(token_positions)}
-            else:
-                return torch.empty(0, self.n_embd, device=device), torch.empty(0, dtype=torch.long, device=device), {}
-
-        # multi-gpu case
-        token_send_counts = []
-        token_receive_counts = []
-
-        #compute send and recieve counts. recall that assignments is a dictionary that maps gpu_rank --> (token_positions, expert_assignment_for_tokens) where token positions is a 1D tensor with positions of tensors to be matched by index with the experts in expert_assignment_for_tokens.
-        for gpu_rank in self.world_size:
-            if gpu_rank in assginments:
-                send_count = len(assginments[gpu_rank][0]) if gpu_rank != self.rank else 0
-                receive_count = len(assginments[gpu_rank][0]) if gpu_rank == self.rank else 0
-            else:
-                send_count = 0
-                receive_count = 0
-            
-            send_counts.append(send_count)
-            receive_counts.append(receive_count)
-
-        # prepare send buffers
-        send_tokens = []
-        send_expert_ids = []
-       
-        for gpu_rank in range(self.world_size):
-            if gpu_rank in assginments and gpu_rank != self.rank:
-                token_positions, expert_local_ids = assginments[gpu_rank]
-                # uses token_positions as mask to select from x_flat tokens for communication
-                send_tokens.append(x_flat[token_positions])
-                send_expert_ids.append(expert_local_ids)
-            else:
-                send_tokens.append(torch.empty(0, self.n_embd, device=device))
-                send_expert_ids.append(torch.empty(0, dtype=torch.long, device=device))
-
-        # all-to-all communication for tokens
-
-
-        # all-to-all communication for expert ids
+    def _communicate_tokens(self, x_flat, assignments, top_k_gated_weights, top_k_indices_global, batch_size, seq_len):
+        pass
+    """
+    Perform all-to-all communication to send tokens to appropriate GPUs
+    """
             
                 
+    def _extract_local_gating_weights(self, top_k_gated_weights, top_k_indices_global, token_positions, flattened_experts, expert_counts):
+        """Extract gating weights for the tokens and experts being processed locally"""
+        # This needs to be implemented to extract the correct gating weights
+        # corresponding to the flattened expert assignments
+        pass
 
+    def _process_local_experts(self, tokens, flattened_experts, expert_counts, gating_weights):
+        """
+        Process tokens through local experts using flattened expert assignments
+        """
+        pass
 
 
 
