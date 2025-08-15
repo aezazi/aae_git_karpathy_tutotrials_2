@@ -547,23 +547,23 @@ print(f'token_weights_on_this_gpu: {token_weights_on_this_gpu}\n')
 
 
 # %%
+# creating the tensors for RoPe 
 seq_len =12
 num_heads = 4
 n_embed = 32
 B = 2
 
 r = torch.arange(768).reshape(B,seq_len, num_heads, n_embed//num_heads)
-print(r)
+print(r[:,:,0,:])
 x1 = r[:, :, :, 0: :2]
 x2 = r[:, :, :, 1: :2]
 
-print(x1)
-print(x2)
+print(x1[0,:,0,:])
+print(x2[0,:,0,:])
 
-x11 = r[:, :, :, ::2]
-x22 = r[:, :, :, 1::2]
 
-print(x1==x11)
-print(x2==x22)
-
+# %%
+print(torch.empty(0,2))
+# %%
+1 % 4
 # %%

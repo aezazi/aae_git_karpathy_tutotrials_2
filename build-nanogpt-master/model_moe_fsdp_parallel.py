@@ -340,13 +340,115 @@ class MoELayerParallel(nn.Module):
         
         return assignments
     
-    def _communicate_tokens(self, x_flat, assignments, top_k_gated_weights, top_k_indices_global, batch_size, seq_len):
-        pass
-    """
-    Perform all-to-all communication to send tokens to appropriate GPUs
-    """
-            
+    def _communicate_tokens(self, x_flat, assignments):
+        
+        """
+        Perform all-to-all communication to send tokens to appropriate GPUs
+        """
+        device = x_flat.device
+
+        # prepare send data for each gpu
+        send_tensors = []
+        send_counts = []
+
+        for gpu_rank in range(self.world_size):
+            if gpu_rank in assignments:
+                token_positions, token_expert_local_id_assignments_padded, token_weights_padded, token_expert_assignment_mask = assignments[gpu_rank]
+
+                num_tokens = token_positions.shape[0]
                 
+                # extract the tokens with at least one expert on this gpu_riank
+                tokens_to_send = x_flat[token_positions] # (num_tokens, n_embd)
+
+                # package tokens, expert_ids, weights, and mask in alist ofr this gpu_rank. Place package in the send_tensors list. This will be used to send tokens and all their metadata to the appropriate gpu for processing. 
+                send_tensors.extend([
+                    tokens_to_send, 
+                    token_expert_local_id_assignments_padded.to(device), 
+                    token_weights_padded.to(device), 
+                    token_expert_assignment_mask.to(device)
+                ])
+
+                # the purpose of send_counts is that the receiving GPU needs to know how much data (number of elements) to expect so it can Allocate receive buffers of the correct size and Reshape the flattened data back to original shape tensors after communication
+                send_counts.extend([
+                    tokens_to_send.numel(),  # num elements in the token tensor (num_tokens * n_embd)
+                    token_expert_local_id_assignments_padded.numel(),  # (num_tokens * k)
+                    token_weights_padded.numel(),  # (num_tokens * k)
+                    token_expert_assignment_mask.numel()  # (num_tokens * k)
+                ])
+            else:
+                # if no tokens assigned to this gpu_rank, send empty tensors.
+                empty_tokens = torch.empty(0, self.n_embd, device=device, dtype=x_flat.dtype)
+                empty_ids = torch.empty(0, self.k, device=device, dtype=torch.long)
+                empty_weights = torch.empty(0, self.k, device=device, dtype=x_flat.dtype)
+                empty_mask = torch.empty(0, self.k, device=device, dtype=torch.bool)
+                
+                send_tensors.extend([empty_tokens, empty_ids, empty_weights, empty_mask])
+                send_counts.extend([0, 0, 0, 0])
+
+        # prepare receive buffers. This creates a flat list to collect send counts from ALL GPUs. as an example if we have 4 GPUs, this creates:
+            # recv_counts = [0, 0, 0, 0,  # GPU0 send counts (tokens, expert_ids, weights, mask)
+            #                0, 0, 0, 0,  # GPU1 send counts  
+            #                0, 0, 0, 0,  # GPU2 send counts
+            #                0, 0, 0, 0]  # GPU3 send counts
+        
+        # We multiply by 4 because we ae sending and receiving 4 tensors per gpu (tokens, expert_ids, weights, mask)
+        recv_counts = [0] * (self.world_size * 4) 
+
+        # all_gather the counts of what other GPUs are sending into this GPU's recv_counts. Send the send_counts to all GPUs so they can allocate receive buffers of the correct size. After applying all_gather, recv_counts will be populated with the number elements in each tensor. 
+        dist.all_gather_object(recv_counts, send_counts)
+
+        # compute receive buffer sizes for this gpu. We multiply by 4 because we ae sending and receiving 4 tensors per gpu (tokens, expert_ids, weights, mask)
+        this_gpu_recv_start = self.rank * 4 # start index for this gpu in the recv_counts list
+        this_gpu_recv_counts = recv_counts[this_gpu_recv_start:this_gpu_recv_start + 4] # the range of indices in recv_counts that correspond to this gpu.
+
+        # prepare receiving tensors for each of the 4 tensors we are receiving/sending among all gpus. 
+        # Remember that recv_counts is organized as:
+        # recv_counts = [GPU0_tokens, GPU0_experts, GPU0_weights, GPU0_mask,
+            #    GPU1_tokens, GPU1_experts, GPU1_weights, GPU1_mask,  
+            #    GPU2_tokens, GPU2_experts, GPU2_weights, GPU2_mask,
+            #    GPU3_tokens, GPU3_experts, GPU3_weights, GPU3_mask]
+        
+        # So i*4 + offset extracts the same data type from each GPU:
+            # i*4 + 0: Token counts from all GPUs
+            # i*4 + 1: Expert ID counts from all GPUs
+            # i*4 + 2: Weight counts from all GPUs
+            # i*4 + 3: Mask counts from all GPUs
+                    
+        recv_tokens = torch.empty(sum([i*4 + 0 for i in range(self.world_size)]) // self.n_embd, self.n_embd, device=device, dtype=x_flat.dtype) # (number of tokens to be received from all GPUs, n_emd)
+        
+        recv_expert_ids = torch.empty(sum([i*4 + 1 for i in range(self.world_size)]) // self.k, self.k, device=device, dtype=torch.long) # (number of expert ids to be received from all GPUs, k)
+        
+        recv_weights = torch.empty(sum([i*4 + 2 for i in range(self.world_size)]) // self.k, self.k, device=device, dtype=x_flat.dtype) # (weights to be received from all GPUs, k)
+        
+        recv_mask = torch.empty(sum([i*4 + 3 for i in range(self.world_size)]) // self.k, self.
+        k, device=device, dtype=torch.bool) # (expert id masks to be received from all GPUs, k)
+
+        # flatten send tensors for all-_o_all_single communication.  This is because all_to_all_single communication requires the tensors to be of the same size and shape across all GPUs. So we flatten the tensors to 1D and then reshape them after communication.  Best practice in MoE implementations is usually  all_to_all_single() vs all_to_all().
+        # all_to_all_single() is preferred because:
+            # Better Performance: Single communication call with contiguous memory
+            # Variable Token Handling: Perfect for variable numbers of tokens/GPU
+            # Memory Efficiency: No need to maintain separate tensor lists
+            # Easier Buffer Management: One receive buffer per data type
+        
+        send_tokens_flat = torch.cat([t.flatten() for i, t in enumerate(send_tensors) if i % 4 ==0]) # (num_tokens to be sent *n_embd,)
+
+        send_expert_ids_flat = torch.cat([t.flatten() for i, t in enumerate(send_tensors) if i % 4 ==1]) # (num_expert_ids to be sent * k,)
+
+        send_weights_flat = torch.cat([t.flatten() for i, t in enumerate(send_tensors) if i % 4 ==2]) # (num_weights to be sent * k,)
+
+        send_mask_flat = torch.cat([t.flatten() for i, t in enumerate(send_tensors) if i % 4 ==3]) # (num_masks to be sent * k,)
+
+        # Perform all-to-all communication to send tokens to appropriate GPUs
+        dist.all_to_all_single(recv_tokens.flatten(), send_tokens_flat)
+        dist.all_to_all_single(recv_expert_ids.flatten(), send_expert_ids_flat)
+        dist.all_to_all_single(recv_weights.flatten(), send_weights_flat)
+        dist.all_to_all_single(recv_mask.flatten(), send_mask_flat)
+
+        return recv_tokens, recv_expert_ids, recv_weights, recv_mask
+
+
+
+            
     def _extract_local_gating_weights(self, top_k_gated_weights, top_k_indices_global, token_positions, flattened_experts, expert_counts):
         """Extract gating weights for the tokens and experts being processed locally"""
         # This needs to be implemented to extract the correct gating weights
@@ -363,3 +465,4 @@ class MoELayerParallel(nn.Module):
 
 
         
+# %%
