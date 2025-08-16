@@ -264,7 +264,7 @@ class MoELayerParallel(nn.Module):
             tokens_processed_count_gathered = [torch.zeros_like(self.count_tokens_processed_by_each_expert) for _ in range(self.world_size)]
 
 
-        # NOTE: What is all-to-all communication: In a MoE setup, the topk gate will assign tokens being processed on this gpu to anyone of the num_experts. The experts assgined to a token may or may not be on this gpu. So we have to identify which gpu is hosting the expert to which a token is assgined, send the token to that gpu/expert for processing  and then receive the result back to rejoin the batch-sequence on this gpu.  
+        # NOTE: all-to-all communication: In a MoE setup, the topk gate will assign tokens being processed on this gpu to anyone of the num_experts. The experts assgined to a token may or may not be on this gpu. So we have to identify which gpu is hosting the expert to which a token is assgined, send the token to that gpu/expert for processing  and then receive the result back to rejoin the batch-sequence on this gpu.  
         
         # create communication buffers for all to all communication.
         self.send_buffer = None
@@ -384,7 +384,7 @@ class MoELayerParallel(nn.Module):
                     token_expert_assignment_mask.numel()  # (num_tokens * k)
                 ])
             else:
-                # if no tokens assigned to this gpu_rank, send empty tensors.
+                # if no tokens assigned to this gpu_rank, send empty tensors.  we must still add an empty tensor and count of 0. This keeps the lists properly sized and ordered.
                 empty_tokens = torch.empty(0, self.n_embd, device=device, dtype=x_flat.dtype)
                 empty_ids = torch.empty(0, self.k, device=device, dtype=torch.long)
                 empty_weights = torch.empty(0, self.k, device=device, dtype=x_flat.dtype)
@@ -516,18 +516,91 @@ class MoELayerParallel(nn.Module):
         device = processed_tokens.device
 
         #  Create a dictionary to hold a reverse mapping to send processed tokens back to the original GPU
-        send_back_assignments = {}
-        token_idx = 0
+        send_back_assignments = {} # Will map: gpu_rank → (original_positions, processed_tokens)
+        token_idx = 0 # Tracks our position in the processed_tokens tensor
+
+        # Code and Reconstruction Logic explanation: note that processed_tokens has shape (num tokens processed by all gpus, n_embd). Also processed_tokens is ordered the same way as the original assignments dictionary. Here is an example:
+        # original assignments dictionary might look like this:
+        # assignments = {
+            # 0: ([5, 12, 20], expert_ids, weights, mask),  # GPU 0 sent 3 tokens from positions 5,12,20
+            # 1: ([8, 15], expert_ids, weights, mask),      # GPU 1 sent 2 tokens from positions 8,15  
+            # 2: ([2, 7, 9, 11], expert_ids, weights, mask) # GPU 2 sent 4 tokens from positions 2,7,9,11}
+
+        # after processing:
+        # processed_tokens.shape = (9, n_embd)  # 9 total tokens processed (3+2+4)
+        # processed_tokens[0:3] came from GPU 0
+        # processed_tokens[3:5] came from GPU 1  
+        # processed_tokens[5:9] came from GPU 2
 
         for gpu_rank in range(self.world_size):
             if gpu_rank in assignments:
                 token_positions, _, _, _ = assignments[gpu_rank]
                 num_tokens = len(token_positions)
-                
 
-                # Extract the processed tokens corresponding to the token positions assigned to this gpu_rank
-                tokens_to_send = processed_tokens[token_positions]
+                if num_tokens > 0:
+                    # tokens to send back to this gpu_rank
+                    tokens_to_send_back_to_this_gpu = processed_tokens[token_idx : token_idx + num_tokens] # (number of tokens for this gpu, n_embd)
+                    send_back_assignments[gpu_rank] = (token_positions, tokens_to_send_back_to_this_gpu)
+                    token_idx += num_tokens
 
 
+        # Example for what the code below does:
+        # Let's say we have a total of 4 GPUs and we're GPU 2, and our send_back_assignments looks like:
+        # send_back_assignments = {
+            # 0: (positions, processed_tokens[0:2]),    # 2 tokens to send back to GPU 0
+            # 3: (positions, processed_tokens[2:5])     # 3 tokens to send back to GPU 3
+            # Note: No data for GPU 1 or GPU 2 (self)}
+
+        #  We need to send processed tokens back to their original GPUs using another all-to-all communication, so we need to prepare the send data and coordinate buffer sizes.
+
+        # Create send tensors for all_to_all back to 
+        send_tensors_back = [] # Will hold tokens to send back to each GPU
+        send_counts_back = [] # Will hold element counts for each GPU
+
+        # We must loop over ALL GPUs, not just the ones we have data for. This maintains consistent ordering across all GPUs.
+        # Loop through all 4 GPUs in order:
+                # gpu_rank = 0: We have data
+                # send_tensors_back = [processed_tokens[0:2]]
+                # send_counts_back = [2 * n_embd]  # 2 tokens * n_embd elements each
+
+                # # gpu_rank = 1: No data - add empty
+                # send_tensors_back = [processed_tokens[0:2], empty_tensor]
+                # send_counts_back = [2 * n_embd, 0]
+
+                # # gpu_rank = 2: No data - add empty  
+                # send_tensors_back = [processed_tokens[0:2], empty_tensor, empty_tensor]
+                # send_counts_back = [2 * n_embd, 0, 0]
+
+                # # gpu_rank = 3: We have data
+                # send_tensors_back = [processed_tokens[0:2], empty_tensor, empty_tensor, processed_tokens[2:5]]
+                # send_counts_back = [2 * n_embd, 0, 0, 3 * n_embd]
+
+        for gpu_rank in range(self.world_size):
+            if gpu_rank in send_back_assignments:
+                _, tokens_to_send_back_to_this_gpu = send_back_assignments[gpu_rank]
+                send_tensors_back.append(tokens_to_send_back_to_this_gpu)
+                send_counts_back.append(tokens_to_send_back_to_this_gpu.numel())
+            else:
+                # Even if we have no data for a GPU, we must still add an empty tensor and count of 0. This keeps the lists properly sized and ordered for all_to_all_single communication and later reassembly of tokens on their original gpu.
+                empty_tensor = torch.empty(0, self.n_embd, device=device, dtype=processed_tokens.dtype)
+                send_tensors_back.append(empty_tensor)
+                send_counts_back.append(0)
+
+       # Before all_gather (on GPU 2):
+            # send_counts_back = [2 * n_embd, 0, 0, 3 * n_embd]  # What GPU 2 is sending
+            # all_send_counts_back = [None, None, None, None]    # Unknown what others send
+
+        # create a list to hold the the send counts for all GPUs. This is used to allocate receive buffers of the correct size on the receiving GPUs. 
+        all_send_counts_back = [0] * (self.world_size)
+        # fill the all_send_counts_back with the counts from send_counts_back from all GPUs
+        dist.all_gather_object(all_send_counts_back, send_counts_back)
+
+        # After all_gather (on GPU 2):
+            # all_send_counts_back = [
+                # [1536, 0, 768, 0],        # GPU 0's send counts
+                # [0, 1536, 0, 768],        # GPU 1's send counts  
+                # [1536, 0, 0, 2304],       # GPU 2's send counts (us)
+                # [768, 1536, 1536, 0]      # GPU 3's send counts
+                # ]
         
 # %%

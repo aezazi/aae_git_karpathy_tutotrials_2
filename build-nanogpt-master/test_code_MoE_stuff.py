@@ -570,3 +570,10 @@ print(zer)
 zer[1] += 2
 print(zer)
 # %%
+dic = {0: [2,3,5], 1: [9,3,6,7], 4: [5,8]}
+
+for i in range(10):
+    
+    if i in dic:
+        print(f'gpu {i} has positions:{dic[i]}\n')
+# %%
