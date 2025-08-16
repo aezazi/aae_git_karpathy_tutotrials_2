@@ -565,5 +565,8 @@ print(x2[0,:,0,:])
 # %%
 print(torch.empty(0,2))
 # %%
-1 % 4
+zer = torch.zeros(4)
+print(zer)
+zer[1] += 2
+print(zer)
 # %%

@@ -31,7 +31,7 @@ import functools
 
 # Check if we are running in FSDP mode. If so, we will initialize the process group and set the device for each process. a simple way to check whether your script is being run under Distributed Data Parallel (FSDP) — specifically when using torchrun with a cuda GPU. Note that you can be in FSDP mode even with a single GPU when using torchrun. 
 if os.environ.get('RANK') is not None and os.environ.get('WORLD_SIZE') is not None:
-    print(f'Running in a distributed environment. Initializing FSDP\n')
+    print(f'Running in distributed environment. Initializing FSDP\n')
     init_process_group(backend='nccl') # initialize the process group 
     
 else:
