@@ -7,13 +7,13 @@ from torch.nn import functional as F
 from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
-import model_moe_fsdp as model
-from model_moe_fsdp import Block
+import model_moe_fsdp_parallel as model
+from model_moe_fsdp_parallel import Block
 
 from torch.distributed import init_process_group, destroy_process_group
 from torch.distributed.fsdp.wrap import (transformer_auto_wrap_policy,)
 from torch.distributed.fsdp.fully_sharded_data_parallel import (
-    FullyShardedDataParallel as FSDP_wrap,
+    FullyShardedDataParallel as FSDP,
     MixedPrecision,
     BackwardPrefetch,
     ShardingStrategy,
@@ -109,7 +109,7 @@ if torch.cuda.is_available():
 
 # %%
 #Instantiate the model
-model = model.CreateMoE(config=config)
+model = model.CreateMoEParalell(config=config)
 
 # compute number of model parameters
 def count_parameters(model):
@@ -130,7 +130,7 @@ transformer_wrapper_policy = functools.partial(
     transformer_layer_cls = {Block} # transformer layer class as per pytorch tutorial video
 )
 
-# FSDP  allows us to define a mixed prescision policy. Here, I am just using bf16 for aeverything, but we can use hybrid. refer to this tutorial for more good info and nuances https://www.youtube.com/watch?v=-caN92JtKqA&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=4
+# FSDP  allows us to define a mixed prescision policy. Here, I am just using bf16 for everything, but we can use hybrid. refer to this tutorial for more good info and nuances https://www.youtube.com/watch?v=-caN92JtKqA&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=4
 precision_policy = MixedPrecision(
             # param precision
             param_dtype=torch.bfloat16, # param precision
@@ -139,14 +139,14 @@ precision_policy = MixedPrecision(
             )
 
 # wrap model per wrapper policy
-model_FSDP = FSDP_wrap(model,
+model = FSDP(model,
             auto_wrap_policy=transformer_wrapper_policy,
             mixed_precision=precision_policy,
         
             # reccommendation and other good info from tutorial: https://www.youtube.com/watch?v=sDM56HOziE4&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=8
             backward_prefetch=BackwardPrefetch.BACKWARD_PRE,
 
-            # note that ShardingStrategy.NO_SHARD is the equivalent of having the model run DDP mode
+            # note that ShardingStrategy.NO_SHARD is the equivalent of having the model run in DDP mode
             sharding_strategy=ShardingStrategy.FULL_SHARD,
             
             device_id=torch.cuda.current_device(),
@@ -156,11 +156,9 @@ model_FSDP = FSDP_wrap(model,
 
 #%%
 # Instantiate the optimizer.
-# NOTE: I moved the code for optimizer configuration to a separate file called aae_utils.py.
 from aae_utils import ConfigureOptimizer
 
-# Note that we are using the raw model here, not the DDP wrapped model. This is because the DDP wrapper does not have the optimizer parameters. The raw model is the actual model that we want to optimize.
-optimizer = ConfigureOptimizer(model_FSDP).create_optimizer(weight_decay=0.1, learning_rate = config.base_lr, device_type=device)
+optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.1, learning_rate = config.base_lr, device_type=device)
 
 if config.FSDP:
     print(f'\nOptimizer initialized on GPU rank {config.rank}, device {device}')
@@ -231,7 +229,7 @@ log_params = eval_log_utils.LogParamsFilesConfig(
     world_size = config.world_size,
     rank = config.rank,
     local_rank = config.local_rank,
-    model = model_FSDP,
+    model = model,
     device = device,
     encoder = tiktoken.get_encoding('gpt2'),
     val_loader = val_loader,
@@ -251,9 +249,8 @@ log_params = eval_log_utils.LogParamsFilesConfig(
 # Run the training loop.
 model.train() # set the model to training mode
 
-# counter and container for tracking how many tokens are assigned to each expert by transformer layer
+# counter to track total tokens processed
 total_tokens_seen = 0
-accum_topk_expert_count = [torch.zeros(config.num_experts, device=device, dtype=torch.long) for _ in range(config.n_layer)]
 
 for step in range(training_steps):
     t0 = time.time()
@@ -275,13 +272,8 @@ for step in range(training_steps):
         # we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs. The device must be cuda.
         
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-            logits, loss, top_k_all = model_FSDP(x, y)
+            logits, loss, count_tokens_processed_by_each_expert = model(x, y)
 
-       
-        with torch.no_grad():
-            for layer_idx, top_k_global_ids in enumerate(top_k_all):
-                counts = torch.bincount(top_k_global_ids, minlength=config.num_experts)
-                accum_topk_expert_count[layer_idx] += counts
         
 
         # divide the loss by the number of micro steps to get the average loss of the accumulated micro steps
@@ -296,7 +288,7 @@ for step in range(training_steps):
         dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG)
 
     # clip the gradients to prevent exploding gradients
-    norm = nn.utils.clip_grad_norm_(model_FSDP.parameters(), 1.0)
+    norm = nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optimizer.step()
     scheduler.set_lr(step)
 
@@ -324,14 +316,10 @@ for step in range(training_steps):
         # print processing stats
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
 
-    if config.print_token_routing and step % 1000 == 0:
-        print(f'\n')
-        for i, c in enumerate(accum_topk_expert_count):
-            print(f"Layer {i}: {c.tolist()}")
-        print(f'\n')
-        for i, c in enumerate(accum_topk_expert_count):
-            print(f"Layer {i} normalized: {(c / total_tokens_seen)}")
-        print(f'\n')
+        if config.print_token_routing and step % 1000 == 0:
+            gathered_counts = [torch.zeros_like(count_tokens_processed_by_each_expert) for _ in range(config.world_size)]
+            dist.all_gather(gathered_counts, count_tokens_processed_by_each_expert)
+            
 
     # every x steps evaluate, print, and log hellaswag.
     if ((step > 0 and step % 250 == 0) or last_step):

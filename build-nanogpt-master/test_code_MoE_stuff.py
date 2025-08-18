@@ -577,3 +577,21 @@ for i in range(10):
     if i in dic:
         print(f'gpu {i} has positions:{dic[i]}\n')
 # %%
+# experiment with placing processed tokens back in their original positions
+import torch
+torch.manual_seed(42)
+x_flat = torch.arange(70).view(10,7).float()
+print(f'x_flat:\n{x_flat}\n')
+
+output = torch.zeros_like(x_flat)
+print(f'output:\n{output}\n')
+positions = torch.tensor([1,3,7,9])
+
+processed_tokens = torch.randn(4,7)
+print(f'processed tokes:\n{processed_tokens}\n')
+
+output[positions] = processed_tokens
+print(f'output after placing processed tokens:\n{output}\n')
+# %%
+
+# %%

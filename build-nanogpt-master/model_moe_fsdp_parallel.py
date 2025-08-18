@@ -1,5 +1,7 @@
 #%%
-#utility file to create model
+"""
+Model definition
+"""
 import os
 from dataclasses import dataclass
 import torch
@@ -257,11 +259,7 @@ class MoELayerParallel(nn.Module):
         ])
 
         # create a tensor to hold a running count of the number of tokens processed by each expert on this gpu.
-        self.count_tokens_processed_by_each_expert = torch.zeros(self.experts_per_gpu, dtype=torch.int, device=torch.device(f"cuda:{self.rank}")) # (num_experts_per_gpu,)
-
-        # if on rank 0, create a list to gather count_tokens_processed_by_each_expert by all gpus.
-        if self.rank == 0:
-            tokens_processed_count_gathered = [torch.zeros_like(self.count_tokens_processed_by_each_expert) for _ in range(self.world_size)]
+        self.count_tokens_processed_by_each_expert = torch.zeros(self.experts_per_gpu, dtype=torch.int, device=torch.device(f"cuda:{self.rank}"), requires_grad=False) # (num_experts_per_gpu,)
 
 
         # NOTE: all-to-all communication: In a MoE setup, the topk gate will assign tokens being processed on this gpu to anyone of the num_experts. The experts assgined to a token may or may not be on this gpu. So we have to identify which gpu is hosting the expert to which a token is assgined, send the token to that gpu/expert for processing  and then receive the result back to rejoin the batch-sequence on this gpu.  
@@ -269,7 +267,7 @@ class MoELayerParallel(nn.Module):
         # create communication buffers for all to all communication.
         self.send_buffer = None
         self.receive_buffer = None
-
+    
     def _get_expert_assignments_with_padding(self, top_k_ids_global, gate_weights_global):
         """
         determine which tokens are assgined to which gpu by the topk gate.
@@ -506,8 +504,10 @@ class MoELayerParallel(nn.Module):
             
             # Store the processed token in the output tensor
             output[token_idx] = processed_token
+            
+        tokens_processed_by_each_expert = self.count_tokens_processed_by_each_expert
 
-        return output
+        return output, tokens_processed_by_each_expert
     
     def _communicate_results_back(self, processed_tokens, assignments):
         """
@@ -519,7 +519,7 @@ class MoELayerParallel(nn.Module):
         send_back_assignments = {} # Will map: gpu_rank → (original_positions, processed_tokens)
         token_idx = 0 # Tracks our position in the processed_tokens tensor
 
-        # Code and Reconstruction Logic explanation: note that processed_tokens has shape (num tokens processed by all gpus, n_embd). Also processed_tokens is ordered the same way as the original assignments dictionary. Here is an example:
+        # Explanation and example of code below: note that processed_tokens has shape (num tokens processed by all gpus, n_embd). Also, processed_tokens is ordered the same way as the original assignments dictionary. Here is an example:
         # original assignments dictionary might look like this:
         # assignments = {
             # 0: ([5, 12, 20], expert_ids, weights, mask),  # GPU 0 sent 3 tokens from positions 5,12,20
@@ -532,6 +532,23 @@ class MoELayerParallel(nn.Module):
         # processed_tokens[3:5] came from GPU 1  
         # processed_tokens[5:9] came from GPU 2
 
+        # what the code for the loop below does with the example above::
+            # token_idx = 0
+            # GPU 0: 3 tokens
+            # tokens_for_gpu_0 = processed_tokens[0:3]  # token_idx=0, num_tokens=3
+            # send_back_assignments[0] = ([5, 12, 20], tokens_for_gpu_0)
+            # token_idx = 3
+
+            # # GPU 1: 2 tokens  
+            # tokens_for_gpu_1 = processed_tokens[3:5]  # token_idx=3, num_tokens=2
+            # send_back_assignments[1] = ([8, 15], tokens_for_gpu_1)
+            # token_idx = 5
+
+            # # GPU 2: 4 tokens
+            # tokens_for_gpu_2 = processed_tokens[5:9]  # token_idx=5, num_tokens=4  
+            # send_back_assignments[2] = ([2, 7, 9, 11], tokens_for_gpu_2)
+            # token_idx = 9
+
         for gpu_rank in range(self.world_size):
             if gpu_rank in assignments:
                 token_positions, _, _, _ = assignments[gpu_rank]
@@ -543,21 +560,29 @@ class MoELayerParallel(nn.Module):
                     send_back_assignments[gpu_rank] = (token_positions, tokens_to_send_back_to_this_gpu)
                     token_idx += num_tokens
 
-
-        # Example for what the code below does:
-        # Let's say we have a total of 4 GPUs and we're GPU 2, and our send_back_assignments looks like:
+        # finalresult of the loop above will be something like this:
         # send_back_assignments = {
+            #  0: ([5, 12, 20], processed_tokens[0:3]),  # Send these 3 processed tokens back to GPU 0
+            #  1: ([8, 15], processed_tokens[3:5]),      # Send these 2 processed tokens back to GPU 1
+            #  2: ([2, 7, 9, 11], processed_tokens[5:9]) # Send these 4 processed tokens back to GPU 2
+            # }
+
+
+
+        # Now We need to send processed tokens back to their original GPUs using another all-to-all communication. The next block of code prepares tensors fo all-to-all back to the original gpus and executes the communication. Example for what the code below does:
+        
+        # Let's say we have a total of 4 GPUs and we're GPU 2, and our send_back_assignments (from the code block above) looks like:
+        # send_back_assignments  = {
             # 0: (positions, processed_tokens[0:2]),    # 2 tokens to send back to GPU 0
             # 3: (positions, processed_tokens[2:5])     # 3 tokens to send back to GPU 3
             # Note: No data for GPU 1 or GPU 2 (self)}
 
-        #  We need to send processed tokens back to their original GPUs using another all-to-all communication, so we need to prepare the send data and coordinate buffer sizes.
 
         # Create send tensors for all_to_all back to 
         send_tensors_back = [] # Will hold tokens to send back to each GPU
         send_counts_back = [] # Will hold element counts for each GPU
 
-        # We must loop over ALL GPUs, not just the ones we have data for. This maintains consistent ordering across all GPUs.
+        # We must loop over ALL GPUs, not just the ones we have data for. This maintains consistent ordering across all GPUs. Example.
         # Loop through all 4 GPUs in order:
                 # gpu_rank = 0: We have data
                 # send_tensors_back = [processed_tokens[0:2]]
@@ -592,6 +617,7 @@ class MoELayerParallel(nn.Module):
 
         # create a list to hold the the send counts for all GPUs. This is used to allocate receive buffers of the correct size on the receiving GPUs. 
         all_send_counts_back = [0] * (self.world_size)
+        
         # fill the all_send_counts_back with the counts from send_counts_back from all GPUs
         dist.all_gather_object(all_send_counts_back, send_counts_back)
 
@@ -603,4 +629,188 @@ class MoELayerParallel(nn.Module):
                 # [768, 1536, 1536, 0]      # GPU 3's send counts
                 # ]
         
+        # Now we use the all_send_counts_back to create receive buffers for this GPU.
+        # Coumpute total number of elements to receive on this GPU
+        total_recv_size = sum(counts[self.rank] for counts in all_send_counts_back)
+        recv_tokens_back_flat = torch.empty(total_recv_size, device=device, dtype=processed_tokens.dtype)
+
+        # Flatten the send tensors for all_to_all_single communication
+        send_tensors_back_flat = torch.cat([t.flatten() for t in send_tensors_back])
+
+        # All-to-all communication back (both tensors are 1D)
+        dist.all_to_all_single(recv_tokens_back_flat, send_tensors_back_flat)
+
+        # Now we need to reshape the received tokens back to their original shape
+        # num_tokens_back = total_recv_size //  self.n_embd
+        recv_tokens_back = recv_tokens_back_flat.view(-1, self.n_embd)
+
+        return recv_tokens_back
+    
+    def _reassemble_sequence(self, x_flat, recv_tokens_back, original_assignments):
+        """
+        reassmeble the processed tokens back into the original sequence order
+        """
+        device = x_flat.device
+
+        # create a tensor to hold reassebled sequence
+        reassembled_sequence = torch.empty_like(x_flat)  # (batch_size * seq_len, n_embd)
+
+        # Recall that recv_tokens_back contains processed tokens in GPU order, not the original sequence order. So we loop over each GPU, extract the original token positions from the GPU that we had sent tokens to for processing, and place the processed tokens back in their original positions in the reassembled_sequence tensor
+        token_idx_back = 0 # track positions in recv_tokens_back.
+        for gpu_rank in range(self.world_size):
+            if gpu_rank in original_assignments:
+                token_positions, _, _,_= original_assignments[gpu_rank] # get the token positions that were assigned to this gpu_rank for processing. These are the original positions in the sequence where these tokens were located before processing.
+                num_tokens = len(token_positions)
+
+                if num_tokens > 0:
+                    # Get the processed tokens for these positions
+                    processed_tokens_for_this_gpu = recv_tokens_back[token_idx_back:token_idx_back + num_tokens]  # (num_tokens, n_embd)
+
+                    # use the token_positions to index into reassembled_sequence and place the processed tokens back in their original positions. reassembled_sequence[token_positions] = processed_tokens uses PyTorch's advanced indexing to scatter tokens to their correct positions in one operation
+                    reassembled_sequence[token_positions] = processed_tokens_for_this_gpu
+                    
+                    token_idx_back += num_tokens # update the token index for the next GPU
+        
+        return reassembled_sequence
+    
+    def forward(self, x):
+        """
+        Complete MoE layer
+        """
+        batch_size, seq_len, _ = x.shape  # (batch_size, seq_len, n_embd)
+        # x is the input tensor of shape (batch_size, seq_len, n_embd)
+        device = x.device
+
+        # Flatten the input tensor to (batch_size * seq_len, n_embd) for processing
+        x_flat = x.view(-1, self.n_embd)
+
+        # Step 1: Get top-k expert assignments, weights, and load balance loss
+        top_k_gated_weights, top_k_ids_global, load_balance_loss = self.gate(x_flat)
+
+        # Step 2: Get expert assignments with padding
+        assignments = self._get_expert_assignments_with_padding(top_k_ids_global, top_k_gated_weights)
+
+        # Step 3: Communicate tokens to appropriate GPUs
+        recv_tokens, recv_expert_ids, recv_weights, recv_mask = self._communicate_tokens(x_flat, assignments)
+
+        # Step 4: Process tokens through local experts
+        processed_tokens, count_tokens_processed_by_each_expert = self._process_local_experts(recv_tokens, recv_expert_ids, recv_weights, recv_mask)
+
+        # Step 5: Communicate processed tokens back to original GPUs
+        recv_tokens_back = self._communicate_results_back(processed_tokens, assignments)
+
+        # Step 6: Reassemble the processed tokens back into the original sequence order
+        reassembled_sequence_flat = self._reassemble_sequence(x_flat, recv_tokens_back, assignments)
+
+        # Reshape the reassembled sequence back to (batch_size, seq_len, n_embd)
+        reassembled_sequence = reassembled_sequence_flat.view(batch_size, seq_len, self.n_embd)
+
+       
+        
+        return reassembled_sequence, load_balance_loss, count_tokens_processed_by_each_expert
+        
+        
 # %%
+
+class Block(nn.Module):
+    """
+    Create a full transformer block
+    """
+    def __init__(self, config):
+        super().__init__()
+        self.ln_1 = nn.LayerNorm(config.n_embd)
+        self.attn = CausalSelfAttention(config)
+        self.ln_2 = nn.LayerNorm(config.n_embd)
+        self.moe = MoELayerParallel(config)
+
+    def forward(self, x):
+        x = x + self.attn(self.ln_1(x))
+        moe_out, load_balance_loss, count_tokens_processed_by_each_expert = self.moe(self.ln_2(x))
+        x = x + moe_out
+        return x, load_balance_loss, count_tokens_processed_by_each_expert
+    
+#%%
+class CreateMoEParalell(nn.Module):
+    """
+    create the full model
+    """    
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+
+        self.transformer = nn.ModuleDict(dict(
+            wte = nn.Embedding(config.vocab_size, config.n_embd),
+            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            ln_f = nn.LayerNorm(config.n_embd)
+        ))
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # final classier projects from embedding dimension to vocab_size
+
+        # weight tying design. the idea is to tie the weights of the input and output embeddings so that they are the same. This is done to reduce the number of parameters in the model and to improve generalization. 
+        self.transformer.wte.weight = self.lm_head.weight
+
+        # initialization
+        self.apply(self._init_weights)
+
+    #weight initialization. Mostly from GPT suggestions
+    def _init_weights(self, module):
+    # Standard GPT-style init
+        std = 0.02
+
+        if isinstance(module, nn.Linear):
+            # ✅ Detect if this linear is inside an MoE expert
+            if hasattr(module, "_am_expert"):
+                # Experts get smaller init for stability
+                std = 0.01
+            
+            # ✅ GPT residual scaling (e.g. output projection)
+            if hasattr(module, 'NANOGPT_SCALE_INIT'):
+                std *= (2 * self.config.n_layer) ** -0.5
+            
+            nn.init.normal_(module.weight, mean=0.0, std=std)
+
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+
+        elif isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+    def forward(self, idx, targets=None ):
+        
+        # idx is the input sequence of token ids
+        B, T = idx.shape
+
+        # this checks if the input sequence is longer than the block size
+        assert T <= self.config.seq_len, f"Cannot forward sequence of length {T}, sequence length is only {self.config.seq_len}"
+
+        # this creates the embedding table for the token ids.
+        token_embd = self.transformer.wte(idx) # (B, T, n_embd)
+
+        # apply the transformer blocks. each block applies layer norm, self-attention, residual connection, layer norm, MoE layer, residual connection
+        x = token_embd
+        load_balance_losses = []
+        for block in self.transformer.h:
+            x, load_balance_loss, count_tokens_processed_by_each_expert = block(x)
+            load_balance_losses.append(load_balance_loss)
+
+        # apply layer norm to the output of the last transformer block
+        x = self.transformer.ln_f(x)
+
+        # apply the final linear layer to get the logits for the next token prediction
+        logits = self.lm_head(x) # (B, T, vocab_size)
+
+        # if targets are provided, calculate the loss
+        total_load_balance_loss = sum(load_balance_losses) / len(load_balance_losses)
+        total_loss = None
+        if targets is not None:
+            # Pytorch's cross-entropy loss expects the logits to be of shape (B*T, vocab_size) and the targets to be of shape (B*T). So we need to reshape the logits and targets to match this shape.
+            # reshape the logits: (B, T, vocab_size) -> (B*T, vocab_size) to match the shape of the targets: (B, T) -> (B*T) and then calculate the cross-entropy loss
+            # loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+
+            main_loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
+
+            # Note that load balance loss was already scaled in the TopKGateParallel module
+            total_loss = main_loss + (total_load_balance_loss)
+        
+            return logits, total_loss, count_tokens_processed_by_each_expert
+        
+        return logits, total_loss, count_tokens_processed_by_each_expert
