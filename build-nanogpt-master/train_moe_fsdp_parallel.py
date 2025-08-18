@@ -45,7 +45,7 @@ else:
 class GPTConfig:
     seq_len: int = 1024 # max sequence length
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
-    batch_size = 42
+    batch_size = 16
     vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
@@ -121,7 +121,7 @@ print(f"\nTotal parameters: {count_parameters(model):,}\n")
 model.to(device)
 
 # if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details. NOTE   that comiple may not play well with FSDP. So will have to experiment.
-use_compile = True # set to True to use torch.compile
+use_compile = False # set to True to use torch.compile
 model = torch.compile(model) if use_compile else model 
 
 # With FSDP, we can wrap different parts of the model. Here I am following a strategy presented in a pytorch tutorial to wrap the transformer block. It's possibel to separately wrap the Moe layer. Will experiment when I get this working.
@@ -170,9 +170,9 @@ from dataloader_utils import DataLoaderShardMultiGPU
 
 
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
-effective_batch_size_desired = 983040
+effective_batch_size_desired = 524288
  # 2^19 ~ .5M to match the original GPT-2 paper. 
-config.batch_size = 40
+config.batch_size = 16
 
 
 # initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
@@ -251,8 +251,10 @@ model.train() # set the model to training mode
 
 # counter to track total tokens processed
 total_tokens_seen = 0
+print( 'here1')
 
 for step in range(training_steps):
+    print(f'step: {step}')
     t0 = time.time()
     last_step = (step == training_steps - 1)
 
@@ -261,6 +263,7 @@ for step in range(training_steps):
     loss_accum  = 0.0
     micro_steps = accumulation_steps_desired # set the number of mirco steps to accumulate gradients over
     for micro_step in range(micro_steps):
+        print(f'mico stp: {micro_step}')
         # this is a gradient accumulation step. We accumulate gradients over desired accumalation steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
         x, y, shard_idx, tokens_abandoned = train_loader.next_batch()
         x, y = x.to(device), y.to(device) # move the data to the device. 
@@ -300,9 +303,10 @@ for step in range(training_steps):
     tokens_processed = train_loader.B * train_loader.seq_len * micro_steps * config.world_size
     tokens_per_sec = tokens_processed / dt
     total_tokens_seen += tokens_processed
+    print('here')
     
     # update log_params, log traing loss and learning rate to file, print processing stats.
-    if master_process:
+    if dist.get_global_rank()==0:
         # update log_params
         log_params.step = step
         log_params.shard_idx = shard_idx

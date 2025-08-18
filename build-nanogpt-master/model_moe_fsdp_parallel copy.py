@@ -348,8 +348,8 @@ class MoELayerParallel(nn.Module):
         
         return assignments
     
-   
     def _communicate_tokens(self, x_flat, assignments):
+        
         """
         Perform all-to-all communication to send tokens to appropriate GPUs
         """
@@ -365,10 +365,10 @@ class MoELayerParallel(nn.Module):
 
                 num_tokens = token_positions.shape[0]
                 
-                # extract the tokens with at least one expert on this gpu_rank
+                # extract the tokens with at least one expert on this gpu_riank
                 tokens_to_send = x_flat[token_positions] # (num_tokens, n_embd)
 
-                # package tokens, expert_ids, weights, and mask in a list for this gpu_rank
+                # package tokens, expert_ids, weights, and mask in alist ofr this gpu_rank. Place package in the send_tensors list. This will be used to send tokens and all their metadata to the appropriate gpu for processing. 
                 send_tensors.extend([
                     tokens_to_send, 
                     token_expert_local_id_assignments_padded.to(device), 
@@ -376,6 +376,7 @@ class MoELayerParallel(nn.Module):
                     token_expert_assignment_mask.to(device)
                 ])
 
+                # the purpose of send_counts is that the receiving GPU needs to know how much data (number of elements) to expect so it can Allocate receive buffers of the correct size and Reshape the flattened data back to original shape tensors after communication
                 send_counts.extend([
                     tokens_to_send.numel(),  # num elements in the token tensor (num_tokens * n_embd)
                     token_expert_local_id_assignments_padded.numel(),  # (num_tokens * k)
@@ -383,7 +384,7 @@ class MoELayerParallel(nn.Module):
                     token_expert_assignment_mask.numel()  # (num_tokens * k)
                 ])
             else:
-                # if no tokens assigned to this gpu_rank, send empty tensors
+                # if no tokens assigned to this gpu_rank, send empty tensors.  we must still add an empty tensor and count of 0. This keeps the lists properly sized and ordered.
                 empty_tokens = torch.empty(0, self.n_embd, device=device, dtype=x_flat.dtype)
                 empty_ids = torch.empty(0, self.k, device=device, dtype=torch.long)
                 empty_weights = torch.empty(0, self.k, device=device, dtype=x_flat.dtype)
@@ -392,27 +393,40 @@ class MoELayerParallel(nn.Module):
                 send_tensors.extend([empty_tokens, empty_ids, empty_weights, empty_mask])
                 send_counts.extend([0, 0, 0, 0])
 
-        # prepare receive buffers
-        recv_counts = [None] * self.world_size  # Initialize with None values
+        # prepare receive buffers. This creates a flat list to collect send counts from ALL GPUs. as an example if we have 4 GPUs, this creates:
+            # recv_counts = [0, 0, 0, 0,  # GPU0 send counts (tokens, expert_ids, weights, mask)
+            #                0, 0, 0, 0,  # GPU1 send counts  
+            #                0, 0, 0, 0,  # GPU2 send counts
+            #                0, 0, 0, 0]  # GPU3 send counts
         
-        # all_gather the counts - this is the fix!
+        # We multiply by 4 because we ae sending and receiving 4 tensors per gpu (tokens, expert_ids, weights, mask)
+        recv_counts = [0] * (self.world_size * 4) 
+
+        # all_gather the counts of what other GPUs are sending into this GPU's recv_counts. Send the send_counts to all GPUs so they can allocate receive buffers of the correct size. After applying all_gather, recv_counts will be populated with the number elements in each tensor. 
         dist.all_gather_object(recv_counts, send_counts)
+
+        # compute receive buffer sizes for this gpu. We multiply by 4 because we ae sending and receiving 4 tensors per gpu (tokens, expert_ids, weights, mask)
+        this_gpu_recv_start = self.rank * 4 # start index for this gpu in the recv_counts list
+
+        # prepare receiving tensors for each of the 4 tensors we are receiving/sending among all gpus. Code explanation:
+        # Remember that recv_counts is organized as:
+        # recv_counts = [GPU0_tokens, GPU0_experts, GPU0_weights, GPU0_mask,
+                    #    GPU1_tokens, GPU1_experts, GPU1_weights, GPU1_mask,  
+                    #    GPU2_tokens, GPU2_experts, GPU2_weights, GPU2_mask,
+                    #    GPU3_tokens, GPU3_experts, GPU3_weights, GPU3_mask]
         
-        # Now recv_counts is a list of lists, we need to flatten it
-        recv_counts_flat = []
-        for counts_from_rank in recv_counts:
-            recv_counts_flat.extend(counts_from_rank)
-        
-        # Now use the flattened recv_counts for calculations
-        # recv_counts_flat structure:
-        # [GPU0_tokens, GPU0_experts, GPU0_weights, GPU0_mask,
-        #  GPU1_tokens, GPU1_experts, GPU1_weights, GPU1_mask, ...]
-                        
+        # So i*4 + offset extracts the same data type from each GPU:
+            # i*4 + 0: Token counts from all GPUs
+            # i*4 + 1: Expert ID counts from all GPUs
+            # i*4 + 2: Weight counts from all GPUs
+            # i*4 + 3: Mask counts from all GPUs
+                    
         # Compute total elements to receive for each tensor type
-        total_token_elements = sum([recv_counts_flat[i*4] for i in range(self.world_size)])
-        total_expert_elements = sum([recv_counts_flat[i*4 + 1] for i in range(self.world_size)])
-        total_weight_elements = sum([recv_counts_flat[i*4 + 2] for i in range(self.world_size)])
-        total_mask_elements = sum([recv_counts_flat[i*4 + 3] for i in range(self.world_size)])
+        total_token_elements = sum([recv_counts[i*4] for i in range(self.world_size)])
+        total_expert_elements = sum([recv_counts[i*4 + 1] for i in range(self.world_size)])
+        total_weight_elements = sum([recv_counts[i*4 + 2] for i in range(self.world_size)])
+        total_mask_elements = sum([recv_counts[i*4 + 3] for i in range(self.world_size)])
+
 
         # Create 1D receive buffers for communication
         recv_tokens_flat = torch.empty(total_token_elements, device=device, dtype=x_flat.dtype)
@@ -420,11 +434,21 @@ class MoELayerParallel(nn.Module):
         recv_weights_flat = torch.empty(total_weight_elements, device=device, dtype=x_flat.dtype)
         recv_mask_flat = torch.empty(total_mask_elements, device=device, dtype=torch.bool)
 
-        # flatten send tensors for all-to-all_single communication
-        send_tokens_flat = torch.cat([t.flatten() for i, t in enumerate(send_tensors) if i % 4 == 0])
-        send_expert_ids_flat = torch.cat([t.flatten() for i, t in enumerate(send_tensors) if i % 4 == 1])
-        send_weights_flat = torch.cat([t.flatten() for i, t in enumerate(send_tensors) if i % 4 == 2])
-        send_mask_flat = torch.cat([t.flatten() for i, t in enumerate(send_tensors) if i % 4 == 3])
+
+        # flatten send tensors for all-_o_all_single communication.  This is because all_to_all_single communication requires the tensors to be of the same size and shape across all GPUs. So we flatten the tensors to 1D and then reshape them after communication.  Best practice in MoE implementations is usually  all_to_all_single() vs all_to_all().
+        # all_to_all_single() is preferred because:
+            # Better Performance: Single communication call with contiguous memory
+            # Variable Token Handling: Perfect for variable numbers of tokens/GPU
+            # Memory Efficiency: No need to maintain separate tensor lists
+            # Easier Buffer Management: One receive buffer per data type
+        
+        send_tokens_flat = torch.cat([t.flatten() for i, t in enumerate(send_tensors) if i % 4 ==0]) # (num_tokens to be sent *n_embd,)
+
+        send_expert_ids_flat = torch.cat([t.flatten() for i, t in enumerate(send_tensors) if i % 4 ==1]) # (num_expert_ids to be sent * k,)
+
+        send_weights_flat = torch.cat([t.flatten() for i, t in enumerate(send_tensors) if i % 4 ==2]) # (num_weights to be sent * k,)
+
+        send_mask_flat = torch.cat([t.flatten() for i, t in enumerate(send_tensors) if i % 4 ==3]) # (num_masks to be sent * k,)
 
         # Perform all-to-all communication to send tokens to appropriate GPUs
         dist.all_to_all_single(recv_tokens_flat, send_tokens_flat)
@@ -432,15 +456,13 @@ class MoELayerParallel(nn.Module):
         dist.all_to_all_single(recv_weights_flat, send_weights_flat)
         dist.all_to_all_single(recv_mask_flat, send_mask_flat)
 
-        # Reshape received data
         num_received_tokens = total_token_elements // self.n_embd
         recv_tokens = recv_tokens_flat.view(num_received_tokens, self.n_embd)
         recv_expert_ids = recv_expert_ids_flat.view(num_received_tokens, self.k)
         recv_weights = recv_weights_flat.view(num_received_tokens, self.k)
         recv_mask = recv_mask_flat.view(num_received_tokens, self.k)
 
-        return recv_tokens, recv_expert_ids, recv_weights, recv_mask   
-        
+        return recv_tokens, recv_expert_ids, recv_weights, recv_mask
 
 
     def _process_local_experts(self, tokens, expert_ids, weights, mask):
@@ -495,9 +517,39 @@ class MoELayerParallel(nn.Module):
         """
         device = processed_tokens.device
 
-        # Create a dictionary to hold a reverse mapping to send processed tokens back to the original GPU
-        send_back_assignments = {}
-        token_idx = 0
+        #  Create a dictionary to hold a reverse mapping to send processed tokens back to the original GPU
+        send_back_assignments = {} # Will map: gpu_rank → (original_positions, processed_tokens)
+        token_idx = 0 # Tracks our position in the processed_tokens tensor
+
+        # Explanation and example of code below: note that processed_tokens has shape (num tokens processed by all gpus, n_embd). Also, processed_tokens is ordered the same way as the original assignments dictionary. Here is an example:
+        # original assignments dictionary might look like this:
+        # assignments = {
+            # 0: ([5, 12, 20], expert_ids, weights, mask),  # GPU 0 sent 3 tokens from positions 5,12,20
+            # 1: ([8, 15], expert_ids, weights, mask),      # GPU 1 sent 2 tokens from positions 8,15  
+            # 2: ([2, 7, 9, 11], expert_ids, weights, mask) # GPU 2 sent 4 tokens from positions 2,7,9,11}
+
+        # after processing:
+        # processed_tokens.shape = (9, n_embd)  # 9 total tokens processed (3+2+4)
+        # processed_tokens[0:3] came from GPU 0
+        # processed_tokens[3:5] came from GPU 1  
+        # processed_tokens[5:9] came from GPU 2
+
+        # what the code for the loop below does with the example above::
+            # token_idx = 0
+            # GPU 0: 3 tokens
+            # tokens_for_gpu_0 = processed_tokens[0:3]  # token_idx=0, num_tokens=3
+            # send_back_assignments[0] = ([5, 12, 20], tokens_for_gpu_0)
+            # token_idx = 3
+
+            # # GPU 1: 2 tokens  
+            # tokens_for_gpu_1 = processed_tokens[3:5]  # token_idx=3, num_tokens=2
+            # send_back_assignments[1] = ([8, 15], tokens_for_gpu_1)
+            # token_idx = 5
+
+            # # GPU 2: 4 tokens
+            # tokens_for_gpu_2 = processed_tokens[5:9]  # token_idx=5, num_tokens=4  
+            # send_back_assignments[2] = ([2, 7, 9, 11], tokens_for_gpu_2)
+            # token_idx = 9
 
         for gpu_rank in range(self.world_size):
             if gpu_rank in assignments:
@@ -505,13 +557,50 @@ class MoELayerParallel(nn.Module):
                 num_tokens = len(token_positions)
 
                 if num_tokens > 0:
-                    tokens_to_send_back_to_this_gpu = processed_tokens[token_idx : token_idx + num_tokens]
+                    # tokens to send back to this gpu_rank
+                    tokens_to_send_back_to_this_gpu = processed_tokens[token_idx : token_idx + num_tokens] # (number of tokens for this gpu, n_embd)
                     send_back_assignments[gpu_rank] = (token_positions, tokens_to_send_back_to_this_gpu)
                     token_idx += num_tokens
 
-        # Create send tensors for all_to_all back to original GPUs
-        send_tensors_back = []
-        send_counts_back = []
+        # finalresult of the loop above will be something like this:
+        # send_back_assignments = {
+            #  0: ([5, 12, 20], processed_tokens[0:3]),  # Send these 3 processed tokens back to GPU 0
+            #  1: ([8, 15], processed_tokens[3:5]),      # Send these 2 processed tokens back to GPU 1
+            #  2: ([2, 7, 9, 11], processed_tokens[5:9]) # Send these 4 processed tokens back to GPU 2
+            # }
+
+
+
+        # Now We need to send processed tokens back to their original GPUs using another all-to-all communication. The next block of code prepares tensors fo all-to-all back to the original gpus and executes the communication. Example for what the code below does:
+        
+        # Let's say we have a total of 4 GPUs and we're GPU 2, and our send_back_assignments (from the code block above) looks like:
+        # send_back_assignments  = {
+            # 0: (positions, processed_tokens[0:2]),    # 2 tokens to send back to GPU 0
+            # 3: (positions, processed_tokens[2:5])     # 3 tokens to send back to GPU 3
+            # Note: No data for GPU 1 or GPU 2 (self)}
+
+
+        # Create send tensors for all_to_all back to 
+        send_tensors_back = [] # Will hold tokens to send back to each GPU
+        send_counts_back = [] # Will hold element counts for each GPU
+
+        # We must loop over ALL GPUs, not just the ones we have data for. This maintains consistent ordering across all GPUs. Example.
+        # Loop through all 4 GPUs in order:
+                # gpu_rank = 0: We have data
+                # send_tensors_back = [processed_tokens[0:2]]
+                # send_counts_back = [2 * n_embd]  # 2 tokens * n_embd elements each
+
+                # # gpu_rank = 1: No data - add empty
+                # send_tensors_back = [processed_tokens[0:2], empty_tensor]
+                # send_counts_back = [2 * n_embd, 0]
+
+                # # gpu_rank = 2: No data - add empty  
+                # send_tensors_back = [processed_tokens[0:2], empty_tensor, empty_tensor]
+                # send_counts_back = [2 * n_embd, 0, 0]
+
+                # # gpu_rank = 3: We have data
+                # send_tensors_back = [processed_tokens[0:2], empty_tensor, empty_tensor, processed_tokens[2:5]]
+                # send_counts_back = [2 * n_embd, 0, 0, 3 * n_embd]
 
         for gpu_rank in range(self.world_size):
             if gpu_rank in send_back_assignments:
@@ -519,29 +608,42 @@ class MoELayerParallel(nn.Module):
                 send_tensors_back.append(tokens_to_send_back_to_this_gpu)
                 send_counts_back.append(tokens_to_send_back_to_this_gpu.numel())
             else:
+                # Even if we have no data for a GPU, we must still add an empty tensor and count of 0. This keeps the lists properly sized and ordered for all_to_all_single communication and later reassembly of tokens on their original gpu.
                 empty_tensor = torch.empty(0, self.n_embd, device=device, dtype=processed_tokens.dtype)
                 send_tensors_back.append(empty_tensor)
                 send_counts_back.append(0)
 
-        # Fix: properly handle all_gather_object
-        all_send_counts_back = [None] * self.world_size
+       # Before all_gather (on GPU 2):
+            # send_counts_back = [2 * n_embd, 0, 0, 3 * n_embd]  # What GPU 2 is sending
+            # all_send_counts_back = [None, None, None, None]    # Unknown what others send
+
+        # create a list to hold the the send counts for all GPUs. This is used to allocate receive buffers of the correct size on the receiving GPUs. 
+        all_send_counts_back = [None] * (self.world_size)
+        
+        # fill the all_send_counts_back with the counts from send_counts_back from all GPUs
         dist.all_gather_object(all_send_counts_back, send_counts_back)
+
+        # After all_gather (on GPU 2):
+            # all_send_counts_back = [
+                # [1536, 0, 768, 0],        # GPU 0's send counts
+                # [0, 1536, 0, 768],        # GPU 1's send counts  
+                # [1536, 0, 0, 2304],       # GPU 2's send counts (us)
+                # [768, 1536, 1536, 0]      # GPU 3's send counts
+                # ]
         
-        # all_send_counts_back is now a list of lists - flatten appropriately
-        # all_send_counts_back[rank] gives the send_counts from that rank
-        
-        # Compute total number of elements to receive on this GPU
+        # Now we use the all_send_counts_back to create receive buffers for this GPU.
+        # Coumpute total number of elements to receive on this GPU
         total_recv_size = sum(counts[self.rank] for counts in all_send_counts_back)
-        
         recv_tokens_back_flat = torch.empty(total_recv_size, device=device, dtype=processed_tokens.dtype)
 
         # Flatten the send tensors for all_to_all_single communication
         send_tensors_back_flat = torch.cat([t.flatten() for t in send_tensors_back])
 
-        # All-to-all communication back
+        # All-to-all communication back (both tensors are 1D)
         dist.all_to_all_single(recv_tokens_back_flat, send_tensors_back_flat)
 
-        # Reshape the received tokens
+        # Now we need to reshape the received tokens back to their original shape
+        # num_tokens_back = total_recv_size //  self.n_embd
         recv_tokens_back = recv_tokens_back_flat.view(-1, self.n_embd)
 
         return recv_tokens_back
