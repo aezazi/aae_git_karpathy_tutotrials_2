@@ -358,12 +358,13 @@ class MoELayerParallel(nn.Module):
         """
         Perform all-to-all communication to send tokens to appropriate GPUs
         """
+        print('[DEBUG] Rank {self.rank} entered _communicate_tokens')
         device = x_flat.device
 
         # prepare send data for each gpu
         send_tensors = []
         send_counts = []
-        print('here')
+        
         for gpu_rank in range(self.world_size):
             if gpu_rank in assignments:
                 token_positions, token_expert_local_id_assignments_padded, token_weights_padded, token_expert_assignment_mask = assignments[gpu_rank]
