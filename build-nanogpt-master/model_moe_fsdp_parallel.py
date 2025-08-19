@@ -189,7 +189,7 @@ class TopKGateParallel(nn.Module):
     def forward(self, x_flat):
         # print(f'x shape: {x.shape}')
         # x has shape (batch_size*sequence_length, embedding dimension) and is the output of the multi-head attention layer. 
-        token_count, n_embd = x_flat
+        token_count, n_embd = x_flat.shape
         
         assert n_embd == self.n_embd, f"Expected embedding dim {self.n_embd}, got {n_embd}"
         assert token_count == self.batch_size*self.seq_len, f"Expected embedding dim {self.batch_size*self.seq_len}, got {token_count}"
@@ -455,27 +455,48 @@ class MoELayerParallel(nn.Module):
         device = tokens.device
         num_received_tokens = tokens.shape[0]
 
+        print(f"[DEBUG] Rank {self.rank}: Processing {num_received_tokens} tokens through local experts")
+        print(f"[DEBUG] Rank {self.rank}: Input shapes - tokens: {tokens.shape}, expert_ids: {expert_ids.shape}, weights: {weights.shape}, mask: {mask.shape}")
+
         if num_received_tokens == 0:
-            return torch.empty(0, self.n_embd, device=device, dtype=tokens.dtype)
+            print(f"[DEBUG] Rank {self.rank}: No tokens to process, returning empty tensors")
+            empty_output = torch.empty(0, self.n_embd, device=device, dtype=tokens.dtype)
+            empty_counts = torch.zeros(self.experts_per_gpu, dtype=torch.int, device=device)
+            return empty_output, empty_counts
         
         # create tensor to hold the output of locas experts.
         output = torch.zeros(num_received_tokens, self.n_embd, device=device, dtype=tokens.dtype) # (num_received_tokens, n_embd)
 
         # iterate over each token and process it through its assigned experts
+        print(f"[DEBUG] Rank {self.rank}: Starting token-by-token processing...")
         for token_idx in range(num_received_tokens):
+            
+            if token_idx % 1000 == 0:  # Progress indicator for large batches
+                print(f"[DEBUG] Rank {self.rank}: Processing token {token_idx}/{num_received_tokens}")
+
             token = tokens[token_idx]  # (n_embd,)
+            print(f'[DEBUG] token shape: {token.shape}')
             token_expert_ids = expert_ids[token_idx] # (k,)
+            print(f'[DEBUG] token_expert_ids {token_expert_ids.shape}')
             token_weights = weights[token_idx] # (k,)
+            print(f'[DEBUG] token_weights: {token_weights.shape}')
             token_expert_id_mask = mask[token_idx] # (k,)
+            print(f'[DEBUG] token_expert_id_mask: {token_expert_id_mask.shape}\n{token_expert_id_mask}\n')
+
 
             # create tensor to hold this token after processing by experts
             processed_token = torch.zeros_like(token)
 
+
             # iterate over each expert assigned to this token
             for k_idx in range(self.k):
+                print(f'[DEBUG] iterate over top k experts. at expert: {k_idx} of {self.k}')
                 if token_expert_id_mask[k_idx]:  # check if this expert is real and not padding
+                    print('here')
                     expert_local_id = token_expert_ids[k_idx].item()
                     expert_weight = token_weights[k_idx]
+
+                   
 
                     # process the token through the expert
                     expert_output = self.local_experts[expert_local_id](token.unsqueeze(0))  # (1, n_embd)
@@ -589,17 +610,39 @@ class MoELayerParallel(nn.Module):
         # Flatten the input tensor to (batch_size * seq_len, n_embd) for processing
         x_flat = x.view(-1, self.n_embd)
 
+        # DEBUG: Check input consistency across ranks
+        if dist.is_initialized():
+            input_shape_tensor = torch.tensor([x_flat.shape[0], x_flat.shape[1]], device=device)
+            all_shapes = [torch.zeros_like(input_shape_tensor) for _ in range(self.world_size)]
+            dist.all_gather(all_shapes, input_shape_tensor)
+            if self.rank == 0:
+                print(f"[DEBUG] Input shapes across ranks: {[tuple(s.tolist()) for s in all_shapes]}")
+
         # Step 1: Get top-k expert assignments, weights, and load balance loss
+        print(f"[DEBUG] Rank {self.rank}: Getting gate assignments...")
         top_k_gated_weights, top_k_ids_global, load_balance_loss = self.gate(x_flat)
-        print('completed step1')
+        print(f"[DEBUG] Rank {self.rank}: Gate assignments complete, top_k_ids shape: {top_k_ids_global.shape}")
 
         # Step 2: Get expert assignments with padding
+        print(f"[DEBUG] Rank {self.rank}: Getting expert assignments...")
         assignments = self._get_expert_assignments_with_padding(top_k_ids_global, top_k_gated_weights)
-        print('completed step2')
+        
+        # DEBUG: Print assignment sizes for each rank
+        for gpu_rank in range(self.world_size):
+            if gpu_rank in assignments:
+                token_positions, _, _, _ = assignments[gpu_rank]
+                print(f"[DEBUG] Rank {self.rank}: Sending {len(token_positions)} tokens to GPU {gpu_rank}")
+            else:
+                print(f"[DEBUG] Rank {self.rank}: Sending 0 tokens to GPU {gpu_rank}")
 
         # Step 3: Communicate tokens to appropriate GPUs
-        recv_tokens, recv_expert_ids, recv_weights, recv_mask = self._communicate_tokens(x_flat, assignments)
-        print('completed step3')
+        print(f"[DEBUG] Rank {self.rank}: Starting token communication...")
+        try:
+            recv_tokens, recv_expert_ids, recv_weights, recv_mask = self._communicate_tokens(x_flat, assignments)
+            print(f"[DEBUG] Rank {self.rank}: Token communication complete, received {recv_tokens.shape[0]} tokens")
+        except Exception as e:
+            print(f"[ERROR] Rank {self.rank}: Communication failed: {e}")
+            raise
 
         # Step 4: Process tokens through local experts
         processed_tokens, count_tokens_processed_by_each_expert = self._process_local_experts(recv_tokens, recv_expert_ids, recv_weights, recv_mask)

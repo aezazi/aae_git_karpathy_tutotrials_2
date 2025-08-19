@@ -251,7 +251,6 @@ model.train() # set the model to training mode
 
 # counter to track total tokens processed
 total_tokens_seen = 0
-print( 'here1')
 
 for step in range(training_steps):
     print(f'step: {step}')
@@ -263,7 +262,6 @@ for step in range(training_steps):
     loss_accum  = 0.0
     micro_steps = accumulation_steps_desired # set the number of mirco steps to accumulate gradients over
     for micro_step in range(micro_steps):
-        print(f'mico stp: {micro_step}')
         # this is a gradient accumulation step. We accumulate gradients over desired accumalation steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
         x, y, shard_idx, tokens_abandoned = train_loader.next_batch()
         x, y = x.to(device), y.to(device) # move the data to the device. 
@@ -278,7 +276,6 @@ for step in range(training_steps):
             logits, loss, count_tokens_processed_by_each_expert = model(x, y)
 
         
-
         # divide the loss by the number of micro steps to get the average loss of the accumulated micro steps
         loss = loss / micro_steps 
         
@@ -303,7 +300,6 @@ for step in range(training_steps):
     tokens_processed = train_loader.B * train_loader.seq_len * micro_steps * config.world_size
     tokens_per_sec = tokens_processed / dt
     total_tokens_seen += tokens_processed
-    print('here')
     
     # update log_params, log traing loss and learning rate to file, print processing stats.
     if dist.get_global_rank()==0:
