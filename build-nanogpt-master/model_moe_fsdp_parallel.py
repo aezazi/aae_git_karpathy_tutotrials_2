@@ -431,11 +431,23 @@ class MoELayerParallel(nn.Module):
         send_weights_flat = torch.cat([t.flatten() for i, t in enumerate(send_tensors) if i % 4 == 2])
         send_mask_flat = torch.cat([t.flatten() for i, t in enumerate(send_tensors) if i % 4 == 3])
 
+        print('here')
+        print(f'send mask flat shape: {send_mask_flat.shape} sample:\n{send_mask_flat[0:10]}\n')
         # Perform all-to-all communication to send tokens to appropriate GPUs
         dist.all_to_all_single(recv_tokens_flat, send_tokens_flat)
         dist.all_to_all_single(recv_expert_ids_flat, send_expert_ids_flat)
         dist.all_to_all_single(recv_weights_flat, send_weights_flat)
         dist.all_to_all_single(recv_mask_flat, send_mask_flat)
+
+        print(f'\nafter all to all\n')
+        print(f'recv tokens flat type: {type(recv_tokens_flat)}')
+        print(f'recv tokens flat[0]type: {type(recv_tokens_flat[0])}')
+        print(recv_tokens_flat[0:10])
+
+        print(type(recv_mask_flat))
+        print(recv_mask_flat[0][0:10])
+        print(f'recv_tokens_flat shape: {recv_tokens_flat.shape} sample:\n{recv_tokens_flat[0:10]}\n')
+        print(f'recv_mask_flat shape: {recv_mask_flat.shape} sample:\n{recv_mask_flat[0:10]}\n')
 
         # Reshape received data
         num_received_tokens = total_token_elements // self.n_embd
@@ -646,9 +658,13 @@ class MoELayerParallel(nn.Module):
         try:
             recv_tokens, recv_expert_ids, recv_weights, recv_mask = self._communicate_tokens(x_flat, assignments)
             print(f"[DEBUG] Rank {self.rank}: Token communication complete, received {recv_tokens.shape[0]} tokens")
+            
         except Exception as e:
             print(f"[ERROR] Rank {self.rank}: Communication failed: {e}")
             raise
+        
+        print(f"\n[DEBUG] recv_tokens: {recv_tokens[0:10,0:7]}")
+
 
         # Step 4: Process tokens through local experts
         processed_tokens, count_tokens_processed_by_each_expert = self._process_local_experts(recv_tokens, recv_expert_ids, recv_weights, recv_mask)
