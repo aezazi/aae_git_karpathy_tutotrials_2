@@ -594,5 +594,8 @@ print(f'processed tokes:\n{processed_tokens}\n')
 output[positions] = processed_tokens
 print(f'output after placing processed tokens:\n{output}\n')
 # %%
-
+li = []
+f = 6
+li.extend(f)
+li
 # %%

@@ -384,27 +384,30 @@ class MoELayerParallel(nn.Module):
                     token_expert_assignment_mask.to(device)
                 ])
 
-                send_counts.extend([
-                    tokens_to_send.shape[0],  # num elements in the token tensor (num_tokens * n_embd)
-                    token_expert_local_id_assignments_padded.shape[0],  # (num_tokens * k)
-                    token_weights_padded.shape[0],  # (num_tokens * k)
-                    token_expert_assignment_mask.shape[0]  # (num_tokens * k)
-                ])
+                send_counts.extend(tokens_to_send.shape[0])
             else:
-                # if no tokens assigned to this gpu_rank, send empty tensors
-                empty_tokens = torch.zeros(1, self.n_embd, device=device, dtype=x_flat.dtype)
-                empty_ids = torch.full((1,self.k), -1, device=device, dtype=torch.long)
-                empty_weights = torch.zeros(1, self.k, device=device, dtype=x_flat.dtype)
-                empty_mask = torch.zeros(1, self.k, device=device, dtype=torch.bool)
+                # if no tokens assigned to this gpu_rank, send dummy tensors
+                dummy_ids = torch.full((1,self.k), -1, device=device, dtype=torch.long)
+                dummy_tokens = torch.zeros(1, self.n_embd, device=device, dtype=x_flat.dtype)
+                dummy_weights = torch.zeros(1, self.k, device=device, dtype=x_flat.dtype)
+                dummy_mask = torch.zeros(1, self.k, device=device, dtype=torch.bool)
                 
-                send_tensors.extend([empty_tokens, empty_ids, empty_weights, empty_mask])
+                send_tensors.extend([dummy_tokens, dummy_ids, dummy_weights, dummy_mask])
                 send_counts.extend([1, 1, 1, 1])
 
         # prepare receive buffers
-        recv_counts = [None] * self.world_size  # Initialize with None values
-        
-        # all_gather the counts - this is the fix!
-        dist.all_gather_object(recv_counts, send_counts)
+        recv_counts = torch.empty_like(send_counts)
+
+        print(f'[DEBUG] Rank {self.rank} initiating dist.all_to_all_single(recv_counts, send_counts)')
+        dist.all_to_all_single(recv_counts, send_counts)
+
+        print(f'[DEBUG] Rank {self.rank} recv counts: {recv_counts}')
+        print(f'[DEBUG] Rank {self.rank} sen counts: {send_counts}')
+
+        output_split_sizes = recv_counts.tolist()
+        N_recv = sum(output_split_sizes)
+        print(f'[DEBUG] Rank {self.rank} N_recv: {N_recv}')
+
         
         # Now recv_counts is a list of lists, we need to flatten it
         recv_counts_flat = []
