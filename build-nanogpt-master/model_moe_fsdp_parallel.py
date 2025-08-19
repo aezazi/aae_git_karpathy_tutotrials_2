@@ -363,11 +363,15 @@ class MoELayerParallel(nn.Module):
         # prepare send data for each gpu
         send_tensors = []
         send_counts = []
-
+        print('here')
         for gpu_rank in range(self.world_size):
             if gpu_rank in assignments:
                 token_positions, token_expert_local_id_assignments_padded, token_weights_padded, token_expert_assignment_mask = assignments[gpu_rank]
                 
+                print(f'[DEBUG] shape token_expert_local_id_assignments_padded : {token_expert_local_id_assignments_padded.shape}')
+
+                print(f'[DEBUG] token_weights_padded: {token_weights_padded.shape}')
+
                 # extract the tokens with at least one expert on this gpu_rank
                 tokens_to_send = x_flat[token_positions] # (num_tokens, n_embd)
 
