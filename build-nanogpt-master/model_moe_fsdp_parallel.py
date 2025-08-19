@@ -358,7 +358,7 @@ class MoELayerParallel(nn.Module):
         """
         Perform all-to-all communication to send tokens to appropriate GPUs
         """
-        print('[DEBUG] Rank {self.rank} entered _communicate_tokens')
+        print(f'[DEBUG] Rank {self.rank} entered _communicate_tokens')
         device = x_flat.device
 
         # prepare send data for each gpu
@@ -369,9 +369,9 @@ class MoELayerParallel(nn.Module):
             if gpu_rank in assignments:
                 token_positions, token_expert_local_id_assignments_padded, token_weights_padded, token_expert_assignment_mask = assignments[gpu_rank]
                 
-                print(f'[DEBUG] shape token_expert_local_id_assignments_padded : {token_expert_local_id_assignments_padded.shape}')
+                print(f'[DEBUG] Rank {self.rank} shape token_expert_local_id_assignments_padded : {token_expert_local_id_assignments_padded.shape}')
 
-                print(f'[DEBUG] token_weights_padded: {token_weights_padded.shape}')
+                print(f'[DEBUG] Rank {self.rank} token_weights_padded: {token_weights_padded.shape}')
 
                 # extract the tokens with at least one expert on this gpu_rank
                 tokens_to_send = x_flat[token_positions] # (num_tokens, n_embd)
@@ -395,7 +395,7 @@ class MoELayerParallel(nn.Module):
                 empty_tokens = torch.zeros(1, self.n_embd, device=device, dtype=x_flat.dtype)
                 empty_ids = torch.full((1,self.k), -1, device=device, dtype=torch.long)
                 empty_weights = torch.zeros(1, self.k, device=device, dtype=x_flat.dtype)
-                empty_mask = torch.empty(0, self.k, device=device, dtype=torch.bool)
+                empty_mask = torch.zeros(1, self.k, device=device, dtype=torch.bool)
                 
                 send_tensors.extend([empty_tokens, empty_ids, empty_weights, empty_mask])
                 send_counts.extend([1, 1, 1, 1])
@@ -434,8 +434,9 @@ class MoELayerParallel(nn.Module):
         send_weights_flat = torch.cat([t.flatten() for i, t in enumerate(send_tensors) if i % 4 == 2])
         send_mask_flat = torch.cat([t.flatten() for i, t in enumerate(send_tensors) if i % 4 == 3])
 
-        print('here')
-        print(f'send mask flat shape: {send_mask_flat.shape} sample:\n{send_mask_flat[0:10]}\n')
+        print(f'[DEBUG] Rank {self.rank} send_tokens_flat: {send_tokens_flat.shape} sample:\n{send_mask_flat[0:10]}\n')
+        
+        print(f'[DEBUG] Rank {self.rank} send mask flat shape: {send_mask_flat.shape} sample:\n{send_mask_flat[0:10]}\n')
         # Perform all-to-all communication to send tokens to appropriate GPUs
         dist.all_to_all_single(recv_tokens_flat, send_tokens_flat)
         dist.all_to_all_single(recv_expert_ids_flat, send_expert_ids_flat)
@@ -658,13 +659,11 @@ class MoELayerParallel(nn.Module):
 
         # Step 3: Communicate tokens to appropriate GPUs
         print(f"[DEBUG] Rank {self.rank}: Starting token communication...")
-        try:
-            recv_tokens, recv_expert_ids, recv_weights, recv_mask = self._communicate_tokens(x_flat, assignments)
-            print(f"[DEBUG] Rank {self.rank}: Token communication complete, received {recv_tokens.shape[0]} tokens")
+        
+        recv_tokens, recv_expert_ids, recv_weights, recv_mask = self._communicate_tokens(x_flat, assignments)
+
+        print(f"[DEBUG] Rank {self.rank}: Token communication complete, received {recv_tokens.shape[0]} tokens")
             
-        except Exception as e:
-            print(f"[ERROR] Rank {self.rank}: Communication failed: {e}")
-            raise
         
         print(f"\n[DEBUG] recv_tokens: {recv_tokens[0:10,0:7]}")
 
