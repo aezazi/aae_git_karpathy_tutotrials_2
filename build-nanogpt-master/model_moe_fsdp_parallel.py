@@ -144,6 +144,7 @@ class TopKGateParallel(nn.Module):
         self.num_experts = config.num_experts
         self.k = config.k
         self.seq_len = config.seq_len
+        self.batch_size = config.batch_size
         self.load_balance_scale = config.load_balance_scale
 
         # expert parallelization parameters
@@ -187,10 +188,14 @@ class TopKGateParallel(nn.Module):
     
     def forward(self, x_flat):
         # print(f'x shape: {x.shape}')
-        # x has shape (batch_size, sequence_length, embedding dimension) and is the output of the multi-head attention layer. 
-        batch_size, seq_len = x_flat.shape
-        # In each batch, there is a logit for each token in the sequence and for each expert. 
-        logits = self.gate_linear(x_flat) # (batch_size, seq_len, num_experts)
+        # x has shape (batch_size*sequence_length, embedding dimension) and is the output of the multi-head attention layer. 
+        token_count, n_embd = x_flat
+        
+        assert n_embd == self.n_embd, f"Expected embedding dim {self.n_embd}, got {n_embd}"
+        assert token_count == self.batch_size*self.seq_len, f"Expected embedding dim {self.batch_size*self.seq_len}, got {token_count}"
+        
+        # project x_flat to ()
+        logits = self.gate_linear(x_flat) # (batch_size*seq_len, num_experts)
 
         # compute load balancing loss using clean logits before noise and topk
         gate_weights = F.softmax(logits, dim=-1)
@@ -586,12 +591,15 @@ class MoELayerParallel(nn.Module):
 
         # Step 1: Get top-k expert assignments, weights, and load balance loss
         top_k_gated_weights, top_k_ids_global, load_balance_loss = self.gate(x_flat)
+        print('completed step1')
 
         # Step 2: Get expert assignments with padding
         assignments = self._get_expert_assignments_with_padding(top_k_ids_global, top_k_gated_weights)
+        print('completed step2')
 
         # Step 3: Communicate tokens to appropriate GPUs
         recv_tokens, recv_expert_ids, recv_weights, recv_mask = self._communicate_tokens(x_flat, assignments)
+        print('completed step3')
 
         # Step 4: Process tokens through local experts
         processed_tokens, count_tokens_processed_by_each_expert = self._process_local_experts(recv_tokens, recv_expert_ids, recv_weights, recv_mask)
