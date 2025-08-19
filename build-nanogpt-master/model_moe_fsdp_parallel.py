@@ -384,35 +384,40 @@ class MoELayerParallel(nn.Module):
                     token_expert_assignment_mask.to(device)
                 ])
 
-                send_counts.extend(tokens_to_send.shape[0])
-            else:
-                # if no tokens assigned to this gpu_rank, send dummy tensors
-                dummy_ids = torch.full((1,self.k), -1, device=device, dtype=torch.long)
-                dummy_tokens = torch.zeros(1, self.n_embd, device=device, dtype=x_flat.dtype)
-                dummy_weights = torch.zeros(1, self.k, device=device, dtype=x_flat.dtype)
-                dummy_mask = torch.zeros(1, self.k, device=device, dtype=torch.bool)
+                send_counts.append(tokens_to_send.shape[0])
                 
-                send_tensors.extend([dummy_tokens, dummy_ids, dummy_weights, dummy_mask])
-                send_counts.extend([1, 1, 1, 1])
-
+            # else:
+            #     # if no tokens assigned to this gpu_rank, send dummy tensors
+            #     dummy_ids = torch.full((1,self.k), -1, device=device, dtype=torch.long)
+            #     dummy_tokens = torch.zeros(1, self.n_embd, device=device, dtype=x_flat.dtype)
+            #     dummy_weights = torch.zeros(1, self.k, device=device, dtype=x_flat.dtype)
+            #     dummy_mask = torch.zeros(1, self.k, device=device, dtype=torch.bool)
+                
+            #     send_tensors.extend([dummy_tokens, dummy_ids, dummy_weights, dummy_mask])
+            #     send_counts =[1, 1, 1, 1]
+        print(f'[DEBUG] Rank {self.rank} sen counts: {send_counts}')
+        
         # prepare receive buffers
-        recv_counts = torch.empty_like(send_counts)
+        # recv_counts = torch.empty_like(send_counts)
 
         print(f'[DEBUG] Rank {self.rank} initiating dist.all_to_all_single(recv_counts, send_counts)')
-        dist.all_to_all_single(recv_counts, send_counts)
+        input_split_sizes_tensor = torch.tensor(send_counts, device=device)
+        output_split_sizes_tensor = torch.empty_like(input_split_sizes_tensor)
+        dist.all_to_all_single(output_split_sizes_tensor, input_split_sizes_tensor)
+        output_split_sizes = output_split_sizes_tensor.tolist()
+        N_recv = sum(output_split_sizes)
 
-        print(f'[DEBUG] Rank {self.rank} recv counts: {recv_counts}')
+        print(f'[DEBUG] Rank {self.rank} recv counts: {N_recv}')
         print(f'[DEBUG] Rank {self.rank} sen counts: {send_counts}')
 
-        output_split_sizes = recv_counts.tolist()
+        
         N_recv = sum(output_split_sizes)
         print(f'[DEBUG] Rank {self.rank} N_recv: {N_recv}')
 
         
         # Now recv_counts is a list of lists, we need to flatten it
-        recv_counts_flat = []
-        for counts_from_rank in recv_counts:
-            recv_counts_flat.extend(counts_from_rank)
+        recv_counts_flat = output_split_sizes
+        
         
         # Now use the flattened recv_counts for calculations
         # recv_counts_flat structure:

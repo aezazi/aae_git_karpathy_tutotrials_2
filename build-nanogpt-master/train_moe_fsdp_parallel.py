@@ -253,7 +253,7 @@ model.train() # set the model to training mode
 total_tokens_seen = 0
 
 for step in range(training_steps):
-    print(f'[DEBUG] Rank {dist.get_global_rank()}  started training step: {step}')
+    print(f'[DEBUG] Rank {dist.get_rank()}  started training step: {step}')
     t0 = time.time()
     last_step = (step == training_steps - 1)
 
