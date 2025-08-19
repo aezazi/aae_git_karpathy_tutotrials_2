@@ -456,7 +456,11 @@ class MoELayerParallel(nn.Module):
         num_received_tokens = tokens.shape[0]
 
         print(f"[DEBUG] Rank {self.rank}: Processing {num_received_tokens} tokens through local experts")
+        
         print(f"[DEBUG] Rank {self.rank}: Input shapes - tokens: {tokens.shape}, expert_ids: {expert_ids.shape}, weights: {weights.shape}, mask: {mask.shape}")
+
+        print(f'\n[DEBUG] mask: {mask}\n')
+
 
         if num_received_tokens == 0:
             print(f"[DEBUG] Rank {self.rank}: No tokens to process, returning empty tensors")
@@ -476,10 +480,12 @@ class MoELayerParallel(nn.Module):
 
             token = tokens[token_idx]  # (n_embd,)
             print(f'[DEBUG] token shape: {token.shape}')
+            
             token_expert_ids = expert_ids[token_idx] # (k,)
-            print(f'[DEBUG] token_expert_ids {token_expert_ids.shape}')
+            print(f'[DEBUG] token_expert_ids {token_expert_ids.shape} {token_expert_ids}')
+            
             token_weights = weights[token_idx] # (k,)
-            print(f'[DEBUG] token_weights: {token_weights.shape}')
+            print(f'[DEBUG] token_weights: {token_weights.shape} {token_weights}')
             token_expert_id_mask = mask[token_idx] # (k,)
             print(f'[DEBUG] token_expert_id_mask: {token_expert_id_mask.shape}\n{token_expert_id_mask}\n')
 
