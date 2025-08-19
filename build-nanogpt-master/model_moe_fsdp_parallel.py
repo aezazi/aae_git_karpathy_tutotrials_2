@@ -392,13 +392,13 @@ class MoELayerParallel(nn.Module):
                 ])
             else:
                 # if no tokens assigned to this gpu_rank, send empty tensors
-                empty_tokens = torch.empty(0, self.n_embd, device=device, dtype=x_flat.dtype)
-                empty_ids = torch.empty(0, self.k, device=device, dtype=torch.long)
-                empty_weights = torch.empty(0, self.k, device=device, dtype=x_flat.dtype)
+                empty_tokens = torch.zeros(1, self.n_embd, device=device, dtype=x_flat.dtype)
+                empty_ids = torch.full((1,self.k), -1, device=device, dtype=torch.long)
+                empty_weights = torch.zeros(1, self.k, device=device, dtype=x_flat.dtype)
                 empty_mask = torch.empty(0, self.k, device=device, dtype=torch.bool)
                 
                 send_tensors.extend([empty_tokens, empty_ids, empty_weights, empty_mask])
-                send_counts.extend([0, 0, 0, 0])
+                send_counts.extend([1, 1, 1, 1])
 
         # prepare receive buffers
         recv_counts = [None] * self.world_size  # Initialize with None values
