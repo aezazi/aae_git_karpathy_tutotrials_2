@@ -362,10 +362,10 @@ class MoELayerParallel(nn.Module):
         print(f'[DEBUG] Rank {self.rank} entered _communicate_tokens')
         device = x_flat.device
 
-        # prepare send data for each gpu
+        # prepare send data for each gpu. store the the token_positions, token_expert_local_id_assignments_padded, token_weights_padded, token_expert_assignment_mask tensors to each gpu
         send_tensors = []
         
-        # send_counts carries how many rows (tokens) will be sent by this gpu to all gpus (including itself). The list will have len = world_size. Each element will be an integer corresponding to how many rows (tokens) this gpu will send to all gpus ( including itself). Each index position corresponds to gpu rank. 
+        # send_counts carries how many rows (tokens) will be sent by this gpu to all gpus (including itself). The list will have len = world_size. Each element will be an integer corresponding to how many rows (tokens) this gpu will send to all gpus ( including itself). Each index position corresponds to gpu rank in order. 
         send_counts = []
         
         for gpu_rank in range(self.world_size):
@@ -377,30 +377,28 @@ class MoELayerParallel(nn.Module):
                 print(f'[DEBUG] Rank {self.rank} token_weights_padded: {token_weights_padded.shape}')
 
                 # extract the tokens with at least one expert on this gpu_rank
-                tokens_to_send = x_flat[token_positions] # (num_tokens, n_embd)
-                print(f'[DEBUG] Rank {self.rank} tokens_to_send shpae: {tokens_to_send.shape}')
+                send_tokens = x_flat[token_positions] # (num_tokens, n_embd)
+                print(f'[DEBUG] Rank {self.rank} send_tokens shpae: {send_tokens.shape}')
                 
-                send_counts.append(tokens_to_send.shape[0])
+                send_counts.append(send_tokens.shape[0])
                 print(f'[DEBUG] Rank {self.rank} send counts in loop: {send_counts}')
 
-                # package tokens, expert_ids, weights, and mask in a list for this gpu_rank
-                send_tensors.extend([
-                    tokens_to_send, 
-                    token_expert_local_id_assignments_padded.to(device), 
-                    token_weights_padded.to(device), 
-                    token_expert_assignment_mask.to(device)
-                ])
+                send_expert_ids = token_expert_local_id_assignments_padded[token_positions]
+                print(f'[DEBUG] Rank {self.rank} send_expert_ids shape: {send_expert_ids.shape}')
 
-                
+                send_weights = token_weights_padded[token_positions]
+                print(f'[DEBUG] Rank {self.rank} send_weights shape: {send_weights.shape}')
+
+                send_mask = token_expert_assignment_mask[token_positions]
+                print(f'[DEBUG] Rank {self.rank} send_mask shape: {send_mask.shape}')
                 
             else:
-                # if no tokens assigned to this gpu_rank, send dummy tensors
-                dummy_ids = torch.full((1,self.k), -1, device=device, dtype=torch.long)
-                dummy_tokens = torch.zeros(1, self.n_embd, device=device, dtype=x_flat.dtype)
-                dummy_weights = torch.zeros(1, self.k, device=device, dtype=x_flat.dtype)
-                dummy_mask = torch.zeros(1, self.k, device=device, dtype=torch.bool)
-                
-                send_tensors.extend([dummy_tokens, dummy_ids, dummy_weights, dummy_mask])
+                # if no tokens assigned to this gpu_rank, send dummy tensors with one row
+                send_expert_ids = torch.full((1,self.k), -1, device=device, dtype=torch.long)
+                send_tokens = torch.zeros(1, self.n_embd, device=device, dtype=x_flat.dtype)
+                send_weights = torch.zeros(1, self.k, device=device, dtype=x_flat.dtype)
+                send_mask = torch.zeros(1, self.k, device=device, dtype=torch.bool)
+        
                 send_counts.append(1)
 
         print(f'[DEBUG] Rank {self.rank} send counts after looping gpus: {send_counts}')
@@ -410,74 +408,52 @@ class MoELayerParallel(nn.Module):
         
         input_split_sizes_tensor = torch.tensor(send_counts, device=device) # num rows this gpu will be sending to each gpu (world_size,)
         
-        output_split_sizes_tensor = torch.empty_like(input_split_sizes_tensor) # num rows this gpu will be receiving from each gpu (world_size,). It will bw populated after dist_all_to_all single
+        output_split_sizes_tensor = torch.empty_like(input_split_sizes_tensor) # num rows this gpu will be receiving from each gpu (world_size,). It will be populated after dist_all_to_all single
         
         # communicate
         print(f'[DEBUG] Rank {self.rank} initiating dist.all_to_all_single(recv_counts, send_counts)')
         dist.all_to_all_single(output_split_sizes_tensor, input_split_sizes_tensor)
-        output_split_sizes = output_split_sizes_tensor.tolist()
-        N_recv = sum(output_split_sizes)
-
+        output_split_sizes_tensor = output_split_sizes_tensor.tolist()
+        
         print(f'[DEBUG] Rank {self.rank} recv counts: {N_recv}')
         print(f'[DEBUG] Rank {self.rank} sen counts: {send_counts}')
 
-        
-        N_recv = sum(output_split_sizes)
+        # this is the sum of the number of token (rows) that all gpus(including itself) will be sending to this gpu. N_recv will be the same for the tokens (N_recv, n_embd), expert_ids (N_recv, k), weights (N_recv, k), and mask tokens (N_recv, k)
+        N_recv = sum(output_split_sizes_tensor)
         print(f'[DEBUG] Rank {self.rank} N_recv: {N_recv}')
 
         
-        # Now recv_counts is a list of lists, we need to flatten it
-        recv_counts_flat = output_split_sizes
+        # Create tensors to receive what all gpus will communicate to this gpu
+        # Tokens: each row is a token embedding
+        recv_tokens = torch.empty((N_recv, self.n_embd), dtype=x_flat.dtype, device=device)
+
+        # Expert IDs: each row has k integers (which experts this token is routed to)
+        recv_expert_ids = torch.empty((N_recv, self.k), dtype=torch.long, device=device)
+
+        # Weights: each row has k floats (routing probabilities)
+        recv_weights = torch.empty((N_recv, self.k), dtype=torch.float32, device=device)
+
+        # Mask: each row has k 0/1 flags (in case of padding or variable k)
+        recv_mask = torch.empty((N_recv, self.k), dtype=torch.bool, device=device)
+
         
         
-        # Now use the flattened recv_counts for calculations
-        # recv_counts_flat structure:
-        # [GPU0_tokens, GPU0_experts, GPU0_weights, GPU0_mask,
-        #  GPU1_tokens, GPU1_experts, GPU1_weights, GPU1_mask, ...]
-                        
-        # Compute total elements to receive for each tensor type
-        total_token_elements = sum([recv_counts_flat[i*4] for i in range(self.world_size)])
-        total_expert_elements = sum([recv_counts_flat[i*4 + 1] for i in range(self.world_size)])
-        total_weight_elements = sum([recv_counts_flat[i*4 + 2] for i in range(self.world_size)])
-        total_mask_elements = sum([recv_counts_flat[i*4 + 3] for i in range(self.world_size)])
-
-        # Create 1D receive buffers for communication
-        recv_tokens_flat = torch.empty(total_token_elements, device=device, dtype=x_flat.dtype)
-        recv_expert_ids_flat = torch.empty(total_expert_elements, device=device, dtype=torch.long)
-        recv_weights_flat = torch.empty(total_weight_elements, device=device, dtype=x_flat.dtype)
-        recv_mask_flat = torch.empty(total_mask_elements, device=device, dtype=torch.bool)
-
-        # flatten send tensors for all-to-all_single communication
-        send_tokens_flat = torch.cat([t.flatten() for i, t in enumerate(send_tensors) if i % 4 == 0])
-        send_expert_ids_flat = torch.cat([t.flatten() for i, t in enumerate(send_tensors) if i % 4 == 1])
-        send_weights_flat = torch.cat([t.flatten() for i, t in enumerate(send_tensors) if i % 4 == 2])
-        send_mask_flat = torch.cat([t.flatten() for i, t in enumerate(send_tensors) if i % 4 == 3])
-
-        print(f'[DEBUG] Rank {self.rank} send_tokens_flat: {send_tokens_flat.shape} sample:\n{send_mask_flat[0:10]}\n')
-        
-        print(f'[DEBUG] Rank {self.rank} send mask flat shape: {send_mask_flat.shape} sample:\n{send_mask_flat[0:10]}\n')
         # Perform all-to-all communication to send tokens to appropriate GPUs
-        dist.all_to_all_single(recv_tokens_flat, send_tokens_flat)
-        dist.all_to_all_single(recv_expert_ids_flat, send_expert_ids_flat)
-        dist.all_to_all_single(recv_weights_flat, send_weights_flat)
-        dist.all_to_all_single(recv_mask_flat, send_mask_flat)
+        dist.all_to_all_single(recv_tokens, send_tokens, )
+        dist.all_to_all_single(recv_expert_ids, send_expert_ids, )
+        dist.all_to_all_single(recv_weights, send_weights, )
+        dist.all_to_all_single(recv_mask, send_mask, )
 
         print(f'\nafter all to all\n')
-        print(f'recv tokens flat type: {type(recv_tokens_flat)}')
-        print(f'recv tokens flat[0]type: {type(recv_tokens_flat[0])}')
-        print(recv_tokens_flat[0:10])
+        print(f'recv tokens flat type: {type(recv_tokens)}')
+        print(f'recv tokens flat[0]type: {type(recv_tokens[0])}')
+        print(recv_tokens[0:10])
 
-        print(type(recv_mask_flat))
-        print(recv_mask_flat[0][0:10])
-        print(f'recv_tokens_flat shape: {recv_tokens_flat.shape} sample:\n{recv_tokens_flat[0:10]}\n')
-        print(f'recv_mask_flat shape: {recv_mask_flat.shape} sample:\n{recv_mask_flat[0:10]}\n')
+        print(type(recv_mask))
+        print(recv_mask[0][0:10])
+        print(f'recv_tokens shape: {recv_tokens.shape} sample:\n{recv_tokens[0:10]}\n')
+        print(f'recv_mask_flat shape: {recv_mask.shape} sample:\n{recv_mask[0:10]}\n')
 
-        # Reshape received data
-        num_received_tokens = total_token_elements // self.n_embd
-        recv_tokens = recv_tokens_flat.view(num_received_tokens, self.n_embd)
-        recv_expert_ids = recv_expert_ids_flat.view(num_received_tokens, self.k)
-        recv_weights = recv_weights_flat.view(num_received_tokens, self.k)
-        recv_mask = recv_mask_flat.view(num_received_tokens, self.k)
 
         return recv_tokens, recv_expert_ids, recv_weights, recv_mask   
         
