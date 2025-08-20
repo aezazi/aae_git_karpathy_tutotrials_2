@@ -358,11 +358,14 @@ class MoELayerParallel(nn.Module):
         """
         Perform all-to-all communication to send tokens to appropriate GPUs
         """
+        print('-'*70)
         print(f'[DEBUG] Rank {self.rank} entered _communicate_tokens')
         device = x_flat.device
 
         # prepare send data for each gpu
         send_tensors = []
+        
+        # send_counts carries how many rows (tokens) will be sent by this gpu to all gpus (including itself). The list will have len = world_size. Each element will be an integer corresponding to how many rows (tokens) this gpu will send to all gpus ( including itself). Each index position corresponds to gpu rank. 
         send_counts = []
         
         for gpu_rank in range(self.world_size):
@@ -375,6 +378,10 @@ class MoELayerParallel(nn.Module):
 
                 # extract the tokens with at least one expert on this gpu_rank
                 tokens_to_send = x_flat[token_positions] # (num_tokens, n_embd)
+                print(f'[DEBUG] Rank {self.rank} tokens_to_send shpae: {tokens_to_send.shape}')
+                
+                send_counts.append(tokens_to_send.shape[0])
+                print(f'[DEBUG] Rank {self.rank} send counts in loop: {send_counts}')
 
                 # package tokens, expert_ids, weights, and mask in a list for this gpu_rank
                 send_tensors.extend([
@@ -384,25 +391,29 @@ class MoELayerParallel(nn.Module):
                     token_expert_assignment_mask.to(device)
                 ])
 
-                send_counts.append(tokens_to_send.shape[0])
                 
-            # else:
-            #     # if no tokens assigned to this gpu_rank, send dummy tensors
-            #     dummy_ids = torch.full((1,self.k), -1, device=device, dtype=torch.long)
-            #     dummy_tokens = torch.zeros(1, self.n_embd, device=device, dtype=x_flat.dtype)
-            #     dummy_weights = torch.zeros(1, self.k, device=device, dtype=x_flat.dtype)
-            #     dummy_mask = torch.zeros(1, self.k, device=device, dtype=torch.bool)
                 
-            #     send_tensors.extend([dummy_tokens, dummy_ids, dummy_weights, dummy_mask])
-            #     send_counts =[1, 1, 1, 1]
-        print(f'[DEBUG] Rank {self.rank} sen counts: {send_counts}')
-        
-        # prepare receive buffers
-        # recv_counts = torch.empty_like(send_counts)
+            else:
+                # if no tokens assigned to this gpu_rank, send dummy tensors
+                dummy_ids = torch.full((1,self.k), -1, device=device, dtype=torch.long)
+                dummy_tokens = torch.zeros(1, self.n_embd, device=device, dtype=x_flat.dtype)
+                dummy_weights = torch.zeros(1, self.k, device=device, dtype=x_flat.dtype)
+                dummy_mask = torch.zeros(1, self.k, device=device, dtype=torch.bool)
+                
+                send_tensors.extend([dummy_tokens, dummy_ids, dummy_weights, dummy_mask])
+                send_counts.append(1)
 
+        print(f'[DEBUG] Rank {self.rank} send counts after looping gpus: {send_counts}')
+        
+        
+        # communicate how many rows each rank will be receiving. convert the send counts list to a tensor. recall that send_counts carries how many rows (tokens) will be sent by this gpu to all gpus (including itself). This will be a 1D tensor with shape (world_size,). Each index position corresponds to gpu rank.
+        
+        input_split_sizes_tensor = torch.tensor(send_counts, device=device) # num rows this gpu will be sending to each gpu (world_size,)
+        
+        output_split_sizes_tensor = torch.empty_like(input_split_sizes_tensor) # num rows this gpu will be receiving from each gpu (world_size,). It will bw populated after dist_all_to_all single
+        
+        # communicate
         print(f'[DEBUG] Rank {self.rank} initiating dist.all_to_all_single(recv_counts, send_counts)')
-        input_split_sizes_tensor = torch.tensor(send_counts, device=device)
-        output_split_sizes_tensor = torch.empty_like(input_split_sizes_tensor)
         dist.all_to_all_single(output_split_sizes_tensor, input_split_sizes_tensor)
         output_split_sizes = output_split_sizes_tensor.tolist()
         N_recv = sum(output_split_sizes)

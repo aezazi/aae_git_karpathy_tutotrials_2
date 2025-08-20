@@ -596,6 +596,12 @@ print(f'output after placing processed tokens:\n{output}\n')
 # %%
 li = []
 f = 6
-li.extend(f)
+li.append(1)
 li
+# %%
+send_counts = [16, 64]
+input_split_sizes_tensor = torch.tensor(send_counts)
+output_split_sizes_tensor = torch.empty_like(input_split_sizes_tensor)
+input_split_sizes_tensor
+output_split_sizes_tensor
 # %%
