@@ -402,11 +402,15 @@ class MoELayerParallel(nn.Module):
                 send_counts.append(1)
 
         print(f'[DEBUG] Rank {self.rank} send counts after looping gpus: {send_counts}')
-        
+        print(f"[DEBUG] Rank {self.rank} send_counts = {send_counts}, sum = {sum(send_counts)}, tensor_rows = {send_tokens.size(0)}")
+        assert len(send_counts) == dist.get_world_size()
+        assert sum(send_counts) == send_tokens.size(0), "Mismatch between send_counts and tokens!"
+        assert all(c >= 0 for c in send_counts), "send_counts has negative entries!"
         
         # communicate how many rows each rank will be receiving. convert the send counts list to a tensor. recall that send_counts carries how many rows (tokens) will be sent by this gpu to all gpus (including itself). This will be a 1D tensor with shape (world_size,). Each index position corresponds to gpu rank.
         
-        input_split_sizes_tensor = torch.tensor(send_counts, device=device) # num rows this gpu will be sending to each gpu (world_size,)
+        input_split_sizes_tensor = torch.tensor(send_counts, device=device, dtype=torch.int) # num rows this gpu will be sending to each gpu (world_size,)
+        print(f'[DEBUG] Rank {self.rank} input_split_sizes_tensor: {input_split_sizes_tensor}')
         
         output_split_sizes_tensor = torch.empty_like(input_split_sizes_tensor) # num rows this gpu will be receiving from each gpu (world_size,). It will be populated after dist_all_to_all single
         
