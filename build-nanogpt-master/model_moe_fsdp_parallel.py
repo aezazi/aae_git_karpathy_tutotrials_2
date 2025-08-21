@@ -386,15 +386,15 @@ class MoELayerParallel(nn.Module):
                 send_tokens_list.append(send_tokens)
                 print(f'[DEBUG] Rank {self.rank} send_tokens shape: {send_tokens.shape}')
                 
-                send_expert_ids = token_expert_local_id_assignments_padded[token_positions]
+                send_expert_ids = token_expert_local_id_assignments_padded
                 send_expert_list.append(send_expert_ids)
                 print(f'[DEBUG] Rank {self.rank} send_expert_ids shape: {send_expert_ids.shape}')
 
-                send_weights = token_weights_padded[token_positions]
+                send_weights = token_weights_padded
                 send_weights_list.append(send_weights)
                 print(f'[DEBUG] Rank {self.rank} send_weights shape: {send_weights.shape}')
 
-                send_mask = token_expert_assignment_mask[token_positions]
+                send_mask = token_expert_assignment_mask
                 send_mask_list.append(send_mask)
                 print(f'[DEBUG] Rank {self.rank} send_mask shape: {send_mask.shape}')
 
