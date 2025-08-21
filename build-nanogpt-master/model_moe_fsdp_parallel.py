@@ -431,7 +431,7 @@ class MoELayerParallel(nn.Module):
         send_mask_tensor = torch.cat(send_mask_list, dim=0) if sum(send_counts) >0 else torch.empty((0, self.k), device=device)
 
         assert len(send_counts) == dist.get_world_size()
-        assert sum(send_counts) == send_tokens_tensor.shape(0), "Mismatch between send_counts and tokens!"
+        assert sum(send_counts) == send_tokens_tensor.shape[0], "Mismatch between send_counts and tokens!"
         assert all(c >= 0 for c in send_counts), "send_counts has negative entries!"
 
 

@@ -617,4 +617,5 @@ t3
 # %%
 t5 = torch.empty(0, 7, device='cpu')
 t5
+t5.device
 # %%
