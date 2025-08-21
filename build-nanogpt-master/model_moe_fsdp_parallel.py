@@ -363,7 +363,12 @@ class MoELayerParallel(nn.Module):
         device = x_flat.device
 
         # prepare send data for each gpu. store the the token_positions, token_expert_local_id_assignments_padded, token_weights_padded, token_expert_assignment_mask tensors to each gpu
-        send_tensors = []
+        # Buckets per rank
+        send_tokens_list = []
+        send_expert_list = []
+        send_weights_list = []
+        send_mask_list = []
+        send_counts = []
         
         # send_counts carries how many rows (tokens) will be sent by this gpu to all gpus (including itself). The list will have len = world_size. Each element will be an integer corresponding to how many rows (tokens) this gpu will send to all gpus ( including itself). Each index position corresponds to gpu rank in order. 
         send_counts = []
@@ -378,35 +383,58 @@ class MoELayerParallel(nn.Module):
 
                 # extract the tokens with at least one expert on this gpu_rank
                 send_tokens = x_flat[token_positions] # (num_tokens, n_embd)
-                print(f'[DEBUG] Rank {self.rank} send_tokens shpae: {send_tokens.shape}')
+                send_tokens_list.append(send_tokens)
+                print(f'[DEBUG] Rank {self.rank} send_tokens shape: {send_tokens.shape}')
                 
-                send_counts.append(send_tokens.shape[0])
-                print(f'[DEBUG] Rank {self.rank} send counts in loop: {send_counts}')
-
                 send_expert_ids = token_expert_local_id_assignments_padded[token_positions]
+                send_expert_list.append(send_expert_ids)
                 print(f'[DEBUG] Rank {self.rank} send_expert_ids shape: {send_expert_ids.shape}')
 
                 send_weights = token_weights_padded[token_positions]
+                send_weights_list.append(send_weights)
                 print(f'[DEBUG] Rank {self.rank} send_weights shape: {send_weights.shape}')
 
                 send_mask = token_expert_assignment_mask[token_positions]
+                send_mask_list.append(send_mask)
                 print(f'[DEBUG] Rank {self.rank} send_mask shape: {send_mask.shape}')
+
+                send_counts.append(send_tokens.shape[0])
+                print(f'[DEBUG] Rank {self.rank} send counts in loop: {send_counts}')
                 
             else:
-                # if no tokens assigned to this gpu_rank, send dummy tensors with one row
-                send_expert_ids = torch.full((1,self.k), -1, device=device, dtype=torch.long)
-                send_tokens = torch.zeros(1, self.n_embd, device=device, dtype=x_flat.dtype)
-                send_weights = torch.zeros(1, self.k, device=device, dtype=x_flat.dtype)
-                send_mask = torch.zeros(1, self.k, device=device, dtype=torch.bool)
-        
-                send_counts.append(1)
+                # if no tokens assigned to this gpu_rank, send dummy tensors with 0 rows
+                send_tokens = torch.empty((0, self.n_embd), device=device, dtype=x_flat.dtype)
+                send_tokens_list.append(send_tokens)
+
+                send_expert_ids = torch.empty((0,self.k), device=device, dtype=torch.long)
+                send_expert_list.append(send_expert_ids)
+
+                send_weights = torch.empty((0, self.k), device=device, dtype=x_flat.dtype)
+                send_weights_list.append(send_weights)
+
+                send_mask = torch.empty((0, self.k), device=device, dtype=torch.bool)
+                send_mask_list.append(send_mask)
+
+                send_counts.append(0)
 
         print(f'[DEBUG] Rank {self.rank} send counts after looping gpus: {send_counts}')
         print(f"[DEBUG] Rank {self.rank} send_counts = {send_counts}, sum = {sum(send_counts)}, tensor_rows = {send_tokens.size(0)}")
-        assert len(send_counts) == dist.get_world_size()
-        assert sum(send_counts) == send_tokens.size(0), "Mismatch between send_counts and tokens!"
-        assert all(c >= 0 for c in send_counts), "send_counts has negative entries!"
         
+        
+        # create send tensors
+        send_tokens_tensor = torch.cat(send_tokens_list, dim=0) if sum(send_counts) >0 else torch.empty((0, self.n_embd), device=device)
+
+        send_expert_ids_tensor = torch.cat(send_expert_list, dim=0) if sum(send_counts) >0 else torch.empty((0, self.k), device=device)
+
+        send_weights_tensor = torch.cat(send_weights_list, dim=0) if sum(send_counts) >0 else torch.empty((0, self.k), device=device)
+
+        send_mask_tensor = torch.cat(send_mask_list, dim=0) if sum(send_counts) >0 else torch.empty((0, self.k), device=device)
+
+        assert len(send_counts) == dist.get_world_size()
+        assert sum(send_counts) == send_tokens_tensor.shape(0), "Mismatch between send_counts and tokens!"
+        assert all(c >= 0 for c in send_counts), "send_counts has negative entries!"
+
+
         # communicate how many rows each rank will be receiving. convert the send counts list to a tensor. recall that send_counts carries how many rows (tokens) will be sent by this gpu to all gpus (including itself). This will be a 1D tensor with shape (world_size,). Each index position corresponds to gpu rank.
         
         input_split_sizes_tensor = torch.tensor(send_counts, device=device, dtype=torch.int) # num rows this gpu will be sending to each gpu (world_size,)
@@ -417,10 +445,10 @@ class MoELayerParallel(nn.Module):
         # communicate
         print(f'[DEBUG] Rank {self.rank} initiating dist.all_to_all_single(recv_counts, send_counts)')
         dist.all_to_all_single(output_split_sizes_tensor, input_split_sizes_tensor)
-        output_split_sizes_tensor = output_split_sizes_tensor.tolist()
+        recv_counts = output_split_sizes_tensor.tolist()
         
-        print(f'[DEBUG] Rank {self.rank} recv counts: {N_recv}')
-        print(f'[DEBUG] Rank {self.rank} sen counts: {send_counts}')
+        print(f'[DEBUG] Rank {self.rank} recv_counts: {recv_counts}')
+    
 
         # this is the sum of the number of token (rows) that all gpus(including itself) will be sending to this gpu. N_recv will be the same for the tokens (N_recv, n_embd), expert_ids (N_recv, k), weights (N_recv, k), and mask tokens (N_recv, k)
         N_recv = sum(output_split_sizes_tensor)
@@ -429,37 +457,38 @@ class MoELayerParallel(nn.Module):
         
         # Create tensors to receive what all gpus will communicate to this gpu
         # Tokens: each row is a token embedding
-        recv_tokens = torch.empty((N_recv, self.n_embd), dtype=x_flat.dtype, device=device)
+        recv_tokens_tensor = torch.empty((N_recv, self.n_embd), dtype=x_flat.dtype, device=device)
 
         # Expert IDs: each row has k integers (which experts this token is routed to)
-        recv_expert_ids = torch.empty((N_recv, self.k), dtype=torch.long, device=device)
+        recv_expert_ids_tensor = torch.empty((N_recv, self.k), dtype=torch.long, device=device)
 
         # Weights: each row has k floats (routing probabilities)
-        recv_weights = torch.empty((N_recv, self.k), dtype=torch.float32, device=device)
+        recv_weights_tensor = torch.empty((N_recv, self.k), dtype=torch.float32, device=device)
 
         # Mask: each row has k 0/1 flags (in case of padding or variable k)
-        recv_mask = torch.empty((N_recv, self.k), dtype=torch.bool, device=device)
+        recv_mask_tensor = torch.empty((N_recv, self.k), dtype=torch.bool, device=device)
 
-        
-        
         # Perform all-to-all communication to send tokens to appropriate GPUs
-        dist.all_to_all_single(recv_tokens, send_tokens, )
-        dist.all_to_all_single(recv_expert_ids, send_expert_ids, )
-        dist.all_to_all_single(recv_weights, send_weights, )
-        dist.all_to_all_single(recv_mask, send_mask, )
+        dist.all_to_all_single(recv_tokens_tensor, send_tokens_tensor, output_split_sizes=recv_counts, input_split_sizes=send_counts)
+        
+        dist.all_to_all_single(recv_expert_ids_tensor, send_expert_ids_tensor, output_split_sizes=recv_counts, input_split_sizes=send_counts)
+        
+        dist.all_to_all_single(recv_weights_tensor, send_weights_tensor, output_split_sizes=recv_counts, input_split_sizes=send_counts)
+        
+        dist.all_to_all_single(recv_mask_tensor, send_mask_tensor, output_split_sizes=recv_counts, input_split_sizes=send_counts)
 
         print(f'\nafter all to all\n')
-        print(f'recv tokens flat type: {type(recv_tokens)}')
-        print(f'recv tokens flat[0]type: {type(recv_tokens[0])}')
-        print(recv_tokens[0:10])
+        print(f'recv tokens flat type: {type(recv_tokens_tensor)}')
+        print(f'recv tokens flat[0]type: {type(recv_tokens_tensor[0])}')
+        print(recv_tokens_tensor[0:10])
 
-        print(type(recv_mask))
-        print(recv_mask[0][0:10])
-        print(f'recv_tokens shape: {recv_tokens.shape} sample:\n{recv_tokens[0:10]}\n')
-        print(f'recv_mask_flat shape: {recv_mask.shape} sample:\n{recv_mask[0:10]}\n')
+        print(type(recv_mask_tensor))
+        print(recv_mask_tensor[0][0:10])
+        print(f'recv_tokens shape: {recv_tokens_tensor.shape} sample:\n{recv_tokens_tensor[0:10]}\n')
+        print(f'recv_mask_flat shape: {recv_mask_tensor.shape} sample:\n{recv_mask_tensor[0:10]}\n')
 
 
-        return recv_tokens, recv_expert_ids, recv_weights, recv_mask   
+        return recv_tokens_tensor, recv_expert_ids_tensor, recv_weights_tensor, recv_mask_tensor  
         
 
 

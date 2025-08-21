@@ -600,8 +600,21 @@ li.append(1)
 li
 # %%
 send_counts = [16, 64]
+
 input_split_sizes_tensor = torch.tensor(send_counts)
 output_split_sizes_tensor = torch.empty_like(input_split_sizes_tensor)
 input_split_sizes_tensor
 output_split_sizes_tensor
+
+# %%
+torch.manual_seed = 42
+t1 = torch.rand(5,7)
+t2 = torch.rand(8,7)
+l1 = [t1,t2]
+
+t3 = torch.cat(l1, dim=0)
+t3
+# %%
+t5 = torch.empty(0, 7, device='cpu')
+t5
 # %%
