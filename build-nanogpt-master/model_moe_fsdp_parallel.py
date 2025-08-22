@@ -580,9 +580,12 @@ class MoELayerParallel(nn.Module):
                 num_tokens = len(token_positions)
 
                 if num_tokens > 0:
-                    tokens_to_send_back_to_this_gpu = processed_tokens[token_idx : token_idx + num_tokens]
-                    send_back_assignments[gpu_rank] = (token_positions, tokens_to_send_back_to_this_gpu)
+                    tokens_to_send_back_to_this_gpu_rank = processed_tokens[token_idx : token_idx + num_tokens]
+                    send_back_assignments[gpu_rank] = (token_positions, tokens_to_send_back_to_this_gpu_rank)
                     token_idx += num_tokens
+
+                    print(f"[DEBUG] Rank {self.rank}: tokens_to_send_back_to_this_gpu_rank shape: {tokens_to_send_back_to_this_gpu_rank.shape}  token_positions shape: {token_positions.shape}")
+
 
         # Create send tensors for all_to_all back to original GPUs
         send_tensors_back = []
@@ -590,9 +593,9 @@ class MoELayerParallel(nn.Module):
 
         for gpu_rank in range(self.world_size):
             if gpu_rank in send_back_assignments:
-                _, tokens_to_send_back_to_this_gpu = send_back_assignments[gpu_rank]
-                send_tensors_back.append(tokens_to_send_back_to_this_gpu)
-                send_counts_back.append(tokens_to_send_back_to_this_gpu.numel())
+                _, tokens_to_send_back_to_this_gpu_rank = send_back_assignments[gpu_rank]
+                send_tensors_back.append(tokens_to_send_back_to_this_gpu_rank)
+                send_counts_back.append(tokens_to_send_back_to_this_gpu_rank.numel())
             else:
                 empty_tensor = torch.empty(0, self.n_embd, device=device, dtype=processed_tokens.dtype)
                 send_tensors_back.append(empty_tensor)
