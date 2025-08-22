@@ -281,11 +281,6 @@ class MoELayerParallel(nn.Module):
         returns a dictionary that maps gpu global rank --> (token_indices, expert_local_id)
         """
         assignments = {}
-    
-        # flatten topk expert ids to shape (B*T, k) tensor for easier processing. 
-        # top_k_ids_global = top_k_ids_global.view((self.batch_size*self.seq_len), -1)
-
-        # Note: gate_weights_global is already of shape (batch_size*seq_len, num_experts) so no need to flatten.
 
         for gpu_rank in range(self.world_size):
             # get the start and end expert ids assigned to each gpu
@@ -546,6 +541,8 @@ class MoELayerParallel(nn.Module):
             for k_idx in range(self.k):
                 print(f'[DEBUG] iterate over top k experts. at expert: {k_idx} of {self.k}')
                 if token_expert_id_mask[k_idx]:  # check if this expert is real and not padding
+
+                # if k_idx != -1:
                     expert_local_id = token_expert_ids[k_idx].item()
                     expert_weight = token_weights[k_idx]
 
