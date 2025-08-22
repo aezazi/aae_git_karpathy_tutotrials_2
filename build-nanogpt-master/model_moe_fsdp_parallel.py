@@ -340,12 +340,11 @@ class MoELayerParallel(nn.Module):
                 token_weights_padded = torch.stack(token_weights_padded)
 
                 # create a mask to filter the padding. the mask will have shape (num_tokens, k) where num_tokens is the number of tokens assigned to this gpu_rank and k is the number of experts per token. The mask will be True for the experts that were assigned to the token and False for the padding dummy.
-                token_expert_assignment_mask = (token_expert_local_id_assignments_padded >= 0)  # (num_tokens, k)
+                # token_expert_assignment_mask = (token_expert_local_id_assignments_padded >= 0)  # (num_tokens, k)
                 
                 # finally, package token_positions, their token_expert_local_id_assignments_padded, and token_expert_assignment_mask in a tuple and associate the tuple with this gpu_rank on which the experts reside. for example, assignments[1] carries the token positions and the experts to which the tokens were assigned and mask that can be processed by gpu rank=1
                 assignments[gpu_rank] = (token_positions, token_expert_local_id_assignments_padded,
-                token_weights_padded,
-                token_expert_assignment_mask)
+                token_weights_padded)
         
         return assignments
     
@@ -363,7 +362,7 @@ class MoELayerParallel(nn.Module):
         send_tokens_list = []
         send_expert_list = []
         send_weights_list = []
-        send_mask_list = []
+        # send_mask_list = []
         send_counts = []
         
         # send_counts carries how many rows (tokens) will be sent by this gpu to all gpus (including itself). The list will have len = world_size. Each element will be an integer corresponding to how many rows (tokens) this gpu will send to all gpus ( including itself). Each index position corresponds to gpu rank in order. 
@@ -371,7 +370,7 @@ class MoELayerParallel(nn.Module):
         
         for gpu_rank in range(self.world_size):
             if gpu_rank in assignments:
-                token_positions, token_expert_local_id_assignments_padded, token_weights_padded, token_expert_assignment_mask = assignments[gpu_rank]
+                token_positions, token_expert_local_id_assignments_padded, token_weights_padded = assignments[gpu_rank]
                 
                 print(f'[DEBUG] Rank {self.rank} shape token_expert_local_id_assignments_padded : {token_expert_local_id_assignments_padded.shape}')
 
@@ -391,8 +390,8 @@ class MoELayerParallel(nn.Module):
                 send_weights_list.append(send_weights)
                 # print(f'[DEBUG] Rank {self.rank} send_weights shape: {send_weights.shape}')
 
-                send_mask = token_expert_assignment_mask
-                send_mask_list.append(send_mask)
+                # send_mask = token_expert_assignment_mask
+                # send_mask_list.append(send_mask)
                 # print(f'[DEBUG] Rank {self.rank} send_mask shape: {send_mask.shape}')
 
                 send_counts.append(send_tokens.shape[0])
@@ -409,8 +408,8 @@ class MoELayerParallel(nn.Module):
                 send_weights = torch.empty((0, self.k), device=device, dtype=x_flat.dtype)
                 send_weights_list.append(send_weights)
 
-                send_mask = torch.empty((0, self.k), device=device, dtype=torch.bool)
-                send_mask_list.append(send_mask)
+                # send_mask = torch.empty((0, self.k), device=device, dtype=torch.bool)
+                # send_mask_list.append(send_mask)
 
                 send_counts.append(0)
 
@@ -425,7 +424,7 @@ class MoELayerParallel(nn.Module):
 
         send_weights_tensor = torch.cat(send_weights_list, dim=0) if sum(send_counts) >0 else torch.empty((0, self.k), device=device)
 
-        send_mask_tensor = torch.cat(send_mask_list, dim=0) if sum(send_counts) >0 else torch.empty((0, self.k), device=device)
+        # send_mask_tensor = torch.cat(send_mask_list, dim=0) if sum(send_counts) >0 else torch.empty((0, self.k), device=device)
 
         assert len(send_counts) == dist.get_world_size()
         assert sum(send_counts) == send_tokens_tensor.shape[0], "Mismatch between send_counts and tokens!"
@@ -466,7 +465,7 @@ class MoELayerParallel(nn.Module):
         recv_weights_tensor = torch.empty((N_recv, self.k), dtype=torch.float32, device=device)
 
         # Mask: each row has k 0/1 flags (in case of padding or variable k)
-        recv_mask_tensor = torch.empty((N_recv, self.k), dtype=torch.bool, device=device)
+        # recv_mask_tensor = torch.empty((N_recv, self.k), dtype=torch.bool, device=device)
 
         # Perform all-to-all communication to send tokens to appropriate GPUs
         dist.all_to_all_single(recv_tokens_tensor, send_tokens_tensor, output_split_sizes=recv_counts, input_split_sizes=send_counts)
@@ -475,20 +474,20 @@ class MoELayerParallel(nn.Module):
         
         dist.all_to_all_single(recv_weights_tensor, send_weights_tensor, output_split_sizes=recv_counts, input_split_sizes=send_counts)
         
-        dist.all_to_all_single(recv_mask_tensor, send_mask_tensor, output_split_sizes=recv_counts, input_split_sizes=send_counts)
+        # dist.all_to_all_single(recv_mask_tensor, send_mask_tensor, output_split_sizes=recv_counts, input_split_sizes=send_counts)
 
         print(f'\n[DEBUG]  all-to-all completed\n')
        
         print(f'[DEBUG] recv_tokens shape: {recv_tokens_tensor.shape} sample:\n{recv_tokens_tensor[0:10]}\n')
         
-        print(f'[DEBUG] recv_mask  shape: {recv_mask_tensor.shape} sample:\n{recv_mask_tensor[0:10]}\n')
+        # print(f'[DEBUG] recv_mask  shape: {recv_mask_tensor.shape} sample:\n{recv_mask_tensor[0:10]}\n')
 
 
-        return recv_tokens_tensor, recv_expert_ids_tensor, recv_weights_tensor, recv_mask_tensor  
+        return recv_tokens_tensor, recv_expert_ids_tensor, recv_weights_tensor
         
 
 
-    def _process_local_experts(self, tokens, expert_ids, weights, mask):
+    def _process_local_experts(self, tokens, expert_ids, weights, mask=None):
         """
         Process tokens through local experts using expert assignments
         """
@@ -500,9 +499,7 @@ class MoELayerParallel(nn.Module):
 
         print(f"[DEBUG] Rank {self.rank}: Processing {num_received_tokens} tokens through local experts")
         
-        print(f"[DEBUG] Rank {self.rank}: Input shapes - tokens: {tokens.shape}, expert_ids: {expert_ids.shape}, weights: {weights.shape}, mask: {mask.shape}")
-
-        # print(f'\n[DEBUG] mask: {mask}\n')
+        print(f"[DEBUG] Rank {self.rank}: Input shapes - tokens: {tokens.shape}, expert_ids: {expert_ids.shape}, weights: {weights.shape}")
 
 
         if num_received_tokens == 0:
@@ -518,7 +515,7 @@ class MoELayerParallel(nn.Module):
         print(f"[DEBUG] Rank {self.rank}: Starting token-by-token processing...")
         for token_idx in range(num_received_tokens):
             
-            if token_idx % 1000 == 0:  # Progress indicator for large batches
+            if token_idx % 5000 == 0:  # Progress indicator for large batches
                 print(f"[DEBUG] Rank {self.rank}: Processing token {token_idx}/{num_received_tokens}")
 
             token = tokens[token_idx]  # (n_embd,)
@@ -528,9 +525,10 @@ class MoELayerParallel(nn.Module):
             # print(f'[DEBUG] token_expert_ids {token_expert_ids.shape} {token_expert_ids}')
             
             token_weights = weights[token_idx] # (k,)
-            # print(f'[DEBUG] token_weights: {token_weights.shape} {token_weights}')
+            if token_idx % 5000 == 0:
+                print(f'[DEBUG] token_weights: {token_weights.shape} {token_weights}')
 
-            token_expert_id_mask = mask[token_idx] # (k,)
+            # token_expert_id_mask = mask[token_idx] # (k,)
             # print(f'[DEBUG] token_expert_id_mask: {token_expert_id_mask.shape}\n{token_expert_id_mask}\n')
 
             # create tensor to hold this token after processing by experts
@@ -539,13 +537,12 @@ class MoELayerParallel(nn.Module):
 
             # iterate over each expert assigned to this token
             for k_idx in range(self.k):
-                print(f'[DEBUG] iterate over top k experts. at expert: {k_idx} of {self.k}')
-                if token_expert_id_mask[k_idx]:  # check if this expert is real and not padding
 
-                # if k_idx != -1:
+                # k_idx is the local id of topk experts.
+                # check if this expert is real and not padding. if the expert assginment k_idx != -1, it's padding
+                if k_idx != -1:
                     expert_local_id = token_expert_ids[k_idx].item()
                     expert_weight = token_weights[k_idx]
-
                    
                     # process the token through the expert
                     expert_output = self.local_experts[expert_local_id](token.unsqueeze(0))  # (1, n_embd)
@@ -576,7 +573,7 @@ class MoELayerParallel(nn.Module):
 
         for gpu_rank in range(self.world_size):
             if gpu_rank in assignments:
-                token_positions, _, _, _ = assignments[gpu_rank]
+                token_positions, _, _ = assignments[gpu_rank]
                 num_tokens = len(token_positions)
 
                 if num_tokens > 0:
@@ -584,7 +581,7 @@ class MoELayerParallel(nn.Module):
                     send_back_assignments[gpu_rank] = (token_positions, tokens_to_send_back_to_this_gpu_rank)
                     token_idx += num_tokens
 
-                    print(f"[DEBUG] Rank {self.rank}: tokens_to_send_back_to_this_gpu_rank shape: {tokens_to_send_back_to_this_gpu_rank.shape}  token_positions shape: {token_positions.shape}")
+                    print(f"[DEBUG] Rank {self.rank}: tokens_to_send_back_to_this_gpu_rank shape: {tokens_to_send_back_to_this_gpu_rank.shape} from gpu_rank: {gpu_rank}  token_positions shape: {token_positions.shape}")
 
 
         # Create send tensors for all_to_all back to original GPUs
@@ -682,7 +679,7 @@ class MoELayerParallel(nn.Module):
         # DEBUG: Print assignment sizes for each rank
         for gpu_rank in range(self.world_size):
             if gpu_rank in assignments:
-                token_positions, _, _, _ = assignments[gpu_rank]
+                token_positions, _, _ = assignments[gpu_rank]
                 print(f"[DEBUG] Rank {self.rank}: Sending {len(token_positions)} tokens to GPU {gpu_rank}")
             else:
                 print(f"[DEBUG] Rank {self.rank}: Sending 0 tokens to GPU {gpu_rank}")
@@ -690,7 +687,7 @@ class MoELayerParallel(nn.Module):
         # Step 3: Communicate tokens to appropriate GPUs
         print(f"[DEBUG] Rank {self.rank}: Starting token communication...")
         
-        recv_tokens, recv_expert_ids, recv_weights, recv_mask = self._communicate_tokens(x_flat, assignments)
+        recv_tokens, recv_expert_ids, recv_weights = self._communicate_tokens(x_flat, assignments)
 
         print(f"[DEBUG] Rank {self.rank}: Token communication complete, received {recv_tokens.shape[0]} tokens")
             
@@ -699,7 +696,7 @@ class MoELayerParallel(nn.Module):
 
 
         # Step 4: Process tokens through local experts
-        processed_tokens, count_tokens_processed_by_each_expert = self._process_local_experts(recv_tokens, recv_expert_ids, recv_weights, recv_mask)
+        processed_tokens, count_tokens_processed_by_each_expert = self._process_local_experts(recv_tokens, recv_expert_ids, recv_weights)
 
         # Step 5: Communicate processed tokens back to original GPUs
         recv_tokens_back = self._communicate_results_back(processed_tokens, assignments)
