@@ -548,58 +548,69 @@ class MoELayerParallel(nn.Module):
         device = processed_tokens.device
 
         # Create a dictionary to hold a reverse mapping to send processed tokens back to the original GPU
-        send_back_assignments = {}
-        token_idx = 0
+        # send_back_assignments = {}
+        # token_idx = 0
 
-        for gpu_rank in range(self.world_size):
-            if gpu_rank in assignments:
-                token_positions, _, _ = assignments[gpu_rank]
-                num_tokens = len(token_positions)
+        # for gpu_rank in range(self.world_size):
+        #     if gpu_rank in assignments:
+        #         token_positions, _, _ = assignments[gpu_rank]
+        #         num_tokens = len(token_positions)
 
-                if num_tokens > 0:
-                    tokens_to_send_back_to_this_gpu_rank = processed_tokens[token_idx : token_idx + num_tokens]
-                    send_back_assignments[gpu_rank] = (token_positions, tokens_to_send_back_to_this_gpu_rank)
-                    token_idx += num_tokens
+        #         if num_tokens > 0:
+        #             tokens_to_send_back_to_this_gpu_rank = processed_tokens[token_idx : token_idx + num_tokens]
+        #             send_back_assignments[gpu_rank] = (token_positions, tokens_to_send_back_to_this_gpu_rank)
+        #             token_idx += num_tokens
 
-                    print(f"\n[DEBUG] Rank {self.rank}: tokens_to_send_back_to_gpu_rank  {gpu_rank}  shape: {tokens_to_send_back_to_this_gpu_rank.shape} \n")
+        #             print(f"\n[DEBUG] Rank {self.rank}: tokens_to_send_back_to_gpu_rank  {gpu_rank}  shape: {tokens_to_send_back_to_this_gpu_rank.shape} \n")
 
 
-        # Create send tensors for all_to_all back to original GPUs
-        send_tensors_back = []
-        send_counts_back = []
+        # # Create send tensors for all_to_all back to original GPUs
+        # send_tensors_back = []
+        # send_counts_back = []
 
-        for gpu_rank in range(self.world_size):
-            if gpu_rank in send_back_assignments:
-                _, tokens_to_send_back_to_this_gpu_rank = send_back_assignments[gpu_rank]
-                send_tensors_back.append(tokens_to_send_back_to_this_gpu_rank)
-                send_counts_back.append(tokens_to_send_back_to_this_gpu_rank.numel())
-            else:
-                empty_tensor = torch.empty(0, self.n_embd, device=device, dtype=processed_tokens.dtype)
-                send_tensors_back.append(empty_tensor)
-                send_counts_back.append(0)
+        # for gpu_rank in range(self.world_size):
+        #     if gpu_rank in send_back_assignments:
+        #         _, tokens_to_send_back_to_this_gpu_rank = send_back_assignments[gpu_rank]
+        #         send_tensors_back.append(tokens_to_send_back_to_this_gpu_rank)
+        #         send_counts_back.append(tokens_to_send_back_to_this_gpu_rank.numel())
+        #     else:
+        #         empty_tensor = torch.empty(0, self.n_embd, device=device, dtype=processed_tokens.dtype)
+        #         send_tensors_back.append(empty_tensor)
+        #         send_counts_back.append(0)
 
-        # Fix: properly handle all_gather_object
-        all_send_counts_back = [None] * self.world_size
-        dist.all_gather_object(all_send_counts_back, send_counts_back)
+        # # Fix: properly handle all_gather_object
+        # all_send_counts_back = [None] * self.world_size
+        # dist.all_gather_object(all_send_counts_back, send_counts_back)
         
-        # all_send_counts_back is now a list of lists - flatten appropriately
-        # all_send_counts_back[rank] gives the send_counts from that rank
+        # # all_send_counts_back is now a list of lists - flatten appropriately
+        # # all_send_counts_back[rank] gives the send_counts from that rank
         
-        # Compute total number of elements to receive on this GPU
-        total_recv_size = sum(counts[self.rank] for counts in all_send_counts_back)
+        # # Compute total number of elements to receive on this GPU
+        # total_recv_size = sum(counts[self.rank] for counts in all_send_counts_back)
         
-        recv_tokens_back_flat = torch.empty(total_recv_size, device=device, dtype=processed_tokens.dtype)
+        # recv_tokens_back_flat = torch.empty(total_recv_size, device=device, dtype=processed_tokens.dtype)
 
-        # Flatten the send tensors for all_to_all_single communication
-        send_tensors_back_flat = torch.cat([t.flatten() for t in send_tensors_back])
+        # # Flatten the send tensors for all_to_all_single communication
+        # send_tensors_back_flat = torch.cat([t.flatten() for t in send_tensors_back])
 
-        # All-to-all communication back
-        dist.all_to_all_single(recv_tokens_back_flat, send_tensors_back_flat)
+        # # All-to-all communication back
+        # dist.all_to_all_single(recv_tokens_back_flat, send_tensors_back_flat)
 
-        # Reshape the received tokens
-        recv_tokens_back = recv_tokens_back_flat.view(-1, self.n_embd)
+        # # Reshape the received tokens
+        # # recv_tokens_back = recv_tokens_back_flat.view(-1, self.n_embd)
+        
+        #----------------------------------------------------------------------------
 
-        return recv_tokens_back
+        world_size = dist.get_world_size()
+        rank = dist.get_rank()
+
+        # token_positions tells us the origin of each token we processed
+        send_counts_back = [0] * world_size
+        for origin_rank in assignments.keys():
+            num_tokens = assignments[origin_rank][0].size(0)
+            send_counts_back[origin_rank] += num_tokens
+
+        print(f'\n[DEBUG] Rank {self.rank}: send_counts_back: {send_counts_back}\n')
     
     def _reassemble_sequence(self, x_flat, recv_tokens_back, original_assignments):
         """
