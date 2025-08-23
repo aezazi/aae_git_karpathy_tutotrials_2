@@ -543,74 +543,89 @@ class MoELayerParallel(nn.Module):
     
     def _communicate_results_back(self, processed_tokens, assignments):
         """
-        Communicate processed tokens back to the original GPUs
+        Communicate processed tokens back to the original GPUs using reverse all-to-all
+        
+        Args:
+            processed_tokens: Tensor of shape (N_recv, n_embd) - tokens processed by this GPU's experts
+            assignments: Dict mapping gpu_rank -> (token_positions, expert_ids, weights) - same as forward pass
+        
+        Returns:
+            recv_tokens_back: Tensor containing processed tokens from all GPUs in GPU rank order
         """
+        print('-'*70)
+        print(f'[DEBUG] Rank {self.rank} entered _communicate_results_back')
+        
         device = processed_tokens.device
-
-        # Create a dictionary to hold a reverse mapping to send processed tokens back to the original GPU
-        # send_back_assignments = {}
-        # token_idx = 0
-
-        # for gpu_rank in range(self.world_size):
-        #     if gpu_rank in assignments:
-        #         token_positions, _, _ = assignments[gpu_rank]
-        #         num_tokens = len(token_positions)
-
-        #         if num_tokens > 0:
-        #             tokens_to_send_back_to_this_gpu_rank = processed_tokens[token_idx : token_idx + num_tokens]
-        #             send_back_assignments[gpu_rank] = (token_positions, tokens_to_send_back_to_this_gpu_rank)
-        #             token_idx += num_tokens
-
-        #             print(f"\n[DEBUG] Rank {self.rank}: tokens_to_send_back_to_gpu_rank  {gpu_rank}  shape: {tokens_to_send_back_to_this_gpu_rank.shape} \n")
-
-
-        # # Create send tensors for all_to_all back to original GPUs
-        # send_tensors_back = []
-        # send_counts_back = []
-
-        # for gpu_rank in range(self.world_size):
-        #     if gpu_rank in send_back_assignments:
-        #         _, tokens_to_send_back_to_this_gpu_rank = send_back_assignments[gpu_rank]
-        #         send_tensors_back.append(tokens_to_send_back_to_this_gpu_rank)
-        #         send_counts_back.append(tokens_to_send_back_to_this_gpu_rank.numel())
-        #     else:
-        #         empty_tensor = torch.empty(0, self.n_embd, device=device, dtype=processed_tokens.dtype)
-        #         send_tensors_back.append(empty_tensor)
-        #         send_counts_back.append(0)
-
-        # # Fix: properly handle all_gather_object
-        # all_send_counts_back = [None] * self.world_size
-        # dist.all_gather_object(all_send_counts_back, send_counts_back)
         
-        # # all_send_counts_back is now a list of lists - flatten appropriately
-        # # all_send_counts_back[rank] gives the send_counts from that rank
+        # Step 1: Prepare send data - we need to send processed tokens back to where they came from
+        # The processed_tokens are in the same order as we received them (GPU rank order)
+        # So we need to split them according to how many tokens each GPU sent us
         
-        # # Compute total number of elements to receive on this GPU
-        # total_recv_size = sum(counts[self.rank] for counts in all_send_counts_back)
+        # Calculate how many tokens we received from each GPU (same as forward pass receive counts)
+        send_counts_back = []
+        send_tokens_list_back = []
         
-        # recv_tokens_back_flat = torch.empty(total_recv_size, device=device, dtype=processed_tokens.dtype)
-
-        # # Flatten the send tensors for all_to_all_single communication
-        # send_tensors_back_flat = torch.cat([t.flatten() for t in send_tensors_back])
-
-        # # All-to-all communication back
-        # dist.all_to_all_single(recv_tokens_back_flat, send_tensors_back_flat)
-
-        # # Reshape the received tokens
-        # # recv_tokens_back = recv_tokens_back_flat.view(-1, self.n_embd)
+        token_idx = 0  # Track position in processed_tokens
         
-        #----------------------------------------------------------------------------
-
-        world_size = dist.get_world_size()
-        rank = dist.get_rank()
-
-        # token_positions tells us the origin of each token we processed
-        send_counts_back = [0] * world_size
-        for origin_rank in assignments.keys():
-            num_tokens = assignments[origin_rank][0].size(0)
-            send_counts_back[origin_rank] += num_tokens
-
-        print(f'\n[DEBUG] Rank {self.rank}: send_counts_back: {send_counts_back}\n')
+        for gpu_rank in range(self.world_size):
+            if gpu_rank in assignments:
+                token_positions, _, _ = assignments[gpu_rank]
+                num_tokens = len(token_positions)
+                
+                if num_tokens > 0:
+                    # Extract the processed tokens for this GPU
+                    tokens_for_gpu = processed_tokens[token_idx:token_idx + num_tokens]  # (num_tokens, n_embd)
+                    send_tokens_list_back.append(tokens_for_gpu)
+                    send_counts_back.append(num_tokens)
+                    token_idx += num_tokens
+                    
+                    print(f'[DEBUG] Rank {self.rank} sending {num_tokens} processed tokens back to GPU {gpu_rank}')
+                else:
+                    # No tokens to send back to this GPU
+                    dummy_tokens = torch.empty((0, self.n_embd), device=device, dtype=processed_tokens.dtype)
+                    send_tokens_list_back.append(dummy_tokens)
+                    send_counts_back.append(0)
+            else:
+                # No tokens to send back to this GPU
+                dummy_tokens = torch.empty((0, self.n_embd), device=device, dtype=processed_tokens.dtype)
+                send_tokens_list_back.append(dummy_tokens)
+                send_counts_back.append(0)
+        
+        # Create the send tensor by concatenating all tokens to be sent back
+        send_tokens_back = torch.cat(send_tokens_list_back, dim=0) if sum(send_counts_back) > 0 else torch.empty((0, self.n_embd), device=device, dtype=processed_tokens.dtype)
+        
+        print(f'[DEBUG] Rank {self.rank} prepared {send_tokens_back.shape[0]} tokens to send back')
+        
+        # Step 2: Communicate send counts for the reverse direction
+        # We need to tell all GPUs how many tokens we're sending back to them
+        input_split_sizes_back = torch.tensor(send_counts_back, device=device, dtype=torch.int)
+        output_split_sizes_back = torch.empty_like(input_split_sizes_back)
+        
+        print(f'[DEBUG] Rank {self.rank} communicating reverse send counts: {send_counts_back}')
+        
+        # All-to-all to exchange how many tokens each GPU will receive back
+        dist.all_to_all_single(output_split_sizes_back, input_split_sizes_back)
+        
+        recv_counts_back = output_split_sizes_back.tolist()
+        N_recv_back = sum(recv_counts_back)
+        
+        print(f'[DEBUG] Rank {self.rank} will receive {recv_counts_back} tokens back from all GPUs (total: {N_recv_back})')
+        
+        # Step 3: Create receive tensor and perform all-to-all communication
+        recv_tokens_back = torch.empty((N_recv_back, self.n_embd), dtype=processed_tokens.dtype, device=device)
+        
+        # Perform the reverse all-to-all communication
+        print(f'[DEBUG] Rank {self.rank} performing reverse all-to-all communication')
+        dist.all_to_all_single(
+            recv_tokens_back, 
+            send_tokens_back, 
+            output_split_sizes=recv_counts_back, 
+            input_split_sizes=send_counts_back
+        )
+        
+        print(f'[DEBUG] Rank {self.rank} received {recv_tokens_back.shape[0]} processed tokens back from all GPUs')
+        
+        return recv_tokens_back
     
     def _reassemble_sequence(self, x_flat, recv_tokens_back, original_assignments):
         """
