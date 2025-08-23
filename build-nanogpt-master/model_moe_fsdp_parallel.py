@@ -444,7 +444,7 @@ class MoELayerParallel(nn.Module):
 
         
         # Create tensors to receive what all gpus will communicate to this gpu
-        # Tokens: each row is a token embedding
+        # Tokens: each row is a token embedding. Tokens (rows) are in the order of gpu rank 
         recv_tokens_tensor = torch.empty((N_recv, self.n_embd), dtype=x_flat.dtype, device=device)
 
         # Expert IDs: each row has k integers (which experts this token is routed to)
@@ -470,7 +470,6 @@ class MoELayerParallel(nn.Module):
 
         return recv_tokens_tensor, recv_expert_ids_tensor, recv_weights_tensor
         
-
 
     def _process_local_experts(self, tokens, expert_ids, top_k_weights):
         """
@@ -682,6 +681,7 @@ class MoELayerParallel(nn.Module):
         print(f"\n[DEBUG] Rank {self.rank}: num processed tokens: {processed_tokens.shape}")
 
         # DEBUG:  check tokens processed counter
+        print(f"\n[DEBUG] Rank {self.rank}: num  processed tokens: {processed_tokens.shape}")
         if self.rank == 0:
             print(f"[DEBUG] check tokens processed counter:\n{count_tokens_processed_by_each_expert}\n")
 
