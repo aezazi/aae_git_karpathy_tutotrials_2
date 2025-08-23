@@ -424,12 +424,12 @@ class MoELayerParallel(nn.Module):
         
 
         input_split_sizes_tensor = torch.tensor(send_counts, device=device, dtype=torch.int) # num rows this gpu will be sending to each gpu (world_size,)
-        print(f'[DEBUG] Rank {self.rank} input_split_sizes_tensor: {input_split_sizes_tensor}')
+        print(f'[DEBUG] Rank {self.rank} input_split_sizes_tensor: {input_split_sizes_tensor}\n')
         
         output_split_sizes_tensor = torch.empty_like(input_split_sizes_tensor) # num rows this gpu will be receiving from each gpu (world_size,). It will be populated after dist_all_to_all single
         
         # communicate
-        print(f'[DEBUG] Rank {self.rank} initiating dist.all_to_all_single(recv_counts, send_counts)')
+        print(f'[DEBUG] Rank {self.rank} initiating dist.all_to_all_single(recv_counts, send_counts)\n')
         dist.all_to_all_single(output_split_sizes_tensor, input_split_sizes_tensor)
         
         # after the all-to-all communication, output_split_sizes_tensor is populated. convert to a list
@@ -463,9 +463,9 @@ class MoELayerParallel(nn.Module):
         
         dist.all_to_all_single(recv_weights_tensor, send_weights_tensor, output_split_sizes=recv_counts, input_split_sizes=send_counts)
 
-        print(f'\n[DEBUG]  all-to-all completed\n')
-       
-        print(f'[DEBUG] recv_tokens shape: {recv_tokens_tensor.shape} sample:\n{recv_tokens_tensor[0:10]}\n')
+        print(f"\n[DEBUG] Rank {self.rank}: Token communication complete, received {recv_tokens_tensor.shape[0]} tokens\n")
+            
+        # print(f"\n[DEBUG] recv_tokens sample\n: {recv_tokens_tensor[0:10,0:7]}")
 
 
         return recv_tokens_tensor, recv_expert_ids_tensor, recv_weights_tensor
@@ -475,15 +475,15 @@ class MoELayerParallel(nn.Module):
         """
         Process tokens through local experts using expert assignments
         """
-        print('-'*70)
-        print(f'[DEBUG] Rank {self.rank} entered _process_local_experts')
+        print('-'*70,'\n')
+        print(f'[DEBUG] Rank {self.rank} entered _process_local_experts\n')
 
         device = tokens.device
         num_received_tokens = tokens.shape[0]
 
-        print(f"[DEBUG] Rank {self.rank}: Processing {num_received_tokens} tokens through local experts")
+        print(f"[DEBUG] Rank {self.rank}: Processing {num_received_tokens} tokens through local experts\n")
         
-        print(f"[DEBUG] Rank {self.rank}: Input shapes - tokens: {tokens.shape}, expert_ids: {expert_ids.shape}, top_k_weights: {top_k_weights.shape}")
+        print(f"[DEBUG] Rank {self.rank}: Input shapes - tokens: {tokens.shape}, expert_ids: {expert_ids.shape}, top_k_weights: {top_k_weights.shape}\n")
 
 
         if num_received_tokens == 0:
@@ -496,7 +496,7 @@ class MoELayerParallel(nn.Module):
         output = torch.zeros(num_received_tokens, self.n_embd, device=device, dtype=tokens.dtype) # (num_received_tokens, n_embd)
 
         # iterate over each token and process it through its assigned experts
-        print(f"[DEBUG] Rank {self.rank}: Starting token-by-token processing...")
+        print(f"[DEBUG] Rank {self.rank}: Starting token-by-token processing...\n")
         for token_idx in range(num_received_tokens):
             
             if token_idx % 5000 == 0:  # Progress indicator for large batches
@@ -509,8 +509,8 @@ class MoELayerParallel(nn.Module):
             # print(f'[DEBUG] token_expert_ids {token_expert_ids.shape} {token_expert_ids}')
             
             token_weights = top_k_weights[token_idx] # (k,)
-            if token_idx % 5000 == 0:
-                print(f'[DEBUG] token_weights: {token_weights.shape} {token_weights}')
+            
+            # if token_idx % 5000 == 0: print(f'[DEBUG] token_weights: {token_weights}\n')
 
             # create tensor to hold this token after processing by experts
             processed_token = torch.zeros_like(token)
@@ -561,7 +561,7 @@ class MoELayerParallel(nn.Module):
                     send_back_assignments[gpu_rank] = (token_positions, tokens_to_send_back_to_this_gpu_rank)
                     token_idx += num_tokens
 
-                    print(f"[DEBUG] Rank {self.rank}: tokens_to_send_back_to_this_gpu_rank shape: {tokens_to_send_back_to_this_gpu_rank.shape} from gpu_rank: {gpu_rank}  token_positions shape: {token_positions.shape}")
+                    print(f"\n[DEBUG] Rank {self.rank}: tokens_to_send_back_to_gpu_rank  {gpu_rank}  shape: {tokens_to_send_back_to_this_gpu_rank.shape} \n")
 
 
         # Create send tensors for all_to_all back to original GPUs
@@ -665,25 +665,18 @@ class MoELayerParallel(nn.Module):
                 print(f"[DEBUG] Rank {self.rank}: Sending 0 tokens to GPU {gpu_rank}")
 
         # Step 3: Communicate tokens to appropriate GPUs
-        print(f"[DEBUG] Rank {self.rank}: Starting token communication...")
-        
         recv_tokens, recv_expert_ids, recv_weights = self._communicate_tokens(x_flat, assignments)
 
-        print(f"[DEBUG] Rank {self.rank}: Token communication complete, received {recv_tokens.shape[0]} tokens")
-            
         
-        print(f"\n[DEBUG] recv_tokens sample\n: {recv_tokens[0:10,0:7]}")
 
 
         # Step 4: Process tokens through local experts
         processed_tokens, count_tokens_processed_by_each_expert = self._process_local_experts(recv_tokens, recv_expert_ids, recv_weights)
 
-        print(f"\n[DEBUG] Rank {self.rank}: num processed tokens: {processed_tokens.shape}")
-
+    
         # DEBUG:  check tokens processed counter
-        print(f"\n[DEBUG] Rank {self.rank}: num  processed tokens: {processed_tokens.shape}")
-        if self.rank == 0:
-            print(f"[DEBUG] check tokens processed counter:\n{count_tokens_processed_by_each_expert}\n")
+        print(f"\n[DEBUG] Rank {self.rank}: num  processed tokens: {processed_tokens.shape}\n")
+        
 
 
         # Step 5: Communicate processed tokens back to original GPUs
