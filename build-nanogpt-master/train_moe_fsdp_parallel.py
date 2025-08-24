@@ -124,11 +124,50 @@ model.to(device)
 use_compile = False # set to True to use torch.compile
 model = torch.compile(model) if use_compile else model 
 
-# With FSDP, we can wrap different parts of the model. Here I am following a strategy presented in a pytorch tutorial to wrap the transformer block. It's possibel to separately wrap the Moe layer. Will experiment when I get this working.
-transformer_wrapper_policy = functools.partial(
-    transformer_auto_wrap_policy,
-    transformer_layer_cls = {Block} # transformer layer class as per pytorch tutorial video
-)
+# With FSDP, we can wrap different parts of the model. Here I am following a strategy presented in a pytorch tutorial to wrap the transformer block. It's possibe to separately wrap the Moe layer. Will experiment when I get this working.
+# transformer_wrapper_policy = functools.partial(
+#     transformer_auto_wrap_policy,
+#     transformer_layer_cls = {Block} # transformer layer class as per pytorch tutorial video
+# )
+
+from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
+from model_moe_fsdp_parallel import Block, MoELayerParallel, ExpertMoESwiglu, TopKGateParallel
+def moe_aware_auto_wrap_policy(module, recurse, nonwrapped_numel):
+    """
+    Custom FSDP wrap policy that treats MoE components specially.
+    
+    Key principles:
+    1. MoE experts should NOT be sharded across GPUs (they need to be locally available)
+    2. The gate can be replicated or wrapped as a unit
+    3. Regular transformer components (attention, etc.) can be sharded normally
+    """
+    
+    # Individual experts should never be sharded - wrap them as atomic units
+    if isinstance(module, ExpertMoESwiglu):
+        print(f"[FSDP] Wrapping Expert as atomic unit (no sharding)")
+        return True
+    
+    # The gating mechanism should be wrapped as a unit (can be replicated)
+    if isinstance(module, TopKGateParallel):
+        print(f"[FSDP] Wrapping TopKGate as atomic unit")
+        return True
+    
+    # The entire MoE layer should be wrapped as a unit to preserve expert locality
+    if isinstance(module, MoELayerParallel):
+        print(f"[FSDP] Wrapping entire MoE layer as atomic unit")
+        return True
+    
+    # For regular transformer components, use the standard policy
+    return transformer_auto_wrap_policy(
+        module, 
+        recurse, 
+        nonwrapped_numel,
+        transformer_layer_cls={Block}
+    )
+
+wrapper_policy = moe_aware_auto_wrap_policy
+
+
 
 # FSDP  allows us to define a mixed prescision policy. Here, I am just using bf16 for everything, but we can use hybrid. refer to this tutorial for more good info and nuances https://www.youtube.com/watch?v=-caN92JtKqA&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=4
 precision_policy = MixedPrecision(
@@ -140,7 +179,7 @@ precision_policy = MixedPrecision(
 
 # wrap model per wrapper policy
 model = FSDP(model,
-            auto_wrap_policy=transformer_wrapper_policy,
+            auto_wrap_policy=wrapper_policy,
             mixed_precision=precision_policy,
         
             # reccommendation and other good info from tutorial: https://www.youtube.com/watch?v=sDM56HOziE4&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=8
@@ -153,6 +192,15 @@ model = FSDP(model,
             forward_prefetch=True
             )
 
+print(f"\n[FSDP] Rank {config.rank}: Model wrapping complete\n")
+
+if config.rank == 0:
+    print("\n[FSDP] Model structure after wrapping:")
+    for name, module in model.named_modules():
+        if isinstance(module, FSDP):
+            print(f"  FSDP Unit: {name}")
+        elif isinstance(module, (MoELayerParallel, ExpertMoESwiglu, TopKGateParallel)):
+            print(f"  MoE Component: {name} -> {type(module).__name__}")
 
 #%%
 # Instantiate the optimizer.
@@ -262,7 +310,6 @@ for step in range(training_steps):
     loss_accum  = 0.0
     micro_steps = accumulation_steps_desired # set the number of mirco steps to accumulate gradients over
     for micro_step in range(micro_steps):
-        
         # this is a gradient accumulation step. We accumulate gradients over desired accumalation steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
         x, y, shard_idx, tokens_abandoned = train_loader.next_batch()
         x, y = x.to(device), y.to(device) # move the data to the device. 
@@ -273,18 +320,16 @@ for step in range(training_steps):
 
         # we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs. The device must be cuda.
         
-        
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
             logits, loss, count_tokens_processed_by_each_expert = model(x, y)
 
-       
+        
         # divide the loss by the number of micro steps to get the average loss of the accumulated micro steps
         loss = loss / micro_steps 
         
         # Look at Pytorch documentation for more details on tensor.detach() vs. tensor.item()
         loss_accum += loss.detach() 
         loss.backward()
-       
 
 
     if config.FSDP:
