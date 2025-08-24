@@ -620,10 +620,14 @@ t5 = torch.empty(0, 7, device='cpu')
 t5
 t5.device
 # %%
+# the softmax of an already softmaxed tensor produces a 
 t6 = torch.tensor([4.0,3.0,2.0,2.0])
 sf = F.softmax(t6, dim=0)
 print(sf)
 sf2 = F.softmax(sf)
 print(sf2)
+
+# %%
+10/2
 
 # %%

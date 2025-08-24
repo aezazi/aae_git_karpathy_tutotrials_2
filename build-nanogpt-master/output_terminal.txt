@@ -47,8 +47,8 @@ Optimizer initialized on GPU rank 0, device cuda:0
 
 Optimizer initialized on GPU rank 1, device cuda:1
 
-effective batch size desired: 524288
-accumulation steps desired: 16
+effective batch size desired: 131072
+accumulation steps desired: 2
 
 Scheduler initialized on GPU rank 0, of 2
 
@@ -58,47 +58,47 @@ Scheduler initialized on GPU rank 1, of 2
 [DEBUG] Rank 0  started training step: 0
 [DEBUG] Rank 1  started training step: 0
 [DEBUG] Rank 1: Getting gate assignments...
-[DEBUG] shape of data to each gpu: [(16384, 768), (16384, 768)]
+[DEBUG] shape of data to each gpu: [(32768, 768), (32768, 768)]
 [DEBUG] Rank 0: Getting gate assignments...
-[DEBUG] Rank 1: Gate assignments complete, top_k_ids shape: torch.Size([16384, 2])
-[DEBUG] Rank 0: Gate assignments complete, top_k_ids shape: torch.Size([16384, 2])
-[DEBUG] Rank 1: Getting expert assignments...
+[DEBUG] Rank 0: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+[DEBUG] Rank 1: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
 [DEBUG] Rank 0: Getting expert assignments...
-[DEBUG] Rank 0: Sending 14539 tokens to GPU 0
-[DEBUG] Rank 0: Sending 12612 tokens to GPU 1
-----------------------------------------------------------------------
-[DEBUG] Rank 0 entered _communicate_tokens
-[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([14539, 2])
-[DEBUG] Rank 0 top_k_weights_padded: torch.Size([14539, 2])
-[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([12612, 2])
-[DEBUG] Rank 0 top_k_weights_padded: torch.Size([12612, 2])
-[DEBUG] Rank 0 send counts after looping gpus: = [14539, 12612], sum = 27151, tensor_rows = 12612
-[DEBUG] Rank 0 input_split_sizes_tensor: tensor([14539, 12612], device='cuda:0', dtype=torch.int32)
-
-[DEBUG] Rank 0 initiating dist.all_to_all_single(recv_counts, send_counts)
-
-[DEBUG] Rank 1: Sending 14727 tokens to GPU 0
-[DEBUG] Rank 1: Sending 12586 tokens to GPU 1
+[DEBUG] Rank 1: Getting expert assignments...
+[DEBUG] Rank 1: Sending 29100 tokens to GPU 0
+[DEBUG] Rank 1: Sending 25091 tokens to GPU 1
 ----------------------------------------------------------------------
 [DEBUG] Rank 1 entered _communicate_tokens
-[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([14727, 2])
-[DEBUG] Rank 1 top_k_weights_padded: torch.Size([14727, 2])
-[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([12586, 2])
-[DEBUG] Rank 1 top_k_weights_padded: torch.Size([12586, 2])
-[DEBUG] Rank 1 send counts after looping gpus: = [14727, 12586], sum = 27313, tensor_rows = 12586
-[DEBUG] Rank 1 input_split_sizes_tensor: tensor([14727, 12586], device='cuda:1', dtype=torch.int32)
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([29100, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([29100, 2])
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([25091, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([25091, 2])
+[DEBUG] Rank 1 send counts after looping gpus: = [29100, 25091], sum = 54191, tensor_rows = 25091
+[DEBUG] Rank 1 input_split_sizes_tensor: tensor([29100, 25091], device='cuda:1', dtype=torch.int32)
 
 [DEBUG] Rank 1 initiating dist.all_to_all_single(recv_counts, send_counts)
 
-[DEBUG] Rank 1 recv_counts: [12612, 12586]
-[DEBUG] Rank 0 recv_counts: [14539, 14727]
-[DEBUG] Rank 1 N_recv: 25198
-[DEBUG] Rank 0 N_recv: 29266
+[DEBUG] Rank 0: Sending 29266 tokens to GPU 0
+[DEBUG] Rank 0: Sending 25198 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_tokens
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([29266, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([29266, 2])
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([25198, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([25198, 2])
+[DEBUG] Rank 0 send counts after looping gpus: = [29266, 25198], sum = 54464, tensor_rows = 25198
+[DEBUG] Rank 0 input_split_sizes_tensor: tensor([29266, 25198], device='cuda:0', dtype=torch.int32)
 
-[DEBUG] Rank 1: Token communication complete, received 25198 tokens
+[DEBUG] Rank 0 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 1 recv_counts: [25198, 25091]
+[DEBUG] Rank 0 recv_counts: [29266, 29100]
+[DEBUG] Rank 1 N_recv: 50289
+[DEBUG] Rank 0 N_recv: 58366
+
+[DEBUG] Rank 1: Token communication complete, received 50289 tokens
 
 
-[DEBUG] Rank 0: Token communication complete, received 29266 tokens
+[DEBUG] Rank 0: Token communication complete, received 58366 tokens
 
 ---------------------------------------------------------------------- ---------------------------------------------------------------------- 
 
@@ -108,45 +108,1411 @@ Scheduler initialized on GPU rank 1, of 2
 
 [DEBUG] Rank 0 entered _process_local_experts
 
-[DEBUG] Rank 1: Processing 25198 tokens through local experts
+[DEBUG] Rank 1: Processing 50289 tokens through local experts
 
-[DEBUG] Rank 0: Processing 29266 tokens through local experts
+[DEBUG] Rank 0: Processing 58366 tokens through local experts
 
-[DEBUG] Rank 1: Input shapes - tokens: torch.Size([25198, 768]), expert_ids: torch.Size([25198, 2]), top_k_weights: torch.Size([25198, 2])
+[DEBUG] Rank 1: Input shapes - tokens: torch.Size([50289, 768]), expert_ids: torch.Size([50289, 2]), top_k_weights: torch.Size([50289, 2])
 
-[DEBUG] Rank 0: Input shapes - tokens: torch.Size([29266, 768]), expert_ids: torch.Size([29266, 2]), top_k_weights: torch.Size([29266, 2])
+[DEBUG] Rank 0: Input shapes - tokens: torch.Size([58366, 768]), expert_ids: torch.Size([58366, 2]), top_k_weights: torch.Size([58366, 2])
+
+[DEBUG] Rank 1: Starting token-by-token processing...
+
+[DEBUG] Rank 1: Processing token 0/50289[DEBUG] Rank 0: Starting token-by-token processing...
+
+
+[DEBUG] Rank 0: Processing token 0/58366
+[DEBUG] Rank 1: Processing token 5000/50289
+[DEBUG] Rank 0: Processing token 5000/58366
+[DEBUG] Rank 1: Processing token 10000/50289
+[DEBUG] Rank 0: Processing token 10000/58366
+[DEBUG] Rank 1: Processing token 15000/50289
+[DEBUG] Rank 0: Processing token 15000/58366
+[DEBUG] Rank 1: Processing token 20000/50289
+[DEBUG] Rank 0: Processing token 20000/58366
+[DEBUG] Rank 1: Processing token 25000/50289
+[DEBUG] Rank 0: Processing token 25000/58366
+[DEBUG] Rank 1: Processing token 30000/50289
+[DEBUG] Rank 0: Processing token 30000/58366
+[DEBUG] Rank 1: Processing token 35000/50289
+[DEBUG] Rank 0: Processing token 35000/58366
+[DEBUG] Rank 1: Processing token 40000/50289
+[DEBUG] Rank 0: Processing token 40000/58366
+[DEBUG] Rank 1: Processing token 45000/50289
+[DEBUG] Rank 0: Processing token 45000/58366
+[DEBUG] Rank 1: Processing token 50000/50289
+
+[DEBUG] Rank 1: num tokens processed by this rank: torch.Size([50289, 768])
+
+
+[DEBUG] Rank 1: Expected to process 50289 tokens, actually processed 50289
+
+----------------------------------------------------------------------
+[DEBUG] Rank 1 entered _communicate_results_back
+
+[DEBUG] Rank 1 processed 50289 tokens total
+[DEBUG] Rank 1 forward recv_counts were: [25198, 25091]
+
+
+[DEBUG] Rank 1 sending 25198 processed tokens back to GPU 0
+
+
+[DEBUG] Rank 1 sending 25091 processed tokens back to GPU 1
+
+
+[DEBUG] Rank 1 prepared 50289 tokens to send back
+
+
+[DEBUG] Rank 1 communicating reverse send counts: [25198, 25091]
+
+[DEBUG] Rank 0: Processing token 50000/58366
+[DEBUG] Rank 0: Processing token 55000/58366
+
+[DEBUG] Rank 0: num tokens processed by this rank: torch.Size([58366, 768])
+
+
+[DEBUG] Rank 0: Expected to process 58366 tokens, actually processed 58366
+
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_results_back
+
+[DEBUG] Rank 0 processed 58366 tokens total
+[DEBUG] Rank 0 forward recv_counts were: [29266, 29100]
+
+
+[DEBUG] Rank 0 sending 29266 processed tokens back to GPU 0
+
+
+[DEBUG] Rank 0 sending 29100 processed tokens back to GPU 1
+
+
+[DEBUG] Rank 0 prepared 58366 tokens to send back
+
+
+[DEBUG] Rank 0 communicating reverse send counts: [29266, 29100]
+
+[DEBUG] Rank 0 will receive [29266, 25198] tokens back from all GPUs (total: 54464)
+[DEBUG] Rank 1 will receive [29100, 25091] tokens back from all GPUs (total: 54191)
+[DEBUG] Rank 0 performing reverse all-to-all communication
+[DEBUG] Rank 1 performing reverse all-to-all communication
+[DEBUG] Rank 0 received 54464 processed tokens back from all GPUs
+[DEBUG] Rank 1 received 54191 processed tokens back from all GPUs
+[DEBUG] Rank 1: Getting gate assignments...
+[DEBUG] Rank 1: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+[DEBUG] Rank 1: Getting expert assignments...
+[DEBUG] shape of data to each gpu: [(32768, 768), (32768, 768)]
+[DEBUG] Rank 0: Getting gate assignments...
+[DEBUG] Rank 0: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+[DEBUG] Rank 0: Getting expert assignments...
+[DEBUG] Rank 0: Sending 27179 tokens to GPU 0
+[DEBUG] Rank 0: Sending 27859 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_tokens
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([27179, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([27179, 2])
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([27859, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([27859, 2])
+[DEBUG] Rank 0 send counts after looping gpus: = [27179, 27859], sum = 55038, tensor_rows = 27859
+[DEBUG] Rank 0 input_split_sizes_tensor: tensor([27179, 27859], device='cuda:0', dtype=torch.int32)
+
+[DEBUG] Rank 0 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 1: Sending 27330 tokens to GPU 0
+[DEBUG] Rank 1: Sending 28740 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 1 entered _communicate_tokens
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([27330, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([27330, 2])
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([28740, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([28740, 2])
+[DEBUG] Rank 1 send counts after looping gpus: = [27330, 28740], sum = 56070, tensor_rows = 28740
+[DEBUG] Rank 1 input_split_sizes_tensor: tensor([27330, 28740], device='cuda:1', dtype=torch.int32)
+
+[DEBUG] Rank 1 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 1 recv_counts: [27859, 28740]
+[DEBUG] Rank 0 recv_counts: [27179, 27330]
+[DEBUG] Rank 1 N_recv: 56599
+[DEBUG] Rank 0 N_recv: 54509
+
+[DEBUG] Rank 1: Token communication complete, received 56599 tokens
+
+
+[DEBUG] Rank 0: Token communication complete, received 54509 tokens
+
+---------------------------------------------------------------------- ---------------------------------------------------------------------- 
+
+
+
+[DEBUG] Rank 1 entered _process_local_experts
+
+[DEBUG] Rank 0 entered _process_local_experts
+
+[DEBUG] Rank 1: Processing 56599 tokens through local experts
+
+[DEBUG] Rank 0: Processing 54509 tokens through local experts
+
+[DEBUG] Rank 1: Input shapes - tokens: torch.Size([56599, 768]), expert_ids: torch.Size([56599, 2]), top_k_weights: torch.Size([56599, 2])
+
+[DEBUG] Rank 0: Input shapes - tokens: torch.Size([54509, 768]), expert_ids: torch.Size([54509, 2]), top_k_weights: torch.Size([54509, 2])
 
 [DEBUG] Rank 1: Starting token-by-token processing...
 
 [DEBUG] Rank 0: Starting token-by-token processing...
 
-[DEBUG] Rank 1: Processing token 0/25198
-[DEBUG] Rank 0: Processing token 0/29266
-[DEBUG] Rank 0: Processing token 5000/29266
-[DEBUG] Rank 1: Processing token 5000/25198
-[DEBUG] Rank 0: Processing token 10000/29266
-[DEBUG] Rank 1: Processing token 10000/25198
-[DEBUG] Rank 0: Processing token 15000/29266
-[DEBUG] Rank 1: Processing token 15000/25198
-[DEBUG] Rank 0: Processing token 20000/29266
-[DEBUG] Rank 1: Processing token 20000/25198
-[DEBUG] Rank 0: Processing token 25000/29266
-[DEBUG] Rank 1: Processing token 25000/25198
+[DEBUG] Rank 1: Processing token 0/56599
+[DEBUG] Rank 0: Processing token 0/54509
+[DEBUG] Rank 1: Processing token 5000/56599
+[DEBUG] Rank 0: Processing token 5000/54509
+[DEBUG] Rank 0: Processing token 10000/54509
+[DEBUG] Rank 1: Processing token 10000/56599
+[DEBUG] Rank 1: Processing token 15000/56599
+[DEBUG] Rank 0: Processing token 15000/54509
+[DEBUG] Rank 1: Processing token 20000/56599
+[DEBUG] Rank 0: Processing token 20000/54509
+[DEBUG] Rank 1: Processing token 25000/56599
+[DEBUG] Rank 0: Processing token 25000/54509
+[DEBUG] Rank 0: Processing token 30000/54509
+[DEBUG] Rank 1: Processing token 30000/56599
+[DEBUG] Rank 1: Processing token 35000/56599
+[DEBUG] Rank 0: Processing token 35000/54509
+[DEBUG] Rank 1: Processing token 40000/56599
+[DEBUG] Rank 0: Processing token 40000/54509
+[DEBUG] Rank 1: Processing token 45000/56599
+[DEBUG] Rank 0: Processing token 45000/54509
+[DEBUG] Rank 1: Processing token 50000/56599
+[DEBUG] Rank 0: Processing token 50000/54509
 
-[DEBUG] Rank 1: num  processed tokens: torch.Size([25198, 768])
-
-
-[DEBUG] Rank 1: tokens_to_send_back_to_gpu_rank  0  shape: torch.Size([14727, 768]) 
-
-
-[DEBUG] Rank 1: tokens_to_send_back_to_gpu_rank  1  shape: torch.Size([10471, 768]) 
-
-
-[DEBUG] Rank 0: num  processed tokens: torch.Size([29266, 768])
-
-
-[DEBUG] Rank 0: tokens_to_send_back_to_gpu_rank  0  shape: torch.Size([14539, 768]) 
+[DEBUG] Rank 0: num tokens processed by this rank: torch.Size([54509, 768])
 
 
-[DEBUG] Rank 0: tokens_to_send_back_to_gpu_rank  1  shape: torch.Size([12612, 768]) 
+[DEBUG] Rank 0: Expected to process 54509 tokens, actually processed 54509
 
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_results_back
+
+[DEBUG] Rank 0 processed 54509 tokens total
+[DEBUG] Rank 0 forward recv_counts were: [27179, 27330]
+
+
+[DEBUG] Rank 0 sending 27179 processed tokens back to GPU 0
+
+
+[DEBUG] Rank 0 sending 27330 processed tokens back to GPU 1
+
+
+[DEBUG] Rank 0 prepared 54509 tokens to send back
+
+
+[DEBUG] Rank 0 communicating reverse send counts: [27179, 27330]
+
+[DEBUG] Rank 1: Processing token 55000/56599
+
+[DEBUG] Rank 1: num tokens processed by this rank: torch.Size([56599, 768])
+
+
+[DEBUG] Rank 1: Expected to process 56599 tokens, actually processed 56599
+
+----------------------------------------------------------------------
+[DEBUG] Rank 1 entered _communicate_results_back
+
+[DEBUG] Rank 1 processed 56599 tokens total
+[DEBUG] Rank 1 forward recv_counts were: [27859, 28740]
+
+
+[DEBUG] Rank 1 sending 27859 processed tokens back to GPU 0
+
+
+[DEBUG] Rank 1 sending 28740 processed tokens back to GPU 1
+
+
+[DEBUG] Rank 1 prepared 56599 tokens to send back
+
+
+[DEBUG] Rank 1 communicating reverse send counts: [27859, 28740]
+
+[DEBUG] Rank 1 will receive [27330, 28740] tokens back from all GPUs (total: 56070)
+[DEBUG] Rank 0 will receive [27179, 27859] tokens back from all GPUs (total: 55038)
+[DEBUG] Rank 1 performing reverse all-to-all communication
+[DEBUG] Rank 1 received 56070 processed tokens back from all GPUs
+[DEBUG] Rank 0 performing reverse all-to-all communication
+[DEBUG] Rank 0 received 55038 processed tokens back from all GPUs
+[DEBUG] shape of data to each gpu: [(32768, 768), (32768, 768)]
+[DEBUG] Rank 1: Getting gate assignments...
+[DEBUG] Rank 0: Getting gate assignments...
+[DEBUG] Rank 1: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+[DEBUG] Rank 0: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+[DEBUG] Rank 1: Getting expert assignments...
+[DEBUG] Rank 0: Getting expert assignments...
+[DEBUG] Rank 1: Sending 31629 tokens to GPU 0
+[DEBUG] Rank 1: Sending 22618 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 1 entered _communicate_tokens
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([31629, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([31629, 2])
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([22618, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([22618, 2])
+[DEBUG] Rank 1 send counts after looping gpus: = [31629, 22618], sum = 54247, tensor_rows = 22618
+[DEBUG] Rank 1 input_split_sizes_tensor: tensor([31629, 22618], device='cuda:1', dtype=torch.int32)
+
+[DEBUG] Rank 1 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 0: Sending 30462 tokens to GPU 0
+[DEBUG] Rank 0: Sending 23544 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_tokens
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([30462, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([30462, 2])
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([23544, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([23544, 2])
+[DEBUG] Rank 0 send counts after looping gpus: = [30462, 23544], sum = 54006, tensor_rows = 23544
+[DEBUG] Rank 0 input_split_sizes_tensor: tensor([30462, 23544], device='cuda:0', dtype=torch.int32)
+
+[DEBUG] Rank 0 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 0 recv_counts: [30462, 31629]
+[DEBUG] Rank 1 recv_counts: [23544, 22618]
+[DEBUG] Rank 0 N_recv: 62091
+[DEBUG] Rank 1 N_recv: 46162
+
+[DEBUG] Rank 0: Token communication complete, received 62091 tokens
+
+
+[DEBUG] Rank 1: Token communication complete, received 46162 tokens
+
+---------------------------------------------------------------------- ---------------------------------------------------------------------- 
+
+
+
+[DEBUG] Rank 0 entered _process_local_experts
+
+[DEBUG] Rank 1 entered _process_local_experts
+
+[DEBUG] Rank 0: Processing 62091 tokens through local experts
+
+[DEBUG] Rank 1: Processing 46162 tokens through local experts
+
+[DEBUG] Rank 0: Input shapes - tokens: torch.Size([62091, 768]), expert_ids: torch.Size([62091, 2]), top_k_weights: torch.Size([62091, 2])
+
+[DEBUG] Rank 1: Input shapes - tokens: torch.Size([46162, 768]), expert_ids: torch.Size([46162, 2]), top_k_weights: torch.Size([46162, 2])
+
+[DEBUG] Rank 0: Starting token-by-token processing...
+
+[DEBUG] Rank 1: Starting token-by-token processing...
+
+[DEBUG] Rank 0: Processing token 0/62091
+[DEBUG] Rank 1: Processing token 0/46162
+[DEBUG] Rank 0: Processing token 5000/62091
+[DEBUG] Rank 1: Processing token 5000/46162
+[DEBUG] Rank 0: Processing token 10000/62091
+[DEBUG] Rank 1: Processing token 10000/46162
+[DEBUG] Rank 0: Processing token 15000/62091
+[DEBUG] Rank 1: Processing token 15000/46162
+[DEBUG] Rank 0: Processing token 20000/62091
+[DEBUG] Rank 1: Processing token 20000/46162
+[DEBUG] Rank 0: Processing token 25000/62091
+[DEBUG] Rank 1: Processing token 25000/46162
+[DEBUG] Rank 0: Processing token 30000/62091
+[DEBUG] Rank 1: Processing token 30000/46162
+[DEBUG] Rank 0: Processing token 35000/62091
+[DEBUG] Rank 1: Processing token 35000/46162
+[DEBUG] Rank 0: Processing token 40000/62091
+[DEBUG] Rank 1: Processing token 40000/46162
+[DEBUG] Rank 0: Processing token 45000/62091
+[DEBUG] Rank 1: Processing token 45000/46162
+
+[DEBUG] Rank 1: num tokens processed by this rank: torch.Size([46162, 768])
+
+
+[DEBUG] Rank 1: Expected to process 46162 tokens, actually processed 46162
+
+----------------------------------------------------------------------
+[DEBUG] Rank 1 entered _communicate_results_back
+
+[DEBUG] Rank 1 processed 46162 tokens total
+[DEBUG] Rank 1 forward recv_counts were: [23544, 22618]
+
+
+[DEBUG] Rank 1 sending 23544 processed tokens back to GPU 0
+
+
+[DEBUG] Rank 1 sending 22618 processed tokens back to GPU 1
+
+
+[DEBUG] Rank 1 prepared 46162 tokens to send back
+
+
+[DEBUG] Rank 1 communicating reverse send counts: [23544, 22618]
+
+[DEBUG] Rank 0: Processing token 50000/62091
+[DEBUG] Rank 0: Processing token 55000/62091
+[DEBUG] Rank 0: Processing token 60000/62091
+
+[DEBUG] Rank 0: num tokens processed by this rank: torch.Size([62091, 768])
+
+
+[DEBUG] Rank 0: Expected to process 62091 tokens, actually processed 62091
+
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_results_back
+
+[DEBUG] Rank 0 processed 62091 tokens total
+[DEBUG] Rank 0 forward recv_counts were: [30462, 31629]
+
+
+[DEBUG] Rank 0 sending 30462 processed tokens back to GPU 0
+
+
+[DEBUG] Rank 0 sending 31629 processed tokens back to GPU 1
+
+
+[DEBUG] Rank 0 prepared 62091 tokens to send back
+
+
+[DEBUG] Rank 0 communicating reverse send counts: [30462, 31629]
+
+[DEBUG] Rank 0 will receive [30462, 23544] tokens back from all GPUs (total: 54006)
+[DEBUG] Rank 1 will receive [31629, 22618] tokens back from all GPUs (total: 54247)
+[DEBUG] Rank 0 performing reverse all-to-all communication
+[DEBUG] Rank 1 performing reverse all-to-all communication
+[DEBUG] Rank 0 received 54006 processed tokens back from all GPUs
+[DEBUG] Rank 1 received 54247 processed tokens back from all GPUs
+[DEBUG] Rank 1: Getting gate assignments...
+[DEBUG] Rank 1: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+[DEBUG] Rank 1: Getting expert assignments...
+[DEBUG] shape of data to each gpu: [(32768, 768), (32768, 768)]
+[DEBUG] Rank 0: Getting gate assignments...
+[DEBUG] Rank 0: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+[DEBUG] Rank 0: Getting expert assignments...
+[DEBUG] Rank 0: Sending 29527 tokens to GPU 0
+[DEBUG] Rank 0: Sending 23892 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_tokens
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([29527, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([29527, 2])
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([23892, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([23892, 2])
+[DEBUG] Rank 0 send counts after looping gpus: = [29527, 23892], sum = 53419, tensor_rows = 23892
+[DEBUG] Rank 0 input_split_sizes_tensor: tensor([29527, 23892], device='cuda:0', dtype=torch.int32)
+
+[DEBUG] Rank 0 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 1: Sending 29446 tokens to GPU 0
+[DEBUG] Rank 1: Sending 25951 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 1 entered _communicate_tokens
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([29446, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([29446, 2])
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([25951, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([25951, 2])
+[DEBUG] Rank 1 send counts after looping gpus: = [29446, 25951], sum = 55397, tensor_rows = 25951
+[DEBUG] Rank 1 input_split_sizes_tensor: tensor([29446, 25951], device='cuda:1', dtype=torch.int32)
+
+[DEBUG] Rank 1 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 1 recv_counts: [23892, 25951]
+[DEBUG] Rank 0 recv_counts: [29527, 29446]
+[DEBUG] Rank 1 N_recv: 49843
+[DEBUG] Rank 0 N_recv: 58973
+
+[DEBUG] Rank 1: Token communication complete, received 49843 tokens
+
+
+[DEBUG] Rank 0: Token communication complete, received 58973 tokens
+
+---------------------------------------------------------------------- ---------------------------------------------------------------------- 
+
+
+
+[DEBUG] Rank 1 entered _process_local_experts
+
+[DEBUG] Rank 0 entered _process_local_experts
+
+[DEBUG] Rank 1: Processing 49843 tokens through local experts
+
+[DEBUG] Rank 0: Processing 58973 tokens through local experts
+
+[DEBUG] Rank 1: Input shapes - tokens: torch.Size([49843, 768]), expert_ids: torch.Size([49843, 2]), top_k_weights: torch.Size([49843, 2])
+
+[DEBUG] Rank 0: Input shapes - tokens: torch.Size([58973, 768]), expert_ids: torch.Size([58973, 2]), top_k_weights: torch.Size([58973, 2])
+
+[DEBUG] Rank 1: Starting token-by-token processing...
+
+[DEBUG] Rank 0: Starting token-by-token processing...
+
+[DEBUG] Rank 1: Processing token 0/49843
+[DEBUG] Rank 0: Processing token 0/58973
+[DEBUG] Rank 1: Processing token 5000/49843
+[DEBUG] Rank 0: Processing token 5000/58973
+[DEBUG] Rank 1: Processing token 10000/49843
+[DEBUG] Rank 0: Processing token 10000/58973
+[DEBUG] Rank 1: Processing token 15000/49843
+[DEBUG] Rank 0: Processing token 15000/58973
+[DEBUG] Rank 1: Processing token 20000/49843
+[DEBUG] Rank 0: Processing token 20000/58973
+[DEBUG] Rank 1: Processing token 25000/49843
+[DEBUG] Rank 0: Processing token 25000/58973
+[DEBUG] Rank 1: Processing token 30000/49843
+[DEBUG] Rank 0: Processing token 30000/58973
+[DEBUG] Rank 1: Processing token 35000/49843
+[DEBUG] Rank 0: Processing token 35000/58973
+[DEBUG] Rank 1: Processing token 40000/49843
+[DEBUG] Rank 0: Processing token 40000/58973
+[DEBUG] Rank 1: Processing token 45000/49843
+[DEBUG] Rank 0: Processing token 45000/58973
+
+[DEBUG] Rank 1: num tokens processed by this rank: torch.Size([49843, 768])
+
+
+[DEBUG] Rank 1: Expected to process 49843 tokens, actually processed 49843
+
+----------------------------------------------------------------------
+[DEBUG] Rank 1 entered _communicate_results_back
+
+[DEBUG] Rank 1 processed 49843 tokens total
+[DEBUG] Rank 1 forward recv_counts were: [23892, 25951]
+
+
+[DEBUG] Rank 1 sending 23892 processed tokens back to GPU 0
+
+
+[DEBUG] Rank 1 sending 25951 processed tokens back to GPU 1
+
+
+[DEBUG] Rank 1 prepared 49843 tokens to send back
+
+
+[DEBUG] Rank 1 communicating reverse send counts: [23892, 25951]
+
+[DEBUG] Rank 0: Processing token 50000/58973
+[DEBUG] Rank 0: Processing token 55000/58973
+
+[DEBUG] Rank 0: num tokens processed by this rank: torch.Size([58973, 768])
+
+
+[DEBUG] Rank 0: Expected to process 58973 tokens, actually processed 58973
+
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_results_back
+
+[DEBUG] Rank 0 processed 58973 tokens total
+[DEBUG] Rank 0 forward recv_counts were: [29527, 29446]
+
+
+[DEBUG] Rank 0 sending 29527 processed tokens back to GPU 0
+
+
+[DEBUG] Rank 0 sending 29446 processed tokens back to GPU 1
+
+
+[DEBUG] Rank 0 prepared 58973 tokens to send back
+
+
+[DEBUG] Rank 0 communicating reverse send counts: [29527, 29446]
+
+[DEBUG] Rank 0 will receive [29527, 23892] tokens back from all GPUs (total: 53419)
+[DEBUG] Rank 1 will receive [29446, 25951] tokens back from all GPUs (total: 55397)
+[DEBUG] Rank 0 performing reverse all-to-all communication
+[DEBUG] Rank 1 performing reverse all-to-all communication
+[DEBUG] Rank 0 received 53419 processed tokens back from all GPUs
+[DEBUG] Rank 1 received 55397 processed tokens back from all GPUs
+[DEBUG] Rank 1: Getting gate assignments...
+[DEBUG] shape of data to each gpu: [(32768, 768), (32768, 768)]
+[DEBUG] Rank 0: Getting gate assignments...
+[DEBUG] Rank 1: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+[DEBUG] Rank 1: Getting expert assignments...[DEBUG] Rank 0: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+
+[DEBUG] Rank 0: Getting expert assignments...
+[DEBUG] Rank 0: Sending 32382 tokens to GPU 0
+[DEBUG] Rank 0: Sending 9430 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_tokens
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([32382, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([32382, 2])
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([9430, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([9430, 2])
+[DEBUG] Rank 0 send counts after looping gpus: = [32382, 9430], sum = 41812, tensor_rows = 9430
+[DEBUG] Rank 0 input_split_sizes_tensor: tensor([32382,  9430], device='cuda:0', dtype=torch.int32)
+
+[DEBUG] Rank 0 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 1: Sending 32726 tokens to GPU 0
+[DEBUG] Rank 1: Sending 9979 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 1 entered _communicate_tokens
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([32726, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([32726, 2])
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([9979, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([9979, 2])
+[DEBUG] Rank 1 send counts after looping gpus: = [32726, 9979], sum = 42705, tensor_rows = 9979
+[DEBUG] Rank 1 input_split_sizes_tensor: tensor([32726,  9979], device='cuda:1', dtype=torch.int32)
+
+[DEBUG] Rank 1 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 1 recv_counts: [9430, 9979]
+[DEBUG] Rank 0 recv_counts: [32382, 32726]
+[DEBUG] Rank 1 N_recv: 19409
+[DEBUG] Rank 0 N_recv: 65108
+
+[DEBUG] Rank 1: Token communication complete, received 19409 tokens
+
+
+[DEBUG] Rank 0: Token communication complete, received 65108 tokens
+
+---------------------------------------------------------------------- ---------------------------------------------------------------------- 
+
+
+
+[DEBUG] Rank 1 entered _process_local_experts
+
+[DEBUG] Rank 0 entered _process_local_experts
+
+[DEBUG] Rank 1: Processing 19409 tokens through local experts
+
+[DEBUG] Rank 0: Processing 65108 tokens through local experts
+
+[DEBUG] Rank 1: Input shapes - tokens: torch.Size([19409, 768]), expert_ids: torch.Size([19409, 2]), top_k_weights: torch.Size([19409, 2])
+
+[DEBUG] Rank 0: Input shapes - tokens: torch.Size([65108, 768]), expert_ids: torch.Size([65108, 2]), top_k_weights: torch.Size([65108, 2])
+
+[DEBUG] Rank 1: Starting token-by-token processing...
+
+[DEBUG] Rank 0: Starting token-by-token processing...
+
+[DEBUG] Rank 1: Processing token 0/19409
+[DEBUG] Rank 0: Processing token 0/65108
+[DEBUG] Rank 1: Processing token 5000/19409
+[DEBUG] Rank 0: Processing token 5000/65108
+[DEBUG] Rank 1: Processing token 10000/19409
+[DEBUG] Rank 0: Processing token 10000/65108
+[DEBUG] Rank 0: Processing token 15000/65108
+[DEBUG] Rank 1: Processing token 15000/19409
+
+[DEBUG] Rank 1: num tokens processed by this rank: torch.Size([19409, 768])
+
+
+[DEBUG] Rank 1: Expected to process 19409 tokens, actually processed 19409
+
+----------------------------------------------------------------------
+[DEBUG] Rank 1 entered _communicate_results_back
+
+[DEBUG] Rank 1 processed 19409 tokens total
+[DEBUG] Rank 1 forward recv_counts were: [9430, 9979]
+
+
+[DEBUG] Rank 1 sending 9430 processed tokens back to GPU 0
+
+
+[DEBUG] Rank 1 sending 9979 processed tokens back to GPU 1
+
+
+[DEBUG] Rank 1 prepared 19409 tokens to send back
+
+
+[DEBUG] Rank 1 communicating reverse send counts: [9430, 9979]
+
+[DEBUG] Rank 0: Processing token 20000/65108
+[DEBUG] Rank 0: Processing token 25000/65108
+[DEBUG] Rank 0: Processing token 30000/65108
+[DEBUG] Rank 0: Processing token 35000/65108
+[DEBUG] Rank 0: Processing token 40000/65108
+[DEBUG] Rank 0: Processing token 45000/65108
+[DEBUG] Rank 0: Processing token 50000/65108
+[DEBUG] Rank 0: Processing token 55000/65108
+[DEBUG] Rank 0: Processing token 60000/65108
+[DEBUG] Rank 0: Processing token 65000/65108
+
+[DEBUG] Rank 0: num tokens processed by this rank: torch.Size([65108, 768])
+
+
+[DEBUG] Rank 0: Expected to process 65108 tokens, actually processed 65108
+
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_results_back
+
+[DEBUG] Rank 0 processed 65108 tokens total
+[DEBUG] Rank 0 forward recv_counts were: [32382, 32726]
+
+
+[DEBUG] Rank 0 sending 32382 processed tokens back to GPU 0
+
+
+[DEBUG] Rank 0 sending 32726 processed tokens back to GPU 1
+
+
+[DEBUG] Rank 0 prepared 65108 tokens to send back
+
+
+[DEBUG] Rank 0 communicating reverse send counts: [32382, 32726]
+
+[DEBUG] Rank 0 will receive [32382, 9430] tokens back from all GPUs (total: 41812)
+[DEBUG] Rank 1 will receive [32726, 9979] tokens back from all GPUs (total: 42705)
+[DEBUG] Rank 0 performing reverse all-to-all communication
+[DEBUG] Rank 1 performing reverse all-to-all communication
+[DEBUG] Rank 0 received 41812 processed tokens back from all GPUs
+[DEBUG] Rank 1 received 42705 processed tokens back from all GPUs
+[DEBUG] Rank 1: Getting gate assignments...
+[DEBUG] Rank 1: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+[DEBUG] Rank 1: Getting expert assignments...
+[DEBUG] shape of data to each gpu: [(32768, 768), (32768, 768)]
+[DEBUG] Rank 0: Getting gate assignments...
+[DEBUG] Rank 0: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+[DEBUG] Rank 0: Getting expert assignments...
+[DEBUG] Rank 1: Sending 30316 tokens to GPU 0
+[DEBUG] Rank 1: Sending 19468 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 1 entered _communicate_tokens
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([30316, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([30316, 2])
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([19468, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([19468, 2])
+[DEBUG] Rank 1 send counts after looping gpus: = [30316, 19468], sum = 49784, tensor_rows = 19468
+[DEBUG] Rank 1 input_split_sizes_tensor: tensor([30316, 19468], device='cuda:1', dtype=torch.int32)
+
+[DEBUG] Rank 1 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 0: Sending 31198 tokens to GPU 0
+[DEBUG] Rank 0: Sending 23615 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_tokens
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([31198, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([31198, 2])
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([23615, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([23615, 2])
+[DEBUG] Rank 0 send counts after looping gpus: = [31198, 23615], sum = 54813, tensor_rows = 23615
+[DEBUG] Rank 0 input_split_sizes_tensor: tensor([31198, 23615], device='cuda:0', dtype=torch.int32)
+
+[DEBUG] Rank 0 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 0 recv_counts: [31198, 30316]
+[DEBUG] Rank 1 recv_counts: [23615, 19468]
+[DEBUG] Rank 0 N_recv: 61514
+[DEBUG] Rank 1 N_recv: 43083
+
+[DEBUG] Rank 0: Token communication complete, received 61514 tokens
+
+
+[DEBUG] Rank 1: Token communication complete, received 43083 tokens
+
+---------------------------------------------------------------------- ---------------------------------------------------------------------- 
+
+
+
+[DEBUG] Rank 0 entered _process_local_experts
+
+[DEBUG] Rank 1 entered _process_local_experts
+
+[DEBUG] Rank 0: Processing 61514 tokens through local experts
+
+[DEBUG] Rank 1: Processing 43083 tokens through local experts
+
+[DEBUG] Rank 0: Input shapes - tokens: torch.Size([61514, 768]), expert_ids: torch.Size([61514, 2]), top_k_weights: torch.Size([61514, 2])
+
+[DEBUG] Rank 1: Input shapes - tokens: torch.Size([43083, 768]), expert_ids: torch.Size([43083, 2]), top_k_weights: torch.Size([43083, 2])
+
+[DEBUG] Rank 0: Starting token-by-token processing...
+
+[DEBUG] Rank 1: Starting token-by-token processing...
+
+[DEBUG] Rank 0: Processing token 0/61514
+[DEBUG] Rank 1: Processing token 0/43083
+[DEBUG] Rank 0: Processing token 5000/61514
+[DEBUG] Rank 1: Processing token 5000/43083
+[DEBUG] Rank 0: Processing token 10000/61514
+[DEBUG] Rank 1: Processing token 10000/43083
+[DEBUG] Rank 1: Processing token 15000/43083
+[DEBUG] Rank 0: Processing token 15000/61514
+[DEBUG] Rank 0: Processing token 20000/61514
+[DEBUG] Rank 1: Processing token 20000/43083
+[DEBUG] Rank 0: Processing token 25000/61514
+[DEBUG] Rank 1: Processing token 25000/43083
+[DEBUG] Rank 0: Processing token 30000/61514
+[DEBUG] Rank 1: Processing token 30000/43083
+[DEBUG] Rank 0: Processing token 35000/61514
+[DEBUG] Rank 1: Processing token 35000/43083
+[DEBUG] Rank 1: Processing token 40000/43083
+[DEBUG] Rank 0: Processing token 40000/61514
+
+[DEBUG] Rank 1: num tokens processed by this rank: torch.Size([43083, 768])
+
+
+[DEBUG] Rank 1: Expected to process 43083 tokens, actually processed 43083
+
+----------------------------------------------------------------------
+[DEBUG] Rank 1 entered _communicate_results_back
+
+[DEBUG] Rank 1 processed 43083 tokens total
+[DEBUG] Rank 1 forward recv_counts were: [23615, 19468]
+
+
+[DEBUG] Rank 1 sending 23615 processed tokens back to GPU 0
+
+
+[DEBUG] Rank 1 sending 19468 processed tokens back to GPU 1
+
+
+[DEBUG] Rank 1 prepared 43083 tokens to send back
+
+
+[DEBUG] Rank 1 communicating reverse send counts: [23615, 19468]
+
+[DEBUG] Rank 0: Processing token 45000/61514
+[DEBUG] Rank 0: Processing token 50000/61514
+[DEBUG] Rank 0: Processing token 55000/61514
+[DEBUG] Rank 0: Processing token 60000/61514
+
+[DEBUG] Rank 0: num tokens processed by this rank: torch.Size([61514, 768])
+
+
+[DEBUG] Rank 0: Expected to process 61514 tokens, actually processed 61514
+
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_results_back
+
+[DEBUG] Rank 0 processed 61514 tokens total
+[DEBUG] Rank 0 forward recv_counts were: [31198, 30316]
+
+
+[DEBUG] Rank 0 sending 31198 processed tokens back to GPU 0
+
+
+[DEBUG] Rank 0 sending 30316 processed tokens back to GPU 1
+
+
+[DEBUG] Rank 0 prepared 61514 tokens to send back
+
+
+[DEBUG] Rank 0 communicating reverse send counts: [31198, 30316]
+
+[DEBUG] Rank 0 will receive [31198, 23615] tokens back from all GPUs (total: 54813)
+[DEBUG] Rank 1 will receive [30316, 19468] tokens back from all GPUs (total: 49784)
+[DEBUG] Rank 0 performing reverse all-to-all communication
+[DEBUG] Rank 1 performing reverse all-to-all communication
+[DEBUG] Rank 0 received 54813 processed tokens back from all GPUs
+[DEBUG] Rank 1 received 49784 processed tokens back from all GPUs
+[DEBUG] Rank 1: Getting gate assignments...
+[DEBUG] shape of data to each gpu: [(32768, 768), (32768, 768)]
+[DEBUG] Rank 1: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+[DEBUG] Rank 0: Getting gate assignments...
+[DEBUG] Rank 1: Getting expert assignments...
+[DEBUG] Rank 0: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+[DEBUG] Rank 0: Getting expert assignments...
+[DEBUG] Rank 1: Sending 30144 tokens to GPU 0
+[DEBUG] Rank 1: Sending 20871 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 1 entered _communicate_tokens
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([30144, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([30144, 2])
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([20871, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([20871, 2])
+[DEBUG] Rank 1 send counts after looping gpus: = [30144, 20871], sum = 51015, tensor_rows = 20871
+[DEBUG] Rank 1 input_split_sizes_tensor: tensor([30144, 20871], device='cuda:1', dtype=torch.int32)
+
+[DEBUG] Rank 1 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 0: Sending 31594 tokens to GPU 0
+[DEBUG] Rank 0: Sending 25004 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_tokens
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([31594, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([31594, 2])
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([25004, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([25004, 2])
+[DEBUG] Rank 0 send counts after looping gpus: = [31594, 25004], sum = 56598, tensor_rows = 25004
+[DEBUG] Rank 0 input_split_sizes_tensor: tensor([31594, 25004], device='cuda:0', dtype=torch.int32)
+
+[DEBUG] Rank 0 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 0 recv_counts: [31594, 30144]
+[DEBUG] Rank 1 recv_counts: [25004, 20871]
+[DEBUG] Rank 0 N_recv: 61738
+[DEBUG] Rank 1 N_recv: 45875
+
+[DEBUG] Rank 0: Token communication complete, received 61738 tokens
+
+
+[DEBUG] Rank 1: Token communication complete, received 45875 tokens
+
+---------------------------------------------------------------------- ---------------------------------------------------------------------- 
+
+
+
+[DEBUG] Rank 0 entered _process_local_experts
+
+[DEBUG] Rank 1 entered _process_local_experts
+
+[DEBUG] Rank 0: Processing 61738 tokens through local experts
+
+[DEBUG] Rank 1: Processing 45875 tokens through local experts
+
+[DEBUG] Rank 0: Input shapes - tokens: torch.Size([61738, 768]), expert_ids: torch.Size([61738, 2]), top_k_weights: torch.Size([61738, 2])
+
+[DEBUG] Rank 1: Input shapes - tokens: torch.Size([45875, 768]), expert_ids: torch.Size([45875, 2]), top_k_weights: torch.Size([45875, 2])
+
+[DEBUG] Rank 0: Starting token-by-token processing...
+
+[DEBUG] Rank 1: Starting token-by-token processing...
+
+[DEBUG] Rank 0: Processing token 0/61738
+[DEBUG] Rank 1: Processing token 0/45875
+[DEBUG] Rank 1: Processing token 5000/45875
+[DEBUG] Rank 0: Processing token 5000/61738
+[DEBUG] Rank 1: Processing token 10000/45875
+[DEBUG] Rank 0: Processing token 10000/61738
+[DEBUG] Rank 0: Processing token 15000/61738
+[DEBUG] Rank 1: Processing token 15000/45875
+[DEBUG] Rank 0: Processing token 20000/61738
+[DEBUG] Rank 1: Processing token 20000/45875
+[DEBUG] Rank 1: Processing token 25000/45875
+[DEBUG] Rank 0: Processing token 25000/61738
+[DEBUG] Rank 1: Processing token 30000/45875
+[DEBUG] Rank 0: Processing token 30000/61738
+[DEBUG] Rank 0: Processing token 35000/61738
+[DEBUG] Rank 1: Processing token 35000/45875
+[DEBUG] Rank 0: Processing token 40000/61738
+[DEBUG] Rank 1: Processing token 40000/45875
+[DEBUG] Rank 0: Processing token 45000/61738
+[DEBUG] Rank 1: Processing token 45000/45875
+
+[DEBUG] Rank 1: num tokens processed by this rank: torch.Size([45875, 768])
+
+
+[DEBUG] Rank 1: Expected to process 45875 tokens, actually processed 45875
+
+----------------------------------------------------------------------
+[DEBUG] Rank 1 entered _communicate_results_back
+
+[DEBUG] Rank 1 processed 45875 tokens total
+[DEBUG] Rank 1 forward recv_counts were: [25004, 20871]
+
+
+[DEBUG] Rank 1 sending 25004 processed tokens back to GPU 0
+
+
+[DEBUG] Rank 1 sending 20871 processed tokens back to GPU 1
+
+
+[DEBUG] Rank 1 prepared 45875 tokens to send back
+
+
+[DEBUG] Rank 1 communicating reverse send counts: [25004, 20871]
+
+[DEBUG] Rank 0: Processing token 50000/61738
+[DEBUG] Rank 0: Processing token 55000/61738
+[DEBUG] Rank 0: Processing token 60000/61738
+
+[DEBUG] Rank 0: num tokens processed by this rank: torch.Size([61738, 768])
+
+
+[DEBUG] Rank 0: Expected to process 61738 tokens, actually processed 61738
+
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_results_back
+
+[DEBUG] Rank 0 processed 61738 tokens total
+[DEBUG] Rank 0 forward recv_counts were: [31594, 30144]
+
+
+[DEBUG] Rank 0 sending 31594 processed tokens back to GPU 0
+
+
+[DEBUG] Rank 0 sending 30144 processed tokens back to GPU 1
+
+
+[DEBUG] Rank 0 prepared 61738 tokens to send back
+
+
+[DEBUG] Rank 0 communicating reverse send counts: [31594, 30144]
+
+[DEBUG] Rank 0 will receive [31594, 25004] tokens back from all GPUs (total: 56598)
+[DEBUG] Rank 1 will receive [30144, 20871] tokens back from all GPUs (total: 51015)
+[DEBUG] Rank 0 performing reverse all-to-all communication
+[DEBUG] Rank 1 performing reverse all-to-all communication
+[DEBUG] Rank 0 received 56598 processed tokens back from all GPUs
+[DEBUG] Rank 1 received 51015 processed tokens back from all GPUs
+[DEBUG] Rank 1: Getting gate assignments...
+[DEBUG] Rank 1: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+[DEBUG] Rank 1: Getting expert assignments...
+[DEBUG] shape of data to each gpu: [(32768, 768), (32768, 768)]
+[DEBUG] Rank 0: Getting gate assignments...
+[DEBUG] Rank 0: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+[DEBUG] Rank 0: Getting expert assignments...
+[DEBUG] Rank 1: Sending 25682 tokens to GPU 0
+[DEBUG] Rank 1: Sending 30675 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 1 entered _communicate_tokens
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([25682, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([25682, 2])
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([30675, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([30675, 2])
+[DEBUG] Rank 1 send counts after looping gpus: = [25682, 30675], sum = 56357, tensor_rows = 30675
+[DEBUG] Rank 1 input_split_sizes_tensor: tensor([25682, 30675], device='cuda:1', dtype=torch.int32)
+
+[DEBUG] Rank 1 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 0: Sending 26907 tokens to GPU 0
+[DEBUG] Rank 0: Sending 31144 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_tokens
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([26907, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([26907, 2])
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([31144, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([31144, 2])
+[DEBUG] Rank 0 send counts after looping gpus: = [26907, 31144], sum = 58051, tensor_rows = 31144
+[DEBUG] Rank 0 input_split_sizes_tensor: tensor([26907, 31144], device='cuda:0', dtype=torch.int32)
+
+[DEBUG] Rank 0 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 0 recv_counts: [26907, 25682]
+[DEBUG] Rank 1 recv_counts: [31144, 30675]
+[DEBUG] Rank 0 N_recv: 52589
+[DEBUG] Rank 1 N_recv: 61819
+
+[DEBUG] Rank 0: Token communication complete, received 52589 tokens
+
+
+[DEBUG] Rank 1: Token communication complete, received 61819 tokens
+
+---------------------------------------------------------------------- ---------------------------------------------------------------------- 
+
+
+
+[DEBUG] Rank 0 entered _process_local_experts
+
+[DEBUG] Rank 1 entered _process_local_experts
+
+[DEBUG] Rank 0: Processing 52589 tokens through local experts
+
+[DEBUG] Rank 1: Processing 61819 tokens through local experts
+
+[DEBUG] Rank 0: Input shapes - tokens: torch.Size([52589, 768]), expert_ids: torch.Size([52589, 2]), top_k_weights: torch.Size([52589, 2])
+
+[DEBUG] Rank 1: Input shapes - tokens: torch.Size([61819, 768]), expert_ids: torch.Size([61819, 2]), top_k_weights: torch.Size([61819, 2])
+
+[DEBUG] Rank 0: Starting token-by-token processing...
+
+[DEBUG] Rank 1: Starting token-by-token processing...
+
+[DEBUG] Rank 0: Processing token 0/52589
+[DEBUG] Rank 1: Processing token 0/61819
+[DEBUG] Rank 0: Processing token 5000/52589
+[DEBUG] Rank 1: Processing token 5000/61819
+[DEBUG] Rank 0: Processing token 10000/52589
+[DEBUG] Rank 1: Processing token 10000/61819
+[DEBUG] Rank 0: Processing token 15000/52589
+[DEBUG] Rank 1: Processing token 15000/61819
+[DEBUG] Rank 0: Processing token 20000/52589
+[DEBUG] Rank 1: Processing token 20000/61819
+[DEBUG] Rank 0: Processing token 25000/52589
+[DEBUG] Rank 1: Processing token 25000/61819
+[DEBUG] Rank 0: Processing token 30000/52589
+[DEBUG] Rank 1: Processing token 30000/61819
+[DEBUG] Rank 0: Processing token 35000/52589
+[DEBUG] Rank 1: Processing token 35000/61819
+[DEBUG] Rank 0: Processing token 40000/52589
+[DEBUG] Rank 1: Processing token 40000/61819
+[DEBUG] Rank 0: Processing token 45000/52589
+[DEBUG] Rank 1: Processing token 45000/61819
+[DEBUG] Rank 0: Processing token 50000/52589
+[DEBUG] Rank 1: Processing token 50000/61819
+
+[DEBUG] Rank 0: num tokens processed by this rank: torch.Size([52589, 768])
+
+
+[DEBUG] Rank 0: Expected to process 52589 tokens, actually processed 52589
+
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_results_back
+
+[DEBUG] Rank 0 processed 52589 tokens total
+[DEBUG] Rank 0 forward recv_counts were: [26907, 25682]
+
+
+[DEBUG] Rank 0 sending 26907 processed tokens back to GPU 0
+
+
+[DEBUG] Rank 0 sending 25682 processed tokens back to GPU 1
+
+
+[DEBUG] Rank 0 prepared 52589 tokens to send back
+
+
+[DEBUG] Rank 0 communicating reverse send counts: [26907, 25682]
+
+[DEBUG] Rank 1: Processing token 55000/61819
+[DEBUG] Rank 1: Processing token 60000/61819
+
+[DEBUG] Rank 1: num tokens processed by this rank: torch.Size([61819, 768])
+
+
+[DEBUG] Rank 1: Expected to process 61819 tokens, actually processed 61819
+
+----------------------------------------------------------------------
+[DEBUG] Rank 1 entered _communicate_results_back
+
+[DEBUG] Rank 1 processed 61819 tokens total
+[DEBUG] Rank 1 forward recv_counts were: [31144, 30675]
+
+
+[DEBUG] Rank 1 sending 31144 processed tokens back to GPU 0
+
+
+[DEBUG] Rank 1 sending 30675 processed tokens back to GPU 1
+
+
+[DEBUG] Rank 1 prepared 61819 tokens to send back
+
+
+[DEBUG] Rank 1 communicating reverse send counts: [31144, 30675]
+
+[DEBUG] Rank 1 will receive [25682, 30675] tokens back from all GPUs (total: 56357)
+[DEBUG] Rank 0 will receive [26907, 31144] tokens back from all GPUs (total: 58051)
+[DEBUG] Rank 1 performing reverse all-to-all communication
+[DEBUG] Rank 1 received 56357 processed tokens back from all GPUs
+[DEBUG] Rank 0 performing reverse all-to-all communication
+[DEBUG] Rank 0 received 58051 processed tokens back from all GPUs
+[DEBUG] shape of data to each gpu: [(32768, 768), (32768, 768)]
+[DEBUG] Rank 1: Getting gate assignments...
+[DEBUG] Rank 0: Getting gate assignments...
+[DEBUG] Rank 1: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+[DEBUG] Rank 1: Getting expert assignments...[DEBUG] Rank 0: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+
+[DEBUG] Rank 0: Getting expert assignments...
+[DEBUG] Rank 1: Sending 19255 tokens to GPU 0
+[DEBUG] Rank 1: Sending 30511 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 1 entered _communicate_tokens
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([19255, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([19255, 2])
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([30511, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([30511, 2])
+[DEBUG] Rank 1 send counts after looping gpus: = [19255, 30511], sum = 49766, tensor_rows = 30511
+[DEBUG] Rank 1 input_split_sizes_tensor: tensor([19255, 30511], device='cuda:1', dtype=torch.int32)
+
+[DEBUG] Rank 1 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 0: Sending 25788 tokens to GPU 0
+[DEBUG] Rank 0: Sending 29459 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_tokens
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([25788, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([25788, 2])
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([29459, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([29459, 2])
+[DEBUG] Rank 0 send counts after looping gpus: = [25788, 29459], sum = 55247, tensor_rows = 29459
+[DEBUG] Rank 0 input_split_sizes_tensor: tensor([25788, 29459], device='cuda:0', dtype=torch.int32)
+
+[DEBUG] Rank 0 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 0 recv_counts: [25788, 19255]
+[DEBUG] Rank 1 recv_counts: [29459, 30511]
+[DEBUG] Rank 0 N_recv: 45043
+[DEBUG] Rank 1 N_recv: 59970
+
+[DEBUG] Rank 0: Token communication complete, received 45043 tokens
+
+
+[DEBUG] Rank 1: Token communication complete, received 59970 tokens
+
+---------------------------------------------------------------------- ---------------------------------------------------------------------- 
+
+
+
+[DEBUG] Rank 0 entered _process_local_experts
+
+[DEBUG] Rank 1 entered _process_local_experts
+
+[DEBUG] Rank 0: Processing 45043 tokens through local experts
+
+[DEBUG] Rank 1: Processing 59970 tokens through local experts
+
+[DEBUG] Rank 0: Input shapes - tokens: torch.Size([45043, 768]), expert_ids: torch.Size([45043, 2]), top_k_weights: torch.Size([45043, 2])
+
+[DEBUG] Rank 1: Input shapes - tokens: torch.Size([59970, 768]), expert_ids: torch.Size([59970, 2]), top_k_weights: torch.Size([59970, 2])
+
+[DEBUG] Rank 0: Starting token-by-token processing...
+
+[DEBUG] Rank 1: Starting token-by-token processing...
+
+[DEBUG] Rank 0: Processing token 0/45043
+[DEBUG] Rank 1: Processing token 0/59970
+[DEBUG] Rank 0: Processing token 5000/45043
+[DEBUG] Rank 1: Processing token 5000/59970
+[DEBUG] Rank 1: Processing token 10000/59970
+[DEBUG] Rank 0: Processing token 10000/45043
+[DEBUG] Rank 1: Processing token 15000/59970
+[DEBUG] Rank 0: Processing token 15000/45043
+[DEBUG] Rank 1: Processing token 20000/59970
+[DEBUG] Rank 0: Processing token 20000/45043
+[DEBUG] Rank 0: Processing token 25000/45043
+[DEBUG] Rank 1: Processing token 25000/59970
+[DEBUG] Rank 0: Processing token 30000/45043
+[DEBUG] Rank 1: Processing token 30000/59970
+[DEBUG] Rank 0: Processing token 35000/45043
+[DEBUG] Rank 1: Processing token 35000/59970
+[DEBUG] Rank 0: Processing token 40000/45043
+[DEBUG] Rank 1: Processing token 40000/59970
+[DEBUG] Rank 0: Processing token 45000/45043
+
+[DEBUG] Rank 0: num tokens processed by this rank: torch.Size([45043, 768])
+
+
+[DEBUG] Rank 0: Expected to process 45043 tokens, actually processed 45043
+
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_results_back
+
+[DEBUG] Rank 0 processed 45043 tokens total
+[DEBUG] Rank 0 forward recv_counts were: [25788, 19255]
+
+
+[DEBUG] Rank 0 sending 25788 processed tokens back to GPU 0
+
+
+[DEBUG] Rank 0 sending 19255 processed tokens back to GPU 1
+
+
+[DEBUG] Rank 0 prepared 45043 tokens to send back
+
+
+[DEBUG] Rank 0 communicating reverse send counts: [25788, 19255]
+
+[DEBUG] Rank 1: Processing token 45000/59970
+[DEBUG] Rank 1: Processing token 50000/59970
+[DEBUG] Rank 1: Processing token 55000/59970
+
+[DEBUG] Rank 1: num tokens processed by this rank: torch.Size([59970, 768])
+
+
+[DEBUG] Rank 1: Expected to process 59970 tokens, actually processed 59970
+
+----------------------------------------------------------------------
+[DEBUG] Rank 1 entered _communicate_results_back
+
+[DEBUG] Rank 1 processed 59970 tokens total
+[DEBUG] Rank 1 forward recv_counts were: [29459, 30511]
+
+
+[DEBUG] Rank 1 sending 29459 processed tokens back to GPU 0
+
+
+[DEBUG] Rank 1 sending 30511 processed tokens back to GPU 1
+
+
+[DEBUG] Rank 1 prepared 59970 tokens to send back
+
+
+[DEBUG] Rank 1 communicating reverse send counts: [29459, 30511]
+
+[DEBUG] Rank 1 will receive [19255, 30511] tokens back from all GPUs (total: 49766)
+[DEBUG] Rank 0 will receive [25788, 29459] tokens back from all GPUs (total: 55247)
+[DEBUG] Rank 1 performing reverse all-to-all communication
+[DEBUG] Rank 0 performing reverse all-to-all communication
+[DEBUG] Rank 1 received 49766 processed tokens back from all GPUs
+[DEBUG] Rank 0 received 55247 processed tokens back from all GPUs
+[DEBUG] shape of data to each gpu: [(32768, 768), (32768, 768)]
+[DEBUG] Rank 1: Getting gate assignments...
+[DEBUG] Rank 0: Getting gate assignments...
+[DEBUG] Rank 1: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+[DEBUG] Rank 1: Getting expert assignments...
+[DEBUG] Rank 0: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+[DEBUG] Rank 0: Getting expert assignments...
+[DEBUG] Rank 1: Sending 17571 tokens to GPU 0
+[DEBUG] Rank 1: Sending 30981 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 1 entered _communicate_tokens
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([17571, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([17571, 2])
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([30981, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([30981, 2])
+[DEBUG] Rank 1 send counts after looping gpus: = [17571, 30981], sum = 48552, tensor_rows = 30981
+[DEBUG] Rank 1 input_split_sizes_tensor: tensor([17571, 30981], device='cuda:1', dtype=torch.int32)
+
+[DEBUG] Rank 1 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 0: Sending 25796 tokens to GPU 0
+[DEBUG] Rank 0: Sending 30835 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_tokens
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([25796, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([25796, 2])
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([30835, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([30835, 2])
+[DEBUG] Rank 0 send counts after looping gpus: = [25796, 30835], sum = 56631, tensor_rows = 30835
+[DEBUG] Rank 0 input_split_sizes_tensor: tensor([25796, 30835], device='cuda:0', dtype=torch.int32)
+
+[DEBUG] Rank 0 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 0 recv_counts: [25796, 17571]
+[DEBUG] Rank 1 recv_counts: [30835, 30981]
+[DEBUG] Rank 0 N_recv: 43367
+[DEBUG] Rank 1 N_recv: 61816
+
+[DEBUG] Rank 0: Token communication complete, received 43367 tokens
+
+
+[DEBUG] Rank 1: Token communication complete, received 61816 tokens
+
+---------------------------------------------------------------------- ---------------------------------------------------------------------- 
+
+
+
+[DEBUG] Rank 0 entered _process_local_experts
+
+[DEBUG] Rank 1 entered _process_local_experts
+
+[DEBUG] Rank 0: Processing 43367 tokens through local experts
+
+[DEBUG] Rank 1: Processing 61816 tokens through local experts
+
+[DEBUG] Rank 0: Input shapes - tokens: torch.Size([43367, 768]), expert_ids: torch.Size([43367, 2]), top_k_weights: torch.Size([43367, 2])
+
+[DEBUG] Rank 1: Input shapes - tokens: torch.Size([61816, 768]), expert_ids: torch.Size([61816, 2]), top_k_weights: torch.Size([61816, 2])
+
+[DEBUG] Rank 0: Starting token-by-token processing...
+
+[DEBUG] Rank 1: Starting token-by-token processing...
+
+[DEBUG] Rank 0: Processing token 0/43367
+[DEBUG] Rank 1: Processing token 0/61816
+[DEBUG] Rank 0: Processing token 5000/43367
+[DEBUG] Rank 1: Processing token 5000/61816
+[DEBUG] Rank 1: Processing token 10000/61816
+[DEBUG] Rank 0: Processing token 10000/43367
+[DEBUG] Rank 1: Processing token 15000/61816
+[DEBUG] Rank 0: Processing token 15000/43367
+[DEBUG] Rank 0: Processing token 20000/43367
+[DEBUG] Rank 1: Processing token 20000/61816
+[DEBUG] Rank 0: Processing token 25000/43367
+[DEBUG] Rank 1: Processing token 25000/61816
+[DEBUG] Rank 0: Processing token 30000/43367
+[DEBUG] Rank 1: Processing token 30000/61816
+[DEBUG] Rank 1: Processing token 35000/61816
+[DEBUG] Rank 0: Processing token 35000/43367
+[DEBUG] Rank 1: Processing token 40000/61816
+[DEBUG] Rank 0: Processing token 40000/43367
+
+[DEBUG] Rank 0: num tokens processed by this rank: torch.Size([43367, 768])
+
+
+[DEBUG] Rank 0: Expected to process 43367 tokens, actually processed 43367
+
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_results_back
+
+[DEBUG] Rank 0 processed 43367 tokens total
+[DEBUG] Rank 0 forward recv_counts were: [25796, 17571]
+
+
+[DEBUG] Rank 0 sending 25796 processed tokens back to GPU 0
+
+
+[DEBUG] Rank 0 sending 17571 processed tokens back to GPU 1
+
+
+[DEBUG] Rank 0 prepared 43367 tokens to send back
+
+
+[DEBUG] Rank 0 communicating reverse send counts: [25796, 17571]
+
+[DEBUG] Rank 1: Processing token 45000/61816
+[DEBUG] Rank 1: Processing token 50000/61816
+[DEBUG] Rank 1: Processing token 55000/61816
+[DEBUG] Rank 1: Processing token 60000/61816
+
+[DEBUG] Rank 1: num tokens processed by this rank: torch.Size([61816, 768])
+
+
+[DEBUG] Rank 1: Expected to process 61816 tokens, actually processed 61816
+
+----------------------------------------------------------------------
+[DEBUG] Rank 1 entered _communicate_results_back
+
+[DEBUG] Rank 1 processed 61816 tokens total
+[DEBUG] Rank 1 forward recv_counts were: [30835, 30981]
+
+
+[DEBUG] Rank 1 sending 30835 processed tokens back to GPU 0
+
+
+[DEBUG] Rank 1 sending 30981 processed tokens back to GPU 1
+
+
+[DEBUG] Rank 1 prepared 61816 tokens to send back
+
+
+[DEBUG] Rank 1 communicating reverse send counts: [30835, 30981]
+
+[DEBUG] Rank 1 will receive [17571, 30981] tokens back from all GPUs (total: 48552)
+[DEBUG] Rank 0 will receive [25796, 30835] tokens back from all GPUs (total: 56631)
+[DEBUG] Rank 1 performing reverse all-to-all communication
+[DEBUG] Rank 1 received 48552 processed tokens back from all GPUs
+[DEBUG] Rank 0 performing reverse all-to-all communication
+[DEBUG] Rank 0 received 56631 processed tokens back from all GPUs
+[DEBUG] shape of data to each gpu: [(32768, 768), (32768, 768)]
+[DEBUG] Rank 1: Getting gate assignments...
+[DEBUG] Rank 0: Getting gate assignments...
+[DEBUG] Rank 1: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+[DEBUG] Rank 0: Gate assignments complete, top_k_ids shape: torch.Size([32768, 2])
+[DEBUG] Rank 1: Getting expert assignments...
+[DEBUG] Rank 0: Getting expert assignments...
+[DEBUG] Rank 1: Sending 20871 tokens to GPU 0
+[DEBUG] Rank 1: Sending 31813 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 1 entered _communicate_tokens
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([20871, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([20871, 2])
+[DEBUG] Rank 1 shape top_k_expert_local_id_assignments_padded : torch.Size([31813, 2])
+[DEBUG] Rank 1 top_k_weights_padded: torch.Size([31813, 2])
+[DEBUG] Rank 1 send counts after looping gpus: = [20871, 31813], sum = 52684, tensor_rows = 31813
+[DEBUG] Rank 1 input_split_sizes_tensor: tensor([20871, 31813], device='cuda:1', dtype=torch.int32)
+
+[DEBUG] Rank 1 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 0: Sending 23032 tokens to GPU 0
+[DEBUG] Rank 0: Sending 30702 tokens to GPU 1
+----------------------------------------------------------------------
+[DEBUG] Rank 0 entered _communicate_tokens
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([23032, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([23032, 2])
+[DEBUG] Rank 0 shape top_k_expert_local_id_assignments_padded : torch.Size([30702, 2])
+[DEBUG] Rank 0 top_k_weights_padded: torch.Size([30702, 2])
+[DEBUG] Rank 0 send counts after looping gpus: = [23032, 30702], sum = 53734, tensor_rows = 30702
+[DEBUG] Rank 0 input_split_sizes_tensor: tensor([23032, 30702], device='cuda:0', dtype=torch.int32)
+
+[DEBUG] Rank 0 initiating dist.all_to_all_single(recv_counts, send_counts)
+
+[DEBUG] Rank 0 recv_counts: [23032, 20871]
+[DEBUG] Rank 1 recv_counts: [30702, 31813]
+[DEBUG] Rank 0 N_recv: 43903
+[DEBUG] Rank 1 N_recv: 62515
+
+[DEBUG] Rank 0: Token communication complete, received 43903 tokens
+
+
+[DEBUG] Rank 1: Token communication complete, received 62515 tokens
+
+---------------------------------------------------------------------- ---------------------------------------------------------------------- 
+
+
+
+[DEBUG] Rank 0 entered _process_local_experts
+
+[DEBUG] Rank 1 entered _process_local_experts
+
+[DEBUG] Rank 0: Processing 43903 tokens through local experts
+
+[DEBUG] Rank 1: Processing 62515 tokens through local experts
+
+[DEBUG] Rank 0: Input shapes - tokens: torch.Size([43903, 768]), expert_ids: torch.Size([43903, 2]), top_k_weights: torch.Size([43903, 2])
+
+[DEBUG] Rank 1: Input shapes - tokens: torch.Size([62515, 768]), expert_ids: torch.Size([62515, 2]), top_k_weights: torch.Size([62515, 2])
+
+[DEBUG] Rank 0: Starting token-by-token processing...
+
+[DEBUG] Rank 1: Starting token-by-token processing...
+
+[DEBUG] Rank 0: Processing token 0/43903
+[DEBUG] Rank 1: Processing token 0/62515
+[DEBUG] Rank 0: Processing token 5000/43903
+[DEBUG] Rank 1: Processing token 5000/62515

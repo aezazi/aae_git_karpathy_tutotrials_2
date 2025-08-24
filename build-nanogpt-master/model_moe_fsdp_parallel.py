@@ -633,7 +633,7 @@ class MoELayerParallel(nn.Module):
         token_idx_back = 0 # track positions in recv_tokens_back.
         for gpu_rank in range(self.world_size):
             if gpu_rank in original_assignments:
-                token_positions, _, _,_= original_assignments[gpu_rank] # get the token positions that were assigned to this gpu_rank for processing. These are the original positions in the sequence where these tokens were located before processing.
+                token_positions, _, _ = original_assignments[gpu_rank] # get the token positions that were assigned to this gpu_rank for processing. These are the original positions in the sequence where these tokens were located before processing.
                 num_tokens = len(token_positions)
 
                 if num_tokens > 0:
