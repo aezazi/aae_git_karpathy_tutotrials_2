@@ -182,8 +182,6 @@ train_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_l
 
 val_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = config.rank, num_processes=config.world_size, split='val')
 
-
-
 assert effective_batch_size_desired % (train_loader.B * train_loader.seq_len * config.world_size) == 0, f"effective batch size {effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.seq_len}"
 
 # this is the desired number of micro steps to accumulate gradients over. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU.
@@ -304,7 +302,7 @@ for step in range(training_steps):
     total_tokens_seen += tokens_processed
     
     # update log_params, log traing loss and learning rate to file, print processing stats.
-    if dist.get_global_rank()==0:
+    if master_process:
         # update log_params
         log_params.step = step
         log_params.shard_idx = shard_idx
