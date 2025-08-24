@@ -262,6 +262,7 @@ for step in range(training_steps):
     loss_accum  = 0.0
     micro_steps = accumulation_steps_desired # set the number of mirco steps to accumulate gradients over
     for micro_step in range(micro_steps):
+        
         # this is a gradient accumulation step. We accumulate gradients over desired accumalation steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
         x, y, shard_idx, tokens_abandoned = train_loader.next_batch()
         x, y = x.to(device), y.to(device) # move the data to the device. 
@@ -272,16 +273,18 @@ for step in range(training_steps):
 
         # we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs. The device must be cuda.
         
+        
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
             logits, loss, count_tokens_processed_by_each_expert = model(x, y)
 
-        
+       
         # divide the loss by the number of micro steps to get the average loss of the accumulated micro steps
         loss = loss / micro_steps 
         
         # Look at Pytorch documentation for more details on tensor.detach() vs. tensor.item()
         loss_accum += loss.detach() 
         loss.backward()
+       
 
 
     if config.FSDP:

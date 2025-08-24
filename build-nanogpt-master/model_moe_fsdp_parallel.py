@@ -265,7 +265,7 @@ class MoELayerParallel(nn.Module):
         ])
 
         # create a tensor to hold a running count of the number of tokens processed by each expert on this gpu.
-        self.count_tokens_processed_by_each_expert = torch.zeros(self.world_size, dtype=torch.int, device=torch.device(f"cuda:{self.rank}"), requires_grad=False) # (num_experts_per_gpu,)
+        self.count_tokens_processed_by_each_expert = torch.zeros(self.num_experts, dtype=torch.int, device=torch.device(f"cuda:{self.rank}"), requires_grad=False) # (num_experts_per_gpu,)
 
 
         # NOTE: all-to-all communication: In a MoE setup, the topk gate will assign tokens being processed on this gpu to anyone of the num_experts. The experts assgined to a token may or may not be on this gpu. So we have to identify which gpu is hosting the expert to which a token is assgined, send the token to that gpu/expert for processing  and then receive the result back to rejoin the batch-sequence on this gpu.  
