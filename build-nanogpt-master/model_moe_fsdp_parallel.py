@@ -469,7 +469,7 @@ class MoELayerParallel(nn.Module):
         # print(f"\n[DEBUG] recv_tokens sample\n: {recv_tokens_tensor[0:10,0:7]}")
 
 
-        return recv_tokens_tensor, recv_expert_ids_tensor, recv_weights_tensor
+        return recv_tokens_tensor, recv_expert_ids_tensor, recv_weights_tensor, recv_counts
         
 
     def _process_local_experts(self, tokens, expert_ids, top_k_weights):
@@ -544,8 +544,82 @@ class MoELayerParallel(nn.Module):
         return output, tokens_processed_by_each_expert
     
     def _communicate_results_back(self, processed_tokens, recv_counts_forward):
-        pass
+        """
+        Communicate processed tokens back to the original GPUs using reverse all-to-all
+        
+        Args:
+            processed_tokens: Tensor of shape (N_recv, n_embd) - tokens processed by this GPU's experts  
+            recv_counts_forward: List of ints - how many tokens this GPU received from each GPU in forward pass
+        
+        Returns:
+            recv_tokens_back: Tensor containing processed tokens from all GPUs in GPU rank order
+        """
+        print('-'*70)
+        print(f'[DEBUG] Rank {self.rank} entered _communicate_results_back')
+        print(f'\n[DEBUG] Rank {self.rank} processed {processed_tokens.shape[0]} tokens total')
+        print(f'[DEBUG] Rank {self.rank} forward recv_counts were: {recv_counts_forward}\n')
+        
+        device = processed_tokens.device
+
+        # Step 1: Prepare send data - split processed tokens back according to forward receive counts. Whatever tokens this gpu received and proceesed must be sent back to the gpus that sent the tokens
+        # The processed_tokens are in the same order as we received them (GPU rank order)
+        send_counts_back = recv_counts_forward.copy()  # Send back exactly what we received
+        send_tokens_list_back = []
+
+        token_idx = 0  # Track position in processed_tokens
     
+        for gpu_rank in range(self.world_size):
+            num_tokens = send_counts_back[gpu_rank]
+            
+            if num_tokens > 0:
+                # Extract the processed tokens for this GPU
+                tokens_for_gpu = processed_tokens[token_idx:token_idx + num_tokens]  # (num_tokens, n_embd)
+                send_tokens_list_back.append(tokens_for_gpu)
+                token_idx += num_tokens
+                
+                print(f'\n[DEBUG] Rank {self.rank} sending {num_tokens} processed tokens back to GPU {gpu_rank}\n')
+            else:
+                # No tokens to send back to this GPU
+                dummy_tokens = torch.empty((0, self.n_embd), device=device, dtype=processed_tokens.dtype)
+                send_tokens_list_back.append(dummy_tokens)
+
+        # Create the send tensor by concatenating all tokens to be sent back
+        send_tokens_back = torch.cat(send_tokens_list_back, dim=0) if sum(send_counts_back) > 0 else torch.empty((0, self.n_embd), device=device, dtype=processed_tokens.dtype)
+        
+        print(f'\n[DEBUG] Rank {self.rank} prepared {send_tokens_back.shape[0]} tokens to send back\n')
+        
+        # Step 2: Communicate send counts for the reverse direction
+        # We need to tell all GPUs how many tokens we're sending back to them
+        input_split_sizes_back = torch.tensor(send_counts_back, device=device, dtype=torch.int)
+        output_split_sizes_back = torch.empty_like(input_split_sizes_back)
+        
+        print(f'\n[DEBUG] Rank {self.rank} communicating reverse send counts: {send_counts_back}\n')
+
+        # All-to-all to exchange how many tokens each GPU will receive back
+        dist.all_to_all_single(output_split_sizes_back, input_split_sizes_back)
+
+        recv_counts_back = output_split_sizes_back.tolist()
+        N_recv_back = sum(recv_counts_back)
+        
+        print(f'[DEBUG] Rank {self.rank} will receive {recv_counts_back} tokens back from all GPUs (total: {N_recv_back})')
+        
+        # Step 3: Create receive tensor and perform all-to-all communication
+        recv_tokens_back = torch.empty((N_recv_back, self.n_embd), dtype=processed_tokens.dtype, device=device)
+        
+        # Perform the reverse all-to-all communication
+        print(f'[DEBUG] Rank {self.rank} performing reverse all-to-all communication')
+        dist.all_to_all_single(
+            recv_tokens_back, 
+            send_tokens_back, 
+            output_split_sizes=recv_counts_back, 
+            input_split_sizes=send_counts_back
+        )
+        
+        print(f'[DEBUG] Rank {self.rank} received {recv_tokens_back.shape[0]} processed tokens back from all GPUs')
+        
+        return recv_tokens_back
+
+
     def _reassemble_sequence(self, x_flat, recv_tokens_back, original_assignments):
         """
         reassmeble the processed tokens back into the original sequence order
@@ -610,19 +684,22 @@ class MoELayerParallel(nn.Module):
                 print(f"[DEBUG] Rank {self.rank}: Sending 0 tokens to GPU {gpu_rank}")
 
         # Step 3: Communicate tokens to appropriate GPUs
-        recv_tokens, recv_expert_ids, recv_weights = self._communicate_tokens(x_flat, assignments)
+        recv_tokens, recv_expert_ids, recv_weights, recv_counts_forward = self._communicate_tokens(x_flat, assignments)
 
         
-
-
         # Step 4: Process tokens through local experts
         processed_tokens, count_tokens_processed_by_each_expert = self._process_local_experts(recv_tokens, recv_expert_ids, recv_weights)
 
-    
+        # Verify we processed exactly what we received
+        expected_processed = sum(recv_counts_forward)
+        actual_processed = processed_tokens.shape[0]
+        print(f"\n[DEBUG] Rank {self.rank}: Expected to process {expected_processed} tokens, actually processed {actual_processed}\n")
+        assert expected_processed == actual_processed, f"Token count mismatch! Expected {expected_processed}, got {actual_processed}"
+
         # DEBUG:  check tokens processed counter
         
         # Step 5: Communicate processed tokens back to original GPUs
-        recv_tokens_back = self._communicate_results_back(processed_tokens, assignments)
+        recv_tokens_back = self._communicate_results_back(processed_tokens, recv_counts_forward)
 
         # Step 6: Reassemble the processed tokens back into the original sequence order
         reassembled_sequence_flat = self._reassemble_sequence(x_flat, recv_tokens_back, assignments)
