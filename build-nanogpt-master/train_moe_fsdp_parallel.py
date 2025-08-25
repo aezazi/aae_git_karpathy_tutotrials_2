@@ -179,14 +179,15 @@ precision_policy = MixedPrecision(
 
 # wrap model per wrapper policy
 model = FSDP(model,
-            auto_wrap_policy=wrapper_policy,
+            # auto_wrap_policy=wrapper_policy,
             mixed_precision=precision_policy,
         
             # reccommendation and other good info from tutorial: https://www.youtube.com/watch?v=sDM56HOziE4&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=8
             backward_prefetch=BackwardPrefetch.BACKWARD_PRE,
 
             # note that ShardingStrategy.NO_SHARD is the equivalent of having the model run in DDP mode
-            sharding_strategy=ShardingStrategy.FULL_SHARD,
+            # sharding_strategy=ShardingStrategy.FULL_SHARD,
+            sharding_strategy=ShardingStrategy.NO_SHARD,
             
             device_id=torch.cuda.current_device(),
             forward_prefetch=True
