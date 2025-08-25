@@ -521,7 +521,9 @@ class MoELayerParallel(nn.Module):
             for k_idx in range(self.k):
 
                 # k_idx is the local id of topk experts. check if this expert is real and not padding. if the expert assginment k_idx != -1, it's real.
-                if k_idx != -1:
+                
+                expert_local_id = token_expert_ids[k_idx].item()
+                if expert_local_id != -1:
                     expert_local_id = token_expert_ids[k_idx].item()
                     expert_weight = token_weights[k_idx]
                    
@@ -791,10 +793,15 @@ class CreateMoEParalell(nn.Module):
         # apply the transformer blocks. each block applies layer norm, self-attention, residual connection, layer norm, MoE layer, residual connection
         x = token_embd
         load_balance_losses = []
+        block_count = 0
         for block in self.transformer.h:
             x, load_balance_loss, count_tokens_processed_by_each_expert = block(x)
+            
             load_balance_losses.append(load_balance_loss)
+            print(f'\n[DEBUG] Rank {dist.get_rank()}  finished block: {block_count}\n')
+            block_count += 1
 
+        
         # apply layer norm to the output of the last transformer block
         x = self.transformer.ln_f(x)
 

@@ -45,7 +45,7 @@ else:
 class GPTConfig:
     seq_len: int = 1024 # max sequence length
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
-    batch_size = 32
+    batch_size = 16
     vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
@@ -179,15 +179,15 @@ precision_policy = MixedPrecision(
 
 # wrap model per wrapper policy
 model = FSDP(model,
-            # auto_wrap_policy=wrapper_policy,
+            auto_wrap_policy=wrapper_policy,
             mixed_precision=precision_policy,
         
             # reccommendation and other good info from tutorial: https://www.youtube.com/watch?v=sDM56HOziE4&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=8
             backward_prefetch=BackwardPrefetch.BACKWARD_PRE,
 
             # note that ShardingStrategy.NO_SHARD is the equivalent of having the model run in DDP mode
-            # sharding_strategy=ShardingStrategy.FULL_SHARD,
-            sharding_strategy=ShardingStrategy.NO_SHARD,
+            sharding_strategy=ShardingStrategy.FULL_SHARD,
+            # sharding_strategy=ShardingStrategy.NO_SHARD,
             
             device_id=torch.cuda.current_device(),
             forward_prefetch=True
@@ -223,7 +223,7 @@ from dataloader_utils import DataLoaderShardMultiGPU
 effective_batch_size_desired = 524288//4
 
  # 2^19 ~ .5M to match the original GPT-2 paper. 
-config.batch_size = 32
+# config.batch_size = 32
 
 
 # initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
@@ -302,7 +302,7 @@ model.train() # set the model to training mode
 total_tokens_seen = 0
 
 for step in range(training_steps):
-    print(f'[DEBUG] Rank {dist.get_rank()}  started training step: {step}')
+    print(f'\n[DEBUG] Rank {dist.get_rank()}  started training step: {step}')
     t0 = time.time()
     last_step = (step == training_steps - 1)
 
@@ -311,6 +311,7 @@ for step in range(training_steps):
     loss_accum  = 0.0
     micro_steps = accumulation_steps_desired # set the number of mirco steps to accumulate gradients over
     for micro_step in range(micro_steps):
+        print(f'\n[DEBUG] Rank {dist.get_rank()}  started training micro_step: {micro_step}')
         # this is a gradient accumulation step. We accumulate gradients over desired accumalation steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
         x, y, shard_idx, tokens_abandoned = train_loader.next_batch()
         x, y = x.to(device), y.to(device) # move the data to the device. 
@@ -331,6 +332,9 @@ for step in range(training_steps):
         # Look at Pytorch documentation for more details on tensor.detach() vs. tensor.item()
         loss_accum += loss.detach() 
         loss.backward()
+
+        
+        print(f'[DEBUG] Rank {dist.get_rank()}  finished training micro_step: {micro_step}\n')
 
 
     if config.FSDP:
