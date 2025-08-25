@@ -72,7 +72,6 @@ if FSDP:
     FSDP_rank = dist.get_rank() # get the rank of the current process
     FSDP_local_rank = int(os.environ['LOCAL_RANK']) # get the local rank of the current process
     FSDP_world_size = dist.get_world_size() # get the total number of processes
-    print('here')
     # set the device to the local rank of the current process
     device = f'cuda:{FSDP_local_rank}' 
     torch.cuda.set_device(device) # set the device for the current process
