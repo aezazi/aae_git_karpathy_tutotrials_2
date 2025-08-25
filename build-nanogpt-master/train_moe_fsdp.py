@@ -36,14 +36,15 @@ import functools
 class GPTConfig:
     seq_len: int = 1024 # max sequence length
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
-    batch_size = 42
+    batch_size = 32
     vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
     base_lr = 6e-4 * 3
     warm_up_steps = 300
-    num_experts = 8
+    num_experts = 24
+    load_balance_scale = 0.01
     k = 2
     print_token_routing = True
 
@@ -169,7 +170,7 @@ from dataloader_utils import DataLoaderShardMultiGPU
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
 effective_batch_size_desired = 983040
  # 2^19 ~ .5M to match the original GPT-2 paper. 
-config.batch_size = 40
+# config.batch_size = 40
 
 
 # initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
@@ -345,6 +346,6 @@ if FSDP:
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
 
-# torchrun --standalone --nproc_per_node=1 aae_model_train_fsdp.py
+# torchrun --standalone --nproc_per_node=1 train_moe_fsdp.py
 
 
