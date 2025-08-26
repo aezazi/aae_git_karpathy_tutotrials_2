@@ -29,14 +29,25 @@ import functools
  #%%
 # assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
 
+# Check if we are running in FSDP mode. If so, we will initialize the process group and set the device for each process. a simple way to check whether your script is being run under Distributed Data Parallel (FSDP) — specifically when using torchrun with a cuda GPU. Note that you can be in FSDP mode even with a single GPU when using torchrun. 
+if os.environ.get('RANK') is not None and os.environ.get('WORLD_SIZE') is not None:
+    print(f'Running in distributed environment. Initializing FSDP\n')
+    init_process_group(backend='nccl') # initialize the process group 
+    
+else:
+    print(f'Running in a non-distributed environment.\n')
+
 
 # This is the configuration for the GPT model. It defines the hyperparameters for the model. The block size is the maximum sequence length, vocab size is the size of the vocabulary, n_layer is the number of transformer blocks, n_head is the number of attention heads, and n_embd is the embedding dimension. 
+
+# Note on effective batch size: tbd
 
 @dataclass
 class GPTConfig:
     seq_len: int = 1024 # max sequence length
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
     batch_size = 32
+    effective_batch_size_multiplier = 2
     vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
@@ -48,10 +59,25 @@ class GPTConfig:
     k = 2
     print_token_routing = True
 
+    def __post_init__(self):
+        # Note that LOCAL_RANK is the rank of the process on one given machine (when using multiple machine), while RANK is the rank of the process across all machines (when using multiple gpus on multiple machines). When using a setup with just one machine, LOCAL_RANK and RANK are the same.
+        
+        self.FSDP = dist.is_initialized()
+        self.world_size = dist.get_world_size() if self.FSDP else 1
+
+        assert self.num_experts % self.world_size == 0, f"num_experts ({self.num_experts}) must be divisible by world_size ({self.world_size})"
+
+        self.effective_batch_size_desired = self.batch_size * self.seq_len * self.world_size * self.effective_batch_size_multiplier
+
+        self.experts_per_gpu = self.num_experts // self.world_size
+        self.rank = dist.get_rank() if dist.is_initialized() else 0
+        self.local_rank =  int(os.environ['LOCAL_RANK']) # get the local rank of the current process
+
 # instantiate and check the config
 config = GPTConfig()
 
 print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
+print(f'\neffective batch size desired: {config.effective_batch_size_desired:,}')
 
 
 # Note that in the initialization of the network in the ffn class, we are multiplying n_embd (the dimensions of the original embeddings) by 4. So for the inner layers, the dimensionality of the model is 768 * 4 
@@ -60,26 +86,18 @@ print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: 
 #%%
 # FSDP setup
 
-# Check if we are running in FSDP mode. If so, we will initialize the process group and set the device for each process.
 
-# a simple way to check whether your script is being run under Distributed Data Parallel (FSDP) — specifically when using torchrun with a cuda GPU. Note that you can be in FSDP mode even with a single GPU when using torchrun. 
-FSDP = int(os.environ.get('RANK', -1)) != -1
-
-if FSDP:
+if config.FSDP:
     print(f'\nRunning in Distributed Data Parallel (FSDP) mode')
-    # Note that LOCAL_RANK is the rank of the process on one given machine (when using multiple machine), while RANK is the rank of the process across all machines (when using multiple gpus on multiple machines). When using a setup with just one machine, LOCAL_RANK and RANK are the same. 
-    init_process_group(backend='nccl') # initialize the process group for DDP
-    FSDP_rank = dist.get_rank() # get the rank of the current process
-    FSDP_local_rank = int(os.environ['LOCAL_RANK']) # get the local rank of the current process
-    FSDP_world_size = dist.get_world_size() # get the total number of processes
+     
     # set the device to the local rank of the current process
-    device = f'cuda:{FSDP_local_rank}' 
+    device = f'cuda:{config.local_rank}' 
     torch.cuda.set_device(device) # set the device for the current process
 
     # the master process will perform logging and saving checkpoints.
-    master_process = (FSDP_rank == 0)
+    master_process = (config.rank == 0)
 
-    print(f'\nFSDP initialized on device: {device}, rank: {FSDP_rank}, local rank: {FSDP_local_rank}, world size: {FSDP_world_size}')
+    print(f'\nFSDP initialized on device: {device}, rank: {config.rank}, local rank: {config.local_rank}, world size: {config.world_size}\n')
 
 # if not using FSDP, just use the next best available option
 else: 
@@ -115,7 +133,7 @@ print(f"\nTotal parameters: {count_parameters(model):,}\n")
 # torch.set_float32_matmul_precision('high')
 model.to(device)
 
-# if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details. NOTE   that comiple may not play well with FSDP. So will have to experiment.
+# if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details. NOTE   that compile may not play well with FSDP. So will have to experiment.
 use_compile = True # set to True to use torch.compile
 model = torch.compile(model) if use_compile else model 
 
@@ -134,7 +152,7 @@ precision_policy = MixedPrecision(
             )
 
 # wrap model per wrapper policy
-model_FSDP = FSDP_wrap(model,
+model = FSDP_wrap(model,
             auto_wrap_policy=transformer_wrapper_policy,
             mixed_precision=precision_policy,
         
@@ -155,9 +173,9 @@ model_FSDP = FSDP_wrap(model,
 from aae_utils import ConfigureOptimizer
 
 # Note that we are using the raw model here, not the DDP wrapped model. This is because the DDP wrapper does not have the optimizer parameters. The raw model is the actual model that we want to optimize.
-optimizer = ConfigureOptimizer(model_FSDP).create_optimizer(weight_decay=0.1, learning_rate = config.base_lr, device_type=device)
+optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.1, learning_rate = config.base_lr, device_type=device)
 
-if FSDP:
+if config.FSDP:
     print(f'\nOptimizer initialized on GPU rank {FSDP_rank}, device {device}')
 
 
@@ -167,25 +185,25 @@ from dataloader_utils import DataLoaderShardMultiGPU
 
 
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
-effective_batch_size_desired = 983040
+# effective_batch_size_desired = 983040
  # 2^19 ~ .5M to match the original GPT-2 paper. 
 # config.batch_size = 40
 
 
 # initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
-train_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = FSDP_rank, num_processes=FSDP_world_size, split='train')
+train_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = config.rank, num_processes=config.world_size, split='train')
 
-val_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = FSDP_rank, num_processes=FSDP_world_size, split='val')
+val_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = config.rank, num_processes=config.world_size, split='val')
 
 
 
-assert effective_batch_size_desired % (train_loader.B * train_loader.seq_len * FSDP_world_size) == 0, f"effective batch size {effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.seq_len}"
+assert config.effective_batch_size_desired % (train_loader.B * train_loader.seq_len * config.world_size) == 0, f"effective batch size {config.effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.seq_len}"
 
 # this is the desired number of micro steps to accumulate gradients over. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU.
-accumulation_steps_desired = effective_batch_size_desired // (train_loader.B * train_loader.seq_len * FSDP_world_size) 
+accumulation_steps_desired = config.effective_batch_size_desired // (train_loader.B * train_loader.seq_len * config.world_size) 
 
 if master_process:
-    print(f"\neffective batch size desired: {effective_batch_size_desired}")
+    print(f"\neffective batch size desired: {config.effective_batch_size_desired}")
     print(f"accumulation steps desired: {accumulation_steps_desired}")
 
 #%%
@@ -193,8 +211,11 @@ if master_process:
 # NOTE: I moved the code for the scheduler to a separate aae_utils.py file.
 from aae_utils import CosineLearingRateScheduler
 
-# 19,073 steps is ~1 epoch, if data is 10B tokens and batch size 0.5M tokens
-training_steps = 19703
+
+# compute training steps for 1 epoc
+# 20,000 steps is ~1 epoch, if data is 10B tokens and batch size 0.5M tokens
+training_steps = 10_000_000_000 // config.effective_batch_size_desired 
+print(f'\ntraining steps for on epoc: {training_steps}\n')
 
 # define the scheduler parameters
 # the number of iterations over which lr is reduced to the minimum
@@ -216,17 +237,17 @@ T_mult = 3 # the factor by which T_0 is multiplied at each restart.
 
 # instantiate and create learning rate scheduler
 scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=T_max, restart=restart, warm_up_steps=warm_up_steps, max_lr=max_lr, min_lr=min_lr, T_mult=T_mult, T_0=T_0)
-print(f'\nScheduler initialized on GPU rank {FSDP_rank}, of {FSDP_world_size}\n')
+print(f'\nScheduler initialized on GPU rank {config.rank}, of {config.world_size}\n')
 
 #%%
 # create log files, loggers, and evaluators to store training loss, learning rate, validation loss, hellaswag eval results, and generate sample text.
 import eval_log_utils as eval_log_utils
 log_params = eval_log_utils.LogParamsFilesConfig(
-    FSDP = FSDP,
-    world_size = FSDP_world_size,
-    rank = FSDP_rank,
-    local_rank = FSDP_local_rank,
-    model = model_FSDP,
+    FSDP = config.FSDP,
+    world_size = config.world_size,
+    rank = config.rank,
+    local_rank = config.local_rank,
+    model = model,
     device = device,
     encoder = tiktoken.get_encoding('gpt2'),
     val_loader = val_loader,
@@ -264,13 +285,13 @@ for step in range(training_steps):
         x, y = x.to(device), y.to(device) # move the data to the device. 
 
         # By default, FSDP synchronizes the loss from each process after each micro step by taking an average of all the processes and making that average the loss for all the processes for that step. Its very inefficient to do this at each micro_step. So we want to only synchronize gradients among all the processes on the last micro step. See Karpathy's video tutorial at 2:57:00 for more details. The code below sets the require_backward_grad_sync attribute of the model to True only on the last micro step. 
-        if FSDP:
+        if config.FSDP:
             model.require_backward_grad_sync = (micro_step == micro_steps - 1) 
 
         # we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs. The device must be cuda.
         
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-            logits, loss, top_k_all = model_FSDP(x, y)
+            logits, loss, top_k_all = model(x, y)
 
        
         with torch.no_grad():
@@ -287,11 +308,11 @@ for step in range(training_steps):
         loss.backward()
 
 
-    if FSDP:
+    if config.FSDP:
         dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG)
 
     # clip the gradients to prevent exploding gradients
-    norm = nn.utils.clip_grad_norm_(model_FSDP.parameters(), 1.0)
+    norm = nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optimizer.step()
     scheduler.set_lr(step)
 
@@ -300,7 +321,7 @@ for step in range(training_steps):
     
     t1 = time.time()
     dt = (t1 - t0)
-    tokens_processed = train_loader.B * train_loader.seq_len * micro_steps * FSDP_world_size
+    tokens_processed = train_loader.B * train_loader.seq_len * micro_steps * config.world_size
     tokens_per_sec = tokens_processed / dt
     total_tokens_seen += tokens_processed
     
@@ -340,7 +361,7 @@ for step in range(training_steps):
     if ((step % 1000 == 0 and step > 0) or last_step):
         eval_log_utils.GenerateSample(log_params=log_params).generate(context="Hello, I'm a language model,", sample_max_length=32)
 
-if FSDP:
+if config.FSDP:
     destroy_process_group()
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.

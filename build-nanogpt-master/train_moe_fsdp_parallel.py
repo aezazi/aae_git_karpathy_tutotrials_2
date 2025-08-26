@@ -63,6 +63,8 @@ class GPTConfig:
 
         assert self.num_experts % self.world_size == 0, f"num_experts ({self.num_experts}) must be divisible by world_size ({self.world_size})"
 
+        assert self.num_experts % self.world_size == 0, f"num_experts ({self.num_experts}) must be divisible by world_size ({self.world_size})"
+
         self.experts_per_gpu = self.num_experts // self.world_size
         self.rank = dist.get_rank() if dist.is_initialized() else 0
         self.local_rank =  int(os.environ['LOCAL_RANK']) # get the local rank of the current process
