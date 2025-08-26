@@ -95,21 +95,14 @@ if config.FSDP:
 
     print(f'\nFSDP initialized on device: {device}, rank: {config.rank}, local rank: {config.local_rank}, world size: {config.world_size}\n')
 
-# if not using FSDP, just use the next best available option
+# if not using FSDP
 else: 
     if torch.cuda.is_available():
         device = torch.device('cuda')
-        FSDP_rank = 0
-        FSDP_local_rank = 0
-        FSDP_world_size = 1
+        config.rank = 0
+        config.local_rank = 0
+        config.world_size = 1
         master_process = True
-
-    elif torch.backends.mps.is_available():
-        device = torch.device('mps')
-    else:
-        device = torch.device('cpu')
-        
-    print(f"\nusing device: {device}")
 
 torch.manual_seed(42) # set the random seed for reproducibility
 if torch.cuda.is_available():
@@ -200,7 +193,7 @@ accumulation_steps_desired = config.effective_batch_size_desired // (train_loade
 
 if master_process:
     print(f"\neffective batch size desired: {config.effective_batch_size_desired}")
-    print(f"accumulation steps desired: {accumulation_steps_desired}")
+    print(f"accumulation steps desired: {accumulation_steps_desired}\n")
 
 #%%
 # Instantiate the learning rate scheduler 
@@ -211,7 +204,7 @@ from aae_utils import CosineLearingRateScheduler
 # compute training steps for 1 epoc
 # 20,000 steps is ~1 epoch, if data is 10B tokens and batch size 0.5M tokens
 training_steps = 10_000_000_000 // config.effective_batch_size_desired 
-print(f'\ntraining steps for on epoc: {training_steps}\n')
+print(f'\ntraining steps for one epoc: {training_steps:,}\n')
 
 # define the scheduler parameters
 # the number of iterations over which lr is reduced to the minimum
@@ -334,15 +327,15 @@ for step in range(training_steps):
         eval_log_utils.LearningRate(log_params=log_params).log_learning_rate()
 
         # print processing stats
-        print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
+        print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f} \ntotal tokens seen: {total_tokens_seen:,}")
 
     if config.print_token_routing and step % 1000 == 0:
         print(f'\n')
         for i, c in enumerate(accum_topk_expert_count):
-            print(f"Layer {i}: {c.tolist()}")
+            print(f"\nLayer {i}: {c.tolist()}")
         print(f'\n')
         for i, c in enumerate(accum_topk_expert_count):
-            print(f"Layer {i} normalized: {(c / total_tokens_seen)}")
+            print(f"\nLayer {i} normalized: {(c / total_tokens_seen)}")
         print(f'\n')
 
     # every x steps evaluate, print, and log hellaswag.
