@@ -25,9 +25,8 @@ import torch.distributed as dist
 import functools
 
 
-
  #%%
-# assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
+assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
 
 # Check if we are running in FSDP mode. If so, we will initialize the process group and set the device for each process. a simple way to check whether your script is being run under Distributed Data Parallel (FSDP) — specifically when using torchrun with a cuda GPU. Note that you can be in FSDP mode even with a single GPU when using torchrun. 
 if os.environ.get('RANK') is not None and os.environ.get('WORLD_SIZE') is not None:
@@ -47,7 +46,7 @@ class GPTConfig:
     seq_len: int = 1024 # max sequence length
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
     batch_size = 32
-    effective_batch_size_multiplier = 2
+    effective_batch_size_multiplier = 16
     vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
@@ -86,10 +85,7 @@ print(f'\neffective batch size desired: {config.effective_batch_size_desired:,}'
 #%%
 # FSDP setup
 
-
 if config.FSDP:
-    print(f'\nRunning in Distributed Data Parallel (FSDP) mode')
-     
     # set the device to the local rank of the current process
     device = f'cuda:{config.local_rank}' 
     torch.cuda.set_device(device) # set the device for the current process
@@ -176,7 +172,7 @@ from aae_utils import ConfigureOptimizer
 optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.1, learning_rate = config.base_lr, device_type=device)
 
 if config.FSDP:
-    print(f'\nOptimizer initialized on GPU rank {FSDP_rank}, device {device}')
+    print(f'\nOptimizer initialized on GPU rank {config.rank}, device {device}')
 
 
 # %%
@@ -293,7 +289,7 @@ for step in range(training_steps):
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
             logits, loss, top_k_all = model(x, y)
 
-       
+        # This is check to make sure the top_k gate is distributing tokens evenly bewtween the experts. Code below checks every block
         with torch.no_grad():
             for layer_idx, top_k_global_ids in enumerate(top_k_all):
                 counts = torch.bincount(top_k_global_ids, minlength=config.num_experts)
