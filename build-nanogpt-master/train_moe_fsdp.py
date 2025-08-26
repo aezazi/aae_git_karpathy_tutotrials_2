@@ -48,14 +48,14 @@ class GPTConfig:
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
     model_expert_parallelization = False
     batch_size = 32
-    effective_batch_size_multiplier = 16
+    effective_batch_size_multiplier = 8
     vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
     base_lr = 6e-4 * 3
     warm_up_steps = 300
-    num_experts = 32
+    num_experts = 64
     load_balance_scale = 0.01
     k = 2
     print_token_routing = True
@@ -73,12 +73,14 @@ class GPTConfig:
         self.experts_per_gpu = self.num_experts // self.world_size
         self.rank = dist.get_rank() if dist.is_initialized() else 0
         self.local_rank =  int(os.environ['LOCAL_RANK']) # get the local rank of the current process
+        self.master_process = (self.rank == 0)
 
 # instantiate and check the config
 config = GPTConfig()
 
-print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
-print(f'\neffective batch size desired: {config.effective_batch_size_desired:,}')
+if config.master_process:
+    print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
+    print(f'\neffective batch size desired: {config.effective_batch_size_desired:,}')
 
 
 # Note that in the initialization of the network in the ffn class, we are multiplying n_embd (the dimensions of the original embeddings) by 4. So for the inner layers, the dimensionality of the model is 768 * 4 
@@ -91,9 +93,6 @@ if config.FSDP:
     # set the device to the local rank of the current process
     device = f'cuda:{config.local_rank}' 
     torch.cuda.set_device(device) # set the device for the current process
-
-    # the master process will perform logging and saving checkpoints.
-    master_process = (config.rank == 0)
 
     print(f'\nFSDP initialized on device: {device}, rank: {config.rank}, local rank: {config.local_rank}, world size: {config.world_size}\n')
 
@@ -197,7 +196,7 @@ assert config.effective_batch_size_desired % (train_loader.B * train_loader.seq_
 # this is the desired number of micro steps to accumulate gradients over. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU.
 accumulation_steps_desired = config.effective_batch_size_desired // (train_loader.B * train_loader.seq_len * config.world_size) 
 
-if master_process:
+if config.master_process:
     print(f"\neffective batch size desired: {config.effective_batch_size_desired}")
     print(f"accumulation steps desired: {accumulation_steps_desired}\n")
 
@@ -208,7 +207,6 @@ from aae_utils import CosineLearingRateScheduler
 
 
 # compute training steps for 1 epoc
-# 20,000 steps is ~1 epoch, if data is 10B tokens and batch size 0.5M tokens
 training_steps = 10_000_000_000 // config.effective_batch_size_desired 
 print(f'\ntraining steps for one epoc: {training_steps:,}\n')
 
@@ -321,7 +319,7 @@ for step in range(training_steps):
     total_tokens_seen += tokens_processed
     
     # update log_params, log traing loss and learning rate to file, print processing stats.
-    if master_process:
+    if config.master_process:
         # update log_params
         log_params.step = step
         log_params.shard_idx = shard_idx

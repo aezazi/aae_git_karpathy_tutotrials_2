@@ -222,7 +222,7 @@ from dataloader_utils import DataLoaderShardMultiGPU
 
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
 # effective_batch_size_desired = 524288
-effective_batch_size_desired = 524288//4
+effective_batch_size_desired = 2097152
 
  # 2^19 ~ .5M to match the original GPT-2 paper. 
 # config.batch_size = 32
