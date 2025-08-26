@@ -7,7 +7,8 @@ from torch.nn import functional as F
 from hellaswag import render_example, iterate_examples
 import tiktoken
 import time
-import model_moe_fsdp as model
+import model_moe_fsdp as model_FSDP
+import model_moe_fsdp_parallel as model_FSDP_parallel
 from model_moe_fsdp import Block
 
 from torch.distributed import init_process_group, destroy_process_group
@@ -45,6 +46,7 @@ else:
 class GPTConfig:
     seq_len: int = 1024 # max sequence length
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
+    model_expert_parallelization = False
     batch_size = 32
     effective_batch_size_multiplier = 16
     vocab_size: int = 50304
@@ -110,8 +112,14 @@ if torch.cuda.is_available():
 
 
 # %%
-#Instantiate the model
-model = model.CreateMoE(config=config)
+#Instantiate the model based on whether expert paralleliztion was chosen in config
+# if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details. NOTE   that compile may not play well with FSDP. So will have to experiment.
+if config.model_expert_parallelization:
+    model = model_FSDP_parallel(config=config)
+    use_compile = False # set to True to use torch.compile
+else:
+    model = model_FSDP.CreateMoE(config=config)
+    use_compile = True # set to True to use torch.compile
 
 # compute number of model parameters
 def count_parameters(model):
@@ -122,8 +130,6 @@ print(f"\nTotal parameters: {count_parameters(model):,}\n")
 # torch.set_float32_matmul_precision('high')
 model.to(device)
 
-# if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details. NOTE   that compile may not play well with FSDP. So will have to experiment.
-use_compile = True # set to True to use torch.compile
 model = torch.compile(model) if use_compile else model 
 
 # With FSDP, we can wrap different parts of the model. Here I am following a strategy presented in a pytorch tutorial to wrap the transformer block. It's possibel to separately wrap the Moe layer. Will experiment when I get this working.
