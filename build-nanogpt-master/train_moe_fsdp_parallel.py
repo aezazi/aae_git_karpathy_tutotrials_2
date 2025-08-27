@@ -197,13 +197,13 @@ model = FSDP(model,
 
 print(f"\n[FSDP] Rank {config.rank}: Model wrapping complete\n")
 
-if config.rank == 0:
-    print("\n[FSDP] Model structure after wrapping:")
-    for name, module in model.named_modules():
-        if isinstance(module, FSDP):
-            print(f"  FSDP Unit: {name}")
-        elif isinstance(module, (MoELayerParallel, ExpertMoESwiglu, TopKGateParallel)):
-            print(f"  MoE Component: {name} -> {type(module).__name__}")
+# if config.rank == 0:
+#     print("\n[FSDP] Model structure after wrapping:")
+#     for name, module in model.named_modules():
+#         if isinstance(module, FSDP):
+#             print(f"  FSDP Unit: {name}")
+#         elif isinstance(module, (MoELayerParallel, ExpertMoESwiglu, TopKGateParallel)):
+#             print(f"  MoE Component: {name} -> {type(module).__name__}")
 
 #%%
 # Instantiate the optimizer.

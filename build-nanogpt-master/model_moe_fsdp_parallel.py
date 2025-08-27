@@ -544,6 +544,80 @@ class MoELayerParallel(nn.Module):
 
         return output, tokens_processed_by_each_expert
     
+
+    def _process_local_experts_batched(self, tokens, expert_ids, top_k_weights):
+        device = tokens.device
+        num_received_tokens = tokens.shape[0]
+        
+        if num_received_tokens == 0:
+            empty_output = torch.empty(0, self.n_embd, device=device, dtype=tokens.dtype)
+            return empty_output, self.count_tokens_processed_by_each_expert
+        
+        # Group tokens by expert for batch processing
+        expert_batches = {}
+        token_expert_mapping = {}  # Track which tokens go to which experts
+        
+        # Collect all token-expert assignments
+        for token_idx in range(num_received_tokens):
+            token_expert_mapping[token_idx] = []
+            for k_idx in range(self.k):
+                expert_local_id = expert_ids[token_idx, k_idx].item()
+                if expert_local_id != -1:  # Valid expert (not padding)
+                    weight = top_k_weights[token_idx, k_idx]
+                    
+                    if expert_local_id not in expert_batches:
+                        expert_batches[expert_local_id] = {
+                            'tokens': [], 'token_indices': [], 'weights': []
+                        }
+                    
+                    expert_batches[expert_local_id]['tokens'].append(tokens[token_idx])
+                    expert_batches[expert_local_id]['token_indices'].append(token_idx)
+                    expert_batches[expert_local_id]['weights'].append(weight)
+                    
+                    token_expert_mapping[token_idx].append({
+                        'expert_id': expert_local_id,
+                        'weight': weight,
+                        'batch_idx': len(expert_batches[expert_local_id]['tokens']) - 1
+                    })
+        
+        # Process each expert's batch
+        expert_outputs = {}
+        for expert_id, batch_data in expert_batches.items():
+            if len(batch_data['tokens']) > 0:
+                # Stack tokens for batch processing
+                expert_tokens = torch.stack(batch_data['tokens'])  # (batch_size, n_embd)
+                expert_weights = torch.tensor(batch_data['weights'], device=device)
+                
+                # Process entire batch through expert
+                batch_output = self.local_experts[expert_id](expert_tokens)  # (batch_size, n_embd)
+                
+                expert_outputs[expert_id] = {
+                    'output': batch_output,
+                    'token_indices': batch_data['token_indices'],
+                    'weights': expert_weights
+                }
+                
+                # Update token counts
+                self.count_tokens_processed_by_each_expert[expert_id + self.gpu_expert_global_id_start] += len(batch_data['tokens'])
+        
+        # Reassemble outputs
+        final_output = torch.zeros(num_received_tokens, self.n_embd, device=device, dtype=tokens.dtype)
+        
+        for token_idx in range(num_received_tokens):
+            for assignment in token_expert_mapping[token_idx]:
+                expert_id = assignment['expert_id']
+                weight = assignment['weight']
+                batch_idx = assignment['batch_idx']
+                
+                expert_contribution = expert_outputs[expert_id]['output'][batch_idx] * weight
+                final_output[token_idx] += expert_contribution
+        
+        return final_output, self.count_tokens_processed_by_each_expert
+
+
+
+
+
     def _communicate_results_back(self, processed_tokens, recv_counts_forward):
         """
         Communicate processed tokens back to the original GPUs using reverse all-to-all
@@ -692,7 +766,7 @@ class MoELayerParallel(nn.Module):
 
         
         # Step 4: Process tokens through local experts
-        processed_tokens, count_tokens_processed_by_each_expert = self._process_local_experts(recv_tokens, recv_expert_ids, recv_weights)
+        processed_tokens, count_tokens_processed_by_each_expert = self._process_local_experts_batched(recv_tokens, recv_expert_ids, recv_weights)
 
         # Verify we processed exactly what we received
         expected_processed = sum(recv_counts_forward)
