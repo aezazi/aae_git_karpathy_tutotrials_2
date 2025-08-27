@@ -714,8 +714,6 @@ class MoELayerParallel(nn.Module):
         return reassembled_sequence, load_balance_loss, count_tokens_processed_by_each_expert
         
         
-# %%
-
 class Block(nn.Module):
     """
     Create a full transformer block
