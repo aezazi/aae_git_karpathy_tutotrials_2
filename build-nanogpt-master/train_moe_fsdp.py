@@ -47,7 +47,7 @@ class GPTConfig:
     seq_len: int = 1024 # max sequence length
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
     model_expert_parallelization = False
-    batch_size = 32
+    batch_size = 16
     effective_batch_size_multiplier = 8
     vocab_size: int = 50304
     n_layer: int = 12
@@ -124,7 +124,8 @@ else:
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-print(f"\nTotal parameters: {count_parameters(model):,}\n")
+if config.master_process:
+    print(f"\nTotal parameters: {count_parameters(model):,}\n")
 
 # torch.set_float32_matmul_precision('high')
 model.to(device)
