@@ -292,7 +292,6 @@ class MoELayer(nn.Module):
                 # final_test[expert_mask] += expert_output_weighted
                 # print(f'{torch.allclose(final_output, final_test)}')
 
-            # break
         # reshape final output back to shape (batch_size, seq_len, n_embd)    
         final_output = final_output_flat.view(batch_size, seq_len, -1)
         return final_output, top_k_indices, load_balance_loss

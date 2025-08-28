@@ -265,7 +265,7 @@ class MoELayerParallel(nn.Module):
         ])
 
         # create a tensor to hold a running count of the number of tokens processed by each expert on this gpu.
-        self.count_tokens_processed_by_each_expert = torch.zeros(self.num_experts, dtype=torch.int, device=torch.device(f"cuda:{self.rank}"), requires_grad=False) # (num_experts_per_gpu,)
+        # self.count_tokens_processed_by_each_expert = torch.zeros(self.num_experts, dtype=torch.int, device=torch.device(f"cuda:{self.rank}"), requires_grad=False) # (num_experts_per_gpu,)
 
 
         # NOTE: all-to-all communication: In a MoE setup, the topk gate will assign tokens being processed on this gpu to anyone of the num_experts. The experts assgined to a token may or may not be on this gpu. So we have to identify which gpu is hosting the expert to which a token is assgined, send the token to that gpu/expert for processing  and then receive the result back to rejoin the batch-sequence on this gpu.  
@@ -533,16 +533,16 @@ class MoELayerParallel(nn.Module):
                     processed_token += expert_output.squeeze(0) * expert_weight  # (n_embd,)
 
                     # Increment the count of tokens processed by this expert using the global id of the expert. expert_local_id+self.gpu_expert_global_id_start converts the expert_local id to global id.
-                    self.count_tokens_processed_by_each_expert[expert_local_id+self.gpu_expert_global_id_start] += 1
+                    # self.count_tokens_processed_by_each_expert[expert_local_id+self.gpu_expert_global_id_start] += 1
                     
             
             # Store the processed token in the output tensor
             output[token_idx] = processed_token
             
-        tokens_processed_by_each_expert = self.count_tokens_processed_by_each_expert
+        
         print(f"\n[DEBUG] Rank {self.rank}: num tokens processed by this rank: {output.shape}\n")
 
-        return output, tokens_processed_by_each_expert
+        return output
     
 
     def _process_local_experts_batched(self, tokens, expert_ids, top_k_weights):
@@ -551,7 +551,7 @@ class MoELayerParallel(nn.Module):
         
         if num_received_tokens == 0:
             empty_output = torch.empty(0, self.n_embd, device=device, dtype=tokens.dtype)
-            return empty_output, self.count_tokens_processed_by_each_expert
+            return empty_output
         
         # Group tokens by expert for batch processing
         expert_batches = {}
@@ -597,8 +597,7 @@ class MoELayerParallel(nn.Module):
                     'weights': expert_weights
                 }
                 
-                # Update token counts
-                self.count_tokens_processed_by_each_expert[expert_id + self.gpu_expert_global_id_start] += len(batch_data['tokens'])
+               
         
         # Reassemble outputs
         final_output = torch.zeros(num_received_tokens, self.n_embd, device=device, dtype=tokens.dtype)
@@ -612,7 +611,7 @@ class MoELayerParallel(nn.Module):
                 expert_contribution = expert_outputs[expert_id]['output'][batch_idx] * weight
                 final_output[token_idx] += expert_contribution
         
-        return final_output, self.count_tokens_processed_by_each_expert
+        return final_output
 
 
 
@@ -762,7 +761,7 @@ class MoELayerParallel(nn.Module):
 
         
         # Step 4: Process tokens through local experts
-        processed_tokens, count_tokens_processed_by_each_expert = self._process_local_experts_batched(recv_tokens, recv_expert_ids, recv_weights)
+        processed_tokens = self._process_local_experts_batched(recv_tokens, recv_expert_ids, recv_weights)
 
         # Verify we processed exactly what we received
         expected_processed = sum(recv_counts_forward)
@@ -781,7 +780,7 @@ class MoELayerParallel(nn.Module):
         # Reshape the reassembled sequence back to (batch_size, seq_len, n_embd)
         reassembled_sequence = reassembled_sequence_flat.view(batch_size, seq_len, self.n_embd)
         
-        return reassembled_sequence, load_balance_loss, count_tokens_processed_by_each_expert
+        return reassembled_sequence, load_balance_loss
         
         
 class Block(nn.Module):
@@ -797,9 +796,9 @@ class Block(nn.Module):
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
-        moe_out, load_balance_loss, count_tokens_processed_by_each_expert = self.moe(self.ln_2(x))
+        moe_out, load_balance_loss = self.moe(self.ln_2(x))
         x = x + moe_out
-        return x, load_balance_loss, count_tokens_processed_by_each_expert
+        return x, load_balance_loss
     
 #%%
 class CreateMoEParalell(nn.Module):
@@ -862,7 +861,7 @@ class CreateMoEParalell(nn.Module):
         load_balance_losses = []
         block_count = 0
         for block in self.transformer.h:
-            x, load_balance_loss, count_tokens_processed_by_each_expert = block(x)
+            x, load_balance_loss = block(x)
             
             load_balance_losses.append(load_balance_loss)
             # print(f'\n[DEBUG] Rank {dist.get_rank()}  finished block: {block_count}\n')
@@ -888,6 +887,6 @@ class CreateMoEParalell(nn.Module):
             # Note that load balance loss was already scaled in the TopKGateParallel module
             total_loss = main_loss + (total_load_balance_loss)
         
-            return logits, total_loss, count_tokens_processed_by_each_expert
+            return logits, total_loss
         
-        return logits, total_loss, count_tokens_processed_by_each_expert
+        return logits, total_loss

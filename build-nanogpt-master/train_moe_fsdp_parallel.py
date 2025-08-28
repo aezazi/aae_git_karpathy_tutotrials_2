@@ -11,7 +11,7 @@ import model_moe_fsdp_parallel as model
 from model_moe_fsdp_parallel import Block
 
 from torch.distributed import init_process_group, destroy_process_group
-from torch.distributed.fsdp.wrap import (transformer_auto_wrap_policy,)
+from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.distributed.fsdp.fully_sharded_data_parallel import (
     FullyShardedDataParallel as FSDP,
     MixedPrecision,
@@ -132,7 +132,7 @@ model = torch.compile(model) if use_compile else model
 #     transformer_layer_cls = {Block} # transformer layer class as per pytorch tutorial video
 # )
 
-from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
+
 from model_moe_fsdp_parallel import Block, MoELayerParallel, ExpertMoESwiglu, TopKGateParallel
 def moe_aware_auto_wrap_policy(module, recurse, nonwrapped_numel):
     """

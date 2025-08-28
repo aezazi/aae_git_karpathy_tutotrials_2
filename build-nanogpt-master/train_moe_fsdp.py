@@ -12,7 +12,7 @@ import model_moe_fsdp_parallel as model_FSDP_parallel
 from model_moe_fsdp import Block
 
 from torch.distributed import init_process_group, destroy_process_group
-from torch.distributed.fsdp.wrap import (transformer_auto_wrap_policy,)
+from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.distributed.fsdp.fully_sharded_data_parallel import (
     FullyShardedDataParallel as FSDP_wrap,
     MixedPrecision,
@@ -131,13 +131,52 @@ model.to(device)
 
 model = torch.compile(model) if use_compile else model 
 
-# With FSDP, we can wrap different parts of the model. Here I am following a strategy presented in a pytorch tutorial to wrap the transformer block. It's possibel to separately wrap the Moe layer. Will experiment when I get this working.
-transformer_wrapper_policy = functools.partial(
-    transformer_auto_wrap_policy,
-    transformer_layer_cls = {Block} # transformer layer class as per pytorch tutorial video
-)
 
-# FSDP  allows us to define a mixed prescision policy. Here, I am just using bf16 for everything, but we can use hybrid. refer to this tutorial for more good info and nuances https://www.youtube.com/watch?v=-caN92JtKqA&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=4
+if config.model_expert_parallelization:
+    from model_moe_fsdp_parallel import Block, MoELayerParallel, ExpertMoESwiglu, TopKGateParallel
+    def moe_aware_auto_wrap_policy(module, recurse, nonwrapped_numel):
+        """
+        Custom FSDP wrap policy that treats MoE components specially.
+        
+        Key principles:
+        1. MoE experts should NOT be sharded across GPUs (they need to be locally available)
+        2. The gate can be replicated or wrapped as a unit
+        3. Regular transformer components (attention, etc.) can be sharded normally
+        """
+        
+        # Individual experts should never be sharded - wrap them as atomic units
+        if isinstance(module, ExpertMoESwiglu):
+            print(f"[FSDP] Wrapping Expert as atomic unit (no sharding)")
+            return True
+        
+        # The gating mechanism should be wrapped as a unit (can be replicated)
+        if isinstance(module, TopKGateParallel):
+            print(f"[FSDP] Wrapping TopKGate as atomic unit")
+            return True
+        
+        # The entire MoE layer should be wrapped as a unit to preserve expert locality
+        if isinstance(module, MoELayerParallel):
+            print(f"[FSDP] Wrapping entire MoE layer as atomic unit")
+            return True
+        
+        # For regular transformer components, use the standard policy
+        return transformer_auto_wrap_policy(
+            module, 
+            recurse, 
+            nonwrapped_numel,
+            transformer_layer_cls={Block}
+        )
+
+    transformer_wrapper_policy = moe_aware_auto_wrap_policy
+else:
+        
+    # With FSDP, we can wrap different parts of the model. Here I am following a strategy presented in a pytorch tutorial to wrap the transformer block. It's possibel to separately wrap the Moe layer. Will experiment when I get this working.
+    transformer_wrapper_policy = functools.partial(
+        transformer_auto_wrap_policy,
+        transformer_layer_cls = {Block} # transformer layer class as per pytorch tutorial video
+    )
+
+# FSDP also allows us to define a mixed prescision policy. Here, I am just using bf16 for everything, but we can use hybrid. refer to this tutorial for more good info and nuances https://www.youtube.com/watch?v=-caN92JtKqA&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=4
 precision_policy = MixedPrecision(
             param_dtype=torch.bfloat16, # param precision
             reduce_dtype=torch.bfloat16, # gradient communication precision
@@ -159,6 +198,7 @@ model = FSDP_wrap(model,
             forward_prefetch=True
             )
 
+print(f"\n[FSDP] Rank {config.rank}: Model wrapping complete\n")
 
 #%%
 # Instantiate the optimizer.
@@ -177,22 +217,14 @@ if config.FSDP:
 from dataloader_utils import DataLoaderShardMultiGPU
 
 
-# we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
-# effective_batch_size_desired = 983040
- # 2^19 ~ .5M to match the original GPT-2 paper. 
-# config.batch_size = 40
-
-
 # initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
 train_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = config.rank, num_processes=config.world_size, split='train')
 
 val_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = config.rank, num_processes=config.world_size, split='val')
 
-
-
 assert config.effective_batch_size_desired % (train_loader.B * train_loader.seq_len * config.world_size) == 0, f"effective batch size {config.effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.seq_len}"
 
-# this is the desired number of micro steps to accumulate gradients over. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU.
+# this is the desired number of micro steps to accumulate gradients over. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. In my implementation this is equal to effective_batch_size_multiplier. Karpathy starts with effective batch_size desired to match gpt2 implementation and then computes accumulation steps to make sure the formula below works with batch_size
 accumulation_steps_desired = config.effective_batch_size_desired // (train_loader.B * train_loader.seq_len * config.world_size) 
 
 if config.master_process:
@@ -205,7 +237,7 @@ if config.master_process:
 from aae_utils import CosineLearingRateScheduler
 
 
-# compute training steps for 1 epoc
+# compute training steps for 1 epoc. compute number of steps for one pass over our training dataset of 10B tokens
 training_steps = 10_000_000_000 // config.effective_batch_size_desired 
 print(f'\ntraining steps for one epoc: {training_steps:,}\n')
 
@@ -281,24 +313,26 @@ for step in range(training_steps):
             model.require_backward_grad_sync = (micro_step == micro_steps - 1) 
 
         # we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs. The device must be cuda.
-        
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
             logits, loss, top_k_all = model(x, y)
 
-        # This is check to make sure the top_k gate is distributing tokens evenly bewtween the experts. Code below checks every block
-        with torch.no_grad():
-            for layer_idx, top_k_global_ids in enumerate(top_k_all):
-                # Get local expert usage counts for this GPU
-                local_counts = torch.bincount(top_k_global_ids, minlength=config.num_experts)
-                
-                if config.FSDP:
-                    # Aggregate counts across all GPUs to get true expert utilization
-                    global_counts = local_counts.clone()
-                    dist.all_reduce(global_counts, op=dist.ReduceOp.SUM)
-                    accum_topk_expert_count[layer_idx] += global_counts
-                else:
-                    # Single GPU case
-                    accum_topk_expert_count[layer_idx] += local_counts
+        # This is a check to make sure the top_k gate is distributing tokens evenly bewtween the experts. Code below checks every block. This is Claude generated code
+        if config.model_expert_parallelization:
+            pass
+        else:
+            with torch.no_grad():
+                for layer_idx, top_k_global_ids in enumerate(top_k_all):
+                    # Get local expert usage counts for this GPU
+                    local_counts = torch.bincount(top_k_global_ids, minlength=config.num_experts)
+                    
+                    if config.FSDP:
+                        # Aggregate counts across all GPUs to get true expert utilization
+                        global_counts = local_counts.clone()
+                        dist.all_reduce(global_counts, op=dist.ReduceOp.SUM)
+                        accum_topk_expert_count[layer_idx] += global_counts
+                    else:
+                        # Single GPU case
+                        accum_topk_expert_count[layer_idx] += local_counts
         
 
         # divide the loss by the number of micro steps to get the average loss of the accumulated micro steps
