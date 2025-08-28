@@ -242,6 +242,8 @@ class MoELayer(nn.Module):
 
         # Get the top_k_gated weights and top-k indices from the gate. 
         top_k_gated_weights_flat, top_k_indices, load_balance_loss = self.gate(x_flat)
+        print(f'[DEBUG] top_k_gated_weights_flat shape: {top_k_gated_weights_flat.shape}')
+        print(f'[DEBUG] top_k_indices shape: {top_k_indices.shape}')
 
         # Initialize the final output tensor
         final_output_flat = torch.zeros_like(x_flat)
@@ -290,7 +292,7 @@ class MoELayer(nn.Module):
                 # final_test[expert_mask] += expert_output_weighted
                 # print(f'{torch.allclose(final_output, final_test)}')
 
-            break
+            # break
         # reshape final output back to shape (batch_size, seq_len, n_embd)    
         final_output = final_output_flat.view(batch_size, seq_len, -1)
         return final_output, top_k_indices, load_balance_loss
