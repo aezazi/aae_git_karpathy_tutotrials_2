@@ -17,10 +17,7 @@ from torch.distributed.fsdp.fully_sharded_data_parallel import (
     FullyShardedDataParallel as FSDP_wrap,
     MixedPrecision,
     BackwardPrefetch,
-    ShardingStrategy,
-    FullStateDictConfig,
-    StateDictType
-
+    ShardingStrategy
 )
 import torch.distributed as dist
 import functools
@@ -47,7 +44,7 @@ class GPTConfig:
     seq_len: int = 1024 # max sequence length
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
     model_expert_parallelization = False
-    batch_size = 16
+    batch_size = 8
     effective_batch_size_multiplier = 8
     vocab_size: int = 50304
     n_layer: int = 12
@@ -67,6 +64,8 @@ class GPTConfig:
         self.world_size = dist.get_world_size() if self.FSDP else 1
 
         assert self.num_experts % self.world_size == 0, f"num_experts ({self.num_experts}) must be divisible by world_size ({self.world_size})"
+
+        assert self.k <= self.num_experts and self.k > 0, f"k must be at least 1 and less than or equal to num_experts {self.num_experts} you have k={self.k}"
 
         self.effective_batch_size_desired = self.batch_size * self.seq_len * self.world_size * self.effective_batch_size_multiplier
 
