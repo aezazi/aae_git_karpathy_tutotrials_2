@@ -112,7 +112,7 @@ if torch.cuda.is_available():
 
 # %%
 #Instantiate the model based on whether expert paralleliztion was chosen in config
-# if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details. NOTE   that compile may not play well with FSDP. So will have to experiment.
+# if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details. NOTE   that compile may not play well with FSDP and especially not well with manual expert parallelization communications . So will have to experiment.
 if config.model_expert_parallelization:
     model = model_FSDP_parallel(config=config)
     use_compile = False # set to True to use torch.compile
@@ -138,9 +138,8 @@ transformer_wrapper_policy = functools.partial(
     transformer_layer_cls = {Block} # transformer layer class as per pytorch tutorial video
 )
 
-# FSDP  allows us to define a mixed prescision policy. Here, I am just using bf16 for aeverything, but we can use hybrid. refer to this tutorial for more good info and nuances https://www.youtube.com/watch?v=-caN92JtKqA&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=4
+# FSDP  allows us to define a mixed prescision policy. Here, I am just using bf16 for everything, but we can use hybrid. refer to this tutorial for more good info and nuances https://www.youtube.com/watch?v=-caN92JtKqA&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=4
 precision_policy = MixedPrecision(
-            # param precision
             param_dtype=torch.bfloat16, # param precision
             reduce_dtype=torch.bfloat16, # gradient communication precision
             buffer_dtype=torch.bfloat16 # buffer precision
@@ -154,7 +153,7 @@ model = FSDP_wrap(model,
             # reccommendation and other good info from tutorial: https://www.youtube.com/watch?v=sDM56HOziE4&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=8
             backward_prefetch=BackwardPrefetch.BACKWARD_PRE,
 
-            # note that ShardingStrategy.NO_SHARD is the equivalent of having the model run DDP mode
+            # note that ShardingStrategy.NO_SHARD is the equivalent of having the model run in DDP mode
             sharding_strategy=ShardingStrategy.FULL_SHARD,
             
             device_id=torch.cuda.current_device(),

@@ -142,69 +142,75 @@ class TopKMoEGate(nn.Module):
         # Create a linear layer to project the multi-head attention output to the number of experts. This layer will compute the logits for each expert. the logits will have shape (batch_size, seq_len, num_experts) 
         self.gate_linear = nn.Linear(config.n_embd, config.num_experts, bias=False)
 
-        # this is a learnable parameter that will be used to scale the noise added to the logits of each expert. The allows the noise added to each expert to be "customized" and dynamic. It adapts during training depending on the expert. It is initialized to zero and will be learned during training.
+        # this is a learnable parameter that will be used to scale the noise added to the logits of each expert. This allows the noise added to each expert to be "customized" and dynamic. It adapts during training depending on the expert. It is initialized to zero and will be learned during training.
         self.noise_weight = nn.Parameter(torch.zeros(config.num_experts)) 
 
         # this is the standard deviation of the noise added to the logits of each expert. It is a hyperparameter that can be tuned. Note that unlike the noise_weight it is a global parameter, this is not a learnable parameter.
         self.noisy_std = 1.0
         
-    
 
-    def _compute_load_balance_loss(self, expert_usage):
+    def _compute_load_balance_loss(self, logits):
+        # the code here was suggested by Claude
         """Compute load balancing loss to encourage uniform expert usage"""
+
+        # get pre-noise gate_weights for load_balance_loss computation
+        gate_weights = F.softmax(logits, dim=-1)
+        
+        gate_weights_mean= gate_weights.mean(0)  # (num_experts,) the mean of gate_weights over all tokens
         
         # Method 1: Variance-based (simpler)
-        uniform_usage = torch.ones_like(expert_usage) / self.num_experts
-        load_balance_loss = F.mse_loss(expert_usage, uniform_usage)
+        uniform_usage = torch.ones_like(gate_weights_mean) / self.num_experts
+        load_balance_loss = F.mse_loss(gate_weights_mean, uniform_usage)
         
         # Method 2: Entropy-based (more principled)
-        # load_balance_loss = -torch.sum(expert_usage * torch.log(expert_usage + 1e-8))
+        # load_balance_loss = -torch.sum(gate_weights_mean * torch.log(gate_weights_mean + 1e-8))
         
         # Method 3: Coefficient of variation (Switch Transformer style)
-        # mean_usage = expert_usage.mean()
-        # std_usage = expert_usage.std()
+        # mean_usage = gate_weights_mean.mean()
+        # std_usage = gate_weights_mean.std()
         # load_balance_loss = std_usage / (mean_usage + 1e-8)
         
         return load_balance_loss * self.load_balance_scale
 
 
-    def forward(self, x):
-        # x has shape (batch_size, sequence_length, embedding dimension) and is the output of the multi-head attention layer. 
-        batch_size, seq_len, _ = x.shape
-        # In each batch, there is a logit for each token in the sequence and for each expert. 
-        logits = self.gate_linear(x) # (batch_size, seq_len, num_experts)
+    def forward(self, x_flat):
+        # x_flat has shape (batch_size*sequence_length, embedding dimension) and is the output of the multi-head attention layer after being flattened in foreard method of the MoELayer
+        token_count, n_embd = x_flat.shape
 
-        # 2. Calculate load balancing loss using clean logits before noise and topk
-        gate_weights = F.softmax(logits, dim=-1)
-        gate_weights_flat = gate_weights.view(batch_size*seq_len, -1)
-        expert_usage = gate_weights_flat.mean(0)  # (num_experts,)
-        load_balance_loss = self._compute_load_balance_loss(expert_usage)
-        # print(f'load balancing loss: {load_balance_loss}')
+        # just a check to make sure the shape manipulations are consistent with original input
+        assert n_embd == self.n_embd, f"Expected embedding dim {self.n_embd}, got {n_embd}"
+        assert token_count == self.batch_size*self.seq_len, f"token_count {self.batch_size*self.seq_len}, got {token_count}"
 
-        # The global noise to be added to the logits of each expert. This is a random noise tensor of the same shape as the logits. 
-        noise = torch.randn_like(logits) * self.noisy_std # (batch_size, seq_len, num_experts)
+        # project the multi-head attention output n_embd to the number of experts
+        logits = self.gate_linear(x_flat) # (batch_size*seq_len, num_experts)
 
-        # Per-expert noise scaling using self.weights. 
+        # The global noise to be added to the logits of each expert. This is a random noise tensor of the same shape as the logits multiplied by noisy_std to create desired level of variance
+        noise = torch.randn_like(logits) * self.noisy_std # (batch_size*seq_len, num_experts)
+
+        # Per-expert noise scaling using self.noise_weights. 
         noise = noise * self.noise_weight
 
         # Add the noise to the logits. 
-        logits_noisy = logits + noise  # (batch_size, seq_len, num_experts)
+        logits_noisy = logits + noise  # (batch_size*seq_len, num_experts)
 
-        # Get the top-k logits and their corresponding indices. The pytorch top_k method returns the top-k values and their indices along the last dimension (num_experts). In each batch, for each token in the sequence, it selects the top-k logits and their indices from the logits produced by each expert.
-        top_k_logits_noisy, top_k_indices_noisy = logits_noisy.topk(self.k, dim=-1)  # (batch_size, seq_len, top_k) 
+         # Get the top-k logits and their corresponding indices. The pytorch top_k method returns the top-k values and their indices along the last dimension (num_experts). In each batch, for each token in the sequence, it selects the top-k logits and their indices from the logits produced by each expert. Note that the top_k ids are global and not necessarily on this gpu.
+        top_k_logits_noisy, top_k_ids_noisy = logits_noisy.topk(self.k, dim=-1)  # (batch_size* seq_len, top_k) 
 
         # We want sparse matrices. We achieve this by keeping the top-k logits for each token and filling the rest with a value that represents "no contribution" (like negative infinity).  This is done to ensure that the softmax function will ignore these values when computing the weights for each expert. So only the values produced by the top-k experts will contribute to the final output. We implement this by first creating a tensor of the same shape as the logits filled with negative infinity, and then using the scatter function to fill in the top-k logits at the indices of the top-k experts. Note that in this context, softmax is being used to compute "weights" for each expert not probabilities as for multiclass classification. Its a subttle difference but I think important to note.
         
         #full_like clones a tensor and fills it with a specified value (like infinity).
         zeros = torch.full_like(logits_noisy, float('-inf')) 
 
-        # scatter fills the zeros tensor with the top_k_logits at the indices of the top_k_indices along the last dimension (-1). This creates a sparse matrix where only the top-k logits are kept and the rest are filled with negative infinity.
-        sparse_logits_noisy = zeros.scatter(-1, top_k_indices_noisy, top_k_logits_noisy)
-        
-        # Note top_k_gated_weights has shape #(B, seq_len, num_experts). The top_k experts will have weights that sum to 1, the other experts will have weights-inf
+        # scatter fills the zeros tensor with the top_k_logits at the indices of the top_k_ids_global_noisy along the last dimension (-1). This creates a sparse matrix where only the top-k logits are kept and the rest are filled with negative infinity.
+        sparse_logits_noisy = zeros.scatter(-1, top_k_ids_noisy, top_k_logits_noisy)
+
+        # Note top_k_gated_weights has shape #(B*seq_len, num_experts). The top_k experts will have weights that sum to 1, the other experts will have weights-inf
         top_k_gated_weights = F.softmax(sparse_logits_noisy, dim=-1) 
 
-        return top_k_gated_weights, top_k_indices_noisy, load_balance_loss
+        # compute load balance loss using pre-noise logits
+        load_balance_loss = self._compute_load_balance_loss(logits)
+
+        return top_k_gated_weights, top_k_ids_noisy, load_balance_loss
 
 
 # %%
@@ -224,20 +230,21 @@ class MoELayer(nn.Module):
         torch.manual_seed(42)
 
     def forward(self, x):
+        """
+        Create MoE layer
+        """
         batch_size, seq_len, _ = x.shape
-        # Get the top_k_gated weights and top-k indices from the gate. 
-        top_k_gated_weights, top_k_indices, load_balance_loss = self.gate(x)
-
-        # Initialize the fianl output tensor
-        final_output = torch.zeros_like(x)
-        # print(f'\ninput x shape: {x.shape} \n{x}\n')
 
         # flatten the input to (batch_size * seq_len, n_embd) for batch processing
         x_flat = x.view(batch_size*seq_len, -1) 
         # print(f'\ninput x_flat shape: {x_flat.shape} \n{x_flat}\n')
 
-        # flatten the gated weights to (batch_size * seq_len, num_experts) for batch processing. Note that The top_k experts will have weights that sum to 1, the other experts will have weights -inf
-        top_k_gated_weights_flat = top_k_gated_weights.view(batch_size*seq_len, self.num_experts)  
+        # Get the top_k_gated weights and top-k indices from the gate. 
+        top_k_gated_weights_flat, top_k_indices, load_balance_loss = self.gate(x)
+
+        # Initialize the final output tensor
+        final_output = torch.zeros_like(x)
+        # print(f'\ninput x shape: {x.shape} \n{x}\n')
 
         # Iterate over each expert and apply it to the input
         for i, expert in enumerate(self.experts):

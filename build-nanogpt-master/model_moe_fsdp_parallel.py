@@ -616,8 +616,6 @@ class MoELayerParallel(nn.Module):
 
 
 
-
-
     def _communicate_results_back(self, processed_tokens, recv_counts_forward):
         """
         Communicate processed tokens back to the original GPUs using reverse all-to-all
@@ -724,7 +722,7 @@ class MoELayerParallel(nn.Module):
     
     def forward(self, x):
         """
-        Complete MoE layer
+        Create MoE layer
         """
         batch_size, seq_len, _ = x.shape  # (batch_size, seq_len, n_embd)
         # x is the input tensor of shape (batch_size, seq_len, n_embd)
@@ -734,18 +732,16 @@ class MoELayerParallel(nn.Module):
         x_flat = x.view(-1, self.n_embd)
 
         # DEBUG: Check input consistency across ranks. This data sharding managed by FSDP to distribute data among gpus. So we are checking if data is being evenly distributed
-        if dist.is_initialized():
-            input_shape_tensor = torch.tensor([x_flat.shape[0], x_flat.shape[1]], device=device)
-            all_shapes = [torch.zeros_like(input_shape_tensor) for _ in range(self.world_size)]
-            dist.all_gather(all_shapes, input_shape_tensor)
-            if self.rank == 0:
-                print(f"[DEBUG] shape of data to each gpu: {[tuple(s.tolist()) for s in all_shapes]}")
+        # if dist.is_initialized():
+        #     input_shape_tensor = torch.tensor([x_flat.shape[0], x_flat.shape[1]], device=device)
+        #     all_shapes = [torch.zeros_like(input_shape_tensor) for _ in range(self.world_size)]
+        #     dist.all_gather(all_shapes, input_shape_tensor)
+        #     if self.rank == 0:
+        #         print(f"[DEBUG] shape of data to each gpu: {[tuple(s.tolist()) for s in all_shapes]}")
 
         # Step 1: Get top-k expert assignments, weights, and load balance loss
         print(f"[DEBUG] Rank {self.rank}: Getting gate assignments...")
-        
         top_k_gated_weights, top_k_ids_global, load_balance_loss = self.gate(x_flat)
-        
         print(f"[DEBUG] Rank {self.rank}: Gate assignments complete, top_k_gated_weights shape: {top_k_gated_weights.shape}  top_k_ids shape: {top_k_ids_global.shape}.")
 
 
