@@ -44,7 +44,7 @@ class GPTConfig:
     seq_len: int = 1024 # max sequence length
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
     model_expert_parallelization = False
-    batch_size = 8
+    batch_size = 16
     effective_batch_size_multiplier = 8
     vocab_size: int = 50304
     n_layer: int = 12
@@ -52,7 +52,7 @@ class GPTConfig:
     n_embd: int = 768
     base_lr = 6e-4 * 3
     warm_up_steps = 300
-    num_experts = 64
+    num_experts = 8
     load_balance_scale = 0.01
     k = 2
     print_token_routing = True
@@ -288,8 +288,17 @@ for step in range(training_steps):
         # This is check to make sure the top_k gate is distributing tokens evenly bewtween the experts. Code below checks every block
         with torch.no_grad():
             for layer_idx, top_k_global_ids in enumerate(top_k_all):
-                counts = torch.bincount(top_k_global_ids, minlength=config.num_experts)
-                accum_topk_expert_count[layer_idx] += counts
+                # Get local expert usage counts for this GPU
+                local_counts = torch.bincount(top_k_global_ids, minlength=config.num_experts)
+                
+                if config.FSDP:
+                    # Aggregate counts across all GPUs to get true expert utilization
+                    global_counts = local_counts.clone()
+                    dist.all_reduce(global_counts, op=dist.ReduceOp.SUM)
+                    accum_topk_expert_count[layer_idx] += global_counts
+                else:
+                    # Single GPU case
+                    accum_topk_expert_count[layer_idx] += local_counts
         
 
         # divide the loss by the number of micro steps to get the average loss of the accumulated micro steps
@@ -313,9 +322,18 @@ for step in range(training_steps):
     
     t1 = time.time()
     dt = (t1 - t0)
-    tokens_processed = train_loader.B * train_loader.seq_len * micro_steps * config.world_size
-    tokens_per_sec = tokens_processed / dt
-    total_tokens_seen += tokens_processed
+    tokens_processed_local = train_loader.B * train_loader.seq_len * micro_steps
+    if config.FSDP:
+        # In FSDP, each GPU processes different data, so total tokens is sum across GPUs
+        tokens_processed_total = tokens_processed_local * config.world_size
+    else:
+        # Single GPU case
+        tokens_processed_total = tokens_processed_local
+
+    tokens_per_sec = tokens_processed_total / dt
+    total_tokens_seen += tokens_processed_total
+    
+    
     
     # update log_params, log traing loss and learning rate to file, print processing stats.
     if config.master_process:
@@ -333,13 +351,30 @@ for step in range(training_steps):
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f} \ntotal tokens seen: {total_tokens_seen:,}")
 
     if config.print_token_routing and step % 1000 == 0:
-        print(f'\n')
-        for i, c in enumerate(accum_topk_expert_count):
-            print(f"\nLayer {i}: {c.tolist()}")
-        print(f'\n')
-        for i, c in enumerate(accum_topk_expert_count):
-            print(f"\nLayer {i} normalized: {(c / total_tokens_seen)}")
-        print(f'\n')
+        if config.master_process:  # Only print from master process
+            print(f'\n=== Expert Utilization Statistics (Step {step}) ===')
+            print(f'Total tokens processed across all GPUs: {total_tokens_seen:,}')
+            
+            for i, counts in enumerate(accum_topk_expert_count):
+                print(f"\nLayer {i} - Raw counts: {counts.tolist()}")
+                
+                # Calculate normalized usage (should sum to k * total_tokens for top-k=2)
+                normalized = counts.float() / total_tokens_seen
+                print(f"Layer {i} - Normalized: {normalized.tolist()}")
+                
+                # Calculate expert usage balance (coefficient of variation)
+                mean_usage = normalized.mean()
+                std_usage = normalized.std()
+                cv = (std_usage / mean_usage).item() if mean_usage > 0 else float('inf')
+                print(f"Layer {i} - Balance (CV): {cv:.4f} (lower is more balanced)")
+                
+                # Show which experts are over/under utilized
+                expected_usage = config.k / config.num_experts  # Expected usage for balanced experts
+                over_utilized = (normalized > expected_usage * 1.5).sum().item()
+                under_utilized = (normalized < expected_usage * 0.5).sum().item()
+                print(f"Layer {i} - Over-utilized experts: {over_utilized}, Under-utilized: {under_utilized}")
+            
+            print(f'================================\n')
 
     # every x steps evaluate, print, and log hellaswag.
     if ((step > 0 and step % 250 == 0) or last_step):
