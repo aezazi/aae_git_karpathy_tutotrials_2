@@ -276,7 +276,7 @@ class MoELayer(nn.Module):
                 
                 # final_output[expert_mask] += expert_output_weighted.squeeze(1) # (batch_size, seq_len, n_embd)
                 
-                # this is claude suggestion for avoiding += inplace operation in the commented code above.  += inplace operations can sometimes cause problems with FSDP. I am leaving this in the code as reference wvwn though the rest of my code with such operations did npt cause an issue and the model ran
+                # this is claude suggestion for avoiding += inplace operation in the commented code above.  += inplace operations can sometimes cause problems with FSDP. I am leaving this in the code as reference even though the rest of my code with such operations did not cause an issue and the model ran
                 expert_contribution = torch.zeros_like(final_output)
                 expert_contribution[expert_mask] = expert_output_weighted.squeeze(1)
                 final_output = final_output + expert_contribution
