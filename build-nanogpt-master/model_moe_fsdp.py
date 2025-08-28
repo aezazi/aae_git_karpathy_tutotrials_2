@@ -275,14 +275,14 @@ class MoELayer(nn.Module):
 
                 # Scale the expert_output by expert_weights.
                 expert_output_weighted = expert_output * expert_weights # (number of tokens where expert i is in top_k, n_embd)
-                print(f'expert_output_weighted shape: {expert_output_weighted.shape}')
+                print(f'[DEBUG] expert_output_weighted shape: {expert_output_weighted.shape}')
 
                 # Now we need to add the expert_output_weighted to final_output at positions where the expert is in the top_k indices. We use expert_mask to select the rows where expert i is in the top_k indices. Note that here we use expert_mask (not flat_mask) with shape (batch_size, seq_len, hidden_dim) to match the shape of final_output. final_output will have shape (batch_size, seq_len, n_embd), the same as input x.
                 # print(f'final_output shape before adding expert_output_weighted:{final_output.shape} \n{final_output}\n')
 
                 # the huggingface implementation uses .squeeze(1) to remove any singleton dimensions from  the expert_output_weighted tensor. Not sure why this is needed. I tried removing it and the shapes were still compatible and the result the same
                 
-                print(f'final_out shape: {final_output.shape}')
+                print(f'[DEBUG] final_out shape: {final_output.shape}')
                 final_output[flat_mask] += expert_output_weighted.squeeze(1) # (batch_size*seq_len, n_embd)
 
                 
@@ -292,7 +292,7 @@ class MoELayer(nn.Module):
                 # final_output = final_output + expert_contribution
                 
                 
-                print(f'final_output shape after adding expert_output_weighted:{final_output.shape} \n{final_output}\n')
+                print(f'[DEBUG] final_output shape after adding expert_output_weighted:{final_output.shape} \n{final_output}\n')
 
                 # reshape final output back to shape (batch_size, seq_len, n_embd)
                 final_output = final_output.view(batch_size, seq_len, -1)
