@@ -11,7 +11,7 @@ import model_moe_fsdp_parallel as model
 from model_moe_fsdp_parallel import Block
 
 from torch.distributed import init_process_group, destroy_process_group
-from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
+from torch.distributed.fsdp.wrap import (transformer_auto_wrap_policy,)
 from torch.distributed.fsdp.fully_sharded_data_parallel import (
     FullyShardedDataParallel as FSDP,
     MixedPrecision,
@@ -52,7 +52,7 @@ class GPTConfig:
     n_embd: int = 768
     base_lr = 6e-4 * 3
     warm_up_steps = 300
-    num_experts = 8
+    num_experts = 4
     k = 2
     load_balance_scale = .01
     print_token_routing = True
@@ -60,8 +60,6 @@ class GPTConfig:
     def __post_init__(self):
         self.FSDP = dist.is_initialized()
         self.world_size = dist.get_world_size() if self.FSDP else 1
-
-        assert self.num_experts % self.world_size == 0, f"num_experts ({self.num_experts}) must be divisible by world_size ({self.world_size})"
 
         assert self.num_experts % self.world_size == 0, f"num_experts ({self.num_experts}) must be divisible by world_size ({self.world_size})"
 
@@ -122,7 +120,7 @@ print(f"\nTotal parameters: {count_parameters(model):,}\n")
 # torch.set_float32_matmul_precision('high')
 model.to(device)
 
-# if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details. NOTE   that compile may not play well with FSDP. So will have to experiment.
+# if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details. NOTE   that comiple may not play well with FSDP. So will have to experiment.
 use_compile = False # set to True to use torch.compile
 model = torch.compile(model) if use_compile else model 
 
@@ -132,7 +130,7 @@ model = torch.compile(model) if use_compile else model
 #     transformer_layer_cls = {Block} # transformer layer class as per pytorch tutorial video
 # )
 
-
+from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from model_moe_fsdp_parallel import Block, MoELayerParallel, ExpertMoESwiglu, TopKGateParallel
 def moe_aware_auto_wrap_policy(module, recurse, nonwrapped_numel):
     """
@@ -144,9 +142,19 @@ def moe_aware_auto_wrap_policy(module, recurse, nonwrapped_numel):
     3. Regular transformer components (attention, etc.) can be sharded normally
     """
     
+    # Individual experts should never be sharded - wrap them as atomic units
+    if isinstance(module, ExpertMoESwiglu):
+        print(f"[FSDP] Wrapping Expert as atomic unit (no sharding)")
+        return True
+    
+    # The gating mechanism should be wrapped as a unit (can be replicated)
+    if isinstance(module, TopKGateParallel):
+        print(f"[FSDP] Wrapping TopKGate as atomic unit")
+        return True
+    
     # The entire MoE layer should be wrapped as a unit to preserve expert locality
     if isinstance(module, MoELayerParallel):
-        # print(f"[FSDP] Wrapping entire MoE layer as atomic unit")
+        print(f"[FSDP] Wrapping entire MoE layer as atomic unit")
         return True
     
     # For regular transformer components, use the standard policy
@@ -158,6 +166,8 @@ def moe_aware_auto_wrap_policy(module, recurse, nonwrapped_numel):
     )
 
 wrapper_policy = moe_aware_auto_wrap_policy
+
+
 
 # FSDP  allows us to define a mixed prescision policy. Here, I am just using bf16 for everything, but we can use hybrid. refer to this tutorial for more good info and nuances https://www.youtube.com/watch?v=-caN92JtKqA&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=4
 precision_policy = MixedPrecision(
@@ -185,13 +195,13 @@ model = FSDP(model,
 
 print(f"\n[FSDP] Rank {config.rank}: Model wrapping complete\n")
 
-# if config.rank == 0:
-#     print("\n[FSDP] Model structure after wrapping:")
-#     for name, module in model.named_modules():
-#         if isinstance(module, FSDP):
-#             print(f"  FSDP Unit: {name}")
-#         elif isinstance(module, (MoELayerParallel, ExpertMoESwiglu, TopKGateParallel)):
-#             print(f"  MoE Component: {name} -> {type(module).__name__}")
+if config.rank == 0:
+    print("\n[FSDP] Model structure after wrapping:")
+    for name, module in model.named_modules():
+        if isinstance(module, FSDP):
+            print(f"  FSDP Unit: {name}")
+        elif isinstance(module, (MoELayerParallel, ExpertMoESwiglu, TopKGateParallel)):
+            print(f"  MoE Component: {name} -> {type(module).__name__}")
 
 #%%
 # Instantiate the optimizer.
@@ -210,7 +220,7 @@ from dataloader_utils import DataLoaderShardMultiGPU
 
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
 # effective_batch_size_desired = 524288
-effective_batch_size_desired = 2097152
+effective_batch_size_desired = 524288//4
 
  # 2^19 ~ .5M to match the original GPT-2 paper. 
 # config.batch_size = 32
@@ -313,7 +323,7 @@ for step in range(training_steps):
         # we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs. The device must be cuda.
         
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-            logits, loss, _ = model(x, y)
+            logits, loss, count_tokens_processed_by_each_expert = model(x, y)
 
         
         # divide the loss by the number of micro steps to get the average loss of the accumulated micro steps
@@ -359,6 +369,9 @@ for step in range(training_steps):
         # print processing stats
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
 
+        if config.print_token_routing and step % 1000 == 0:
+            gathered_counts = [torch.zeros_like(count_tokens_processed_by_each_expert) for _ in range(config.world_size)]
+            dist.all_gather(gathered_counts, count_tokens_processed_by_each_expert)
             
 
     # every x steps evaluate, print, and log hellaswag.

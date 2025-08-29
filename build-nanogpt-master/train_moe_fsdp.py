@@ -144,16 +144,6 @@ if config.model_expert_parallelization:
         3. Regular transformer components (attention, etc.) can be sharded normally
         """
         
-        # Individual experts should never be sharded - wrap them as atomic units
-        if isinstance(module, ExpertMoESwiglu):
-            # print(f"[FSDP] Wrapping Expert as atomic unit (no sharding)")
-            return True
-        
-        # The gating mechanism should be wrapped as a unit (can be replicated)
-        if isinstance(module, TopKGateParallel):
-            # print(f"[FSDP] Wrapping TopKGate as atomic unit")
-            return True
-        
         # The entire MoE layer should be wrapped as a unit to preserve expert locality
         if isinstance(module, MoELayerParallel):
             # print(f"[FSDP] Wrapping entire MoE layer as atomic unit")
