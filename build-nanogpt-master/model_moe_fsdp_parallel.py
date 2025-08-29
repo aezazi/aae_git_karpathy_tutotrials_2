@@ -749,14 +749,15 @@ class MoELayerParallel(nn.Module):
         assignments = self._get_expert_assignments_with_padding(top_k_ids_global, top_k_gated_weights)
         
         # DEBUG: Print assignment sizes for each rank
-        for gpu_rank in range(self.world_size):
-            if gpu_rank in assignments:
-                token_positions, _, _ = assignments[gpu_rank]
-                print(f"[DEBUG] Rank {self.rank}: Sending {len(token_positions)} tokens to GPU {gpu_rank}")
-            else:
-                print(f"[DEBUG] Rank {self.rank}: Sending 0 tokens to GPU {gpu_rank}")
+        # for gpu_rank in range(self.world_size):
+        #     if gpu_rank in assignments:
+        #         token_positions, _, _ = assignments[gpu_rank]
+        #         print(f"[DEBUG] Rank {self.rank}: Sending {len(token_positions)} tokens to GPU {gpu_rank}")
+        #     else:
+        #         print(f"[DEBUG] Rank {self.rank}: Sending 0 tokens to GPU {gpu_rank}")
 
         # Step 3: Communicate tokens to appropriate GPUs
+        print(f"[DEBUG] Rank {self.rank}: Communicate tokens to assigned GPUs...")
         recv_tokens, recv_expert_ids, recv_weights, recv_counts_forward = self._communicate_tokens(x_flat, assignments)
 
         
@@ -780,7 +781,7 @@ class MoELayerParallel(nn.Module):
         # Reshape the reassembled sequence back to (batch_size, seq_len, n_embd)
         reassembled_sequence = reassembled_sequence_flat.view(batch_size, seq_len, self.n_embd)
         
-        return reassembled_sequence, load_balance_loss
+        return reassembled_sequence, top_k_ids_global, load_balance_loss
         
         
 class Block(nn.Module):
@@ -796,9 +797,9 @@ class Block(nn.Module):
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
-        moe_out, load_balance_loss = self.moe(self.ln_2(x))
+        moe_out, top_k_ids_global, load_balance_loss = self.moe(self.ln_2(x))
         x = x + moe_out
-        return x, load_balance_loss
+        return x, top_k_ids_global, load_balance_loss
     
 #%%
 class CreateMoEParalell(nn.Module):
@@ -858,11 +859,12 @@ class CreateMoEParalell(nn.Module):
 
         # apply the transformer blocks. each block applies layer norm, self-attention, residual connection, layer norm, MoE layer, residual connection
         x = token_embd
+        top_k_all = []
         load_balance_losses = []
         block_count = 0
         for block in self.transformer.h:
-            x, load_balance_loss = block(x)
-            
+            x, top_k_ids_global, load_balance_loss = block(x)
+            top_k_all.append(torch.flatten(top_k_ids_global))
             load_balance_losses.append(load_balance_loss)
             # print(f'\n[DEBUG] Rank {dist.get_rank()}  finished block: {block_count}\n')
             block_count += 1
@@ -887,6 +889,6 @@ class CreateMoEParalell(nn.Module):
             # Note that load balance loss was already scaled in the TopKGateParallel module
             total_loss = main_loss + (total_load_balance_loss)
         
-            return logits, total_loss
+            return logits, total_loss, top_k_all
         
-        return logits, total_loss
+        return logits, total_loss, top_k_all

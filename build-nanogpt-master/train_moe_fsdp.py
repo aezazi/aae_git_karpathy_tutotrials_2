@@ -43,7 +43,7 @@ else:
 class GPTConfig:
     seq_len: int = 1024 # max sequence length
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
-    model_expert_parallelization = False
+    model_expert_parallelization = False # choose whether to run model with just fsdp or fsdp and expert parallelization
     batch_size = 16
     effective_batch_size_multiplier = 8
     vocab_size: int = 50304
@@ -202,10 +202,9 @@ print(f"\n[FSDP] Rank {config.rank}: Model wrapping complete\n")
 
 #%%
 # Instantiate the optimizer.
-# NOTE: I moved the code for optimizer configuration to a separate file called aae_utils.py.
 from aae_utils import ConfigureOptimizer
 
-# Note that we are using the raw model here, not the DDP wrapped model. This is because the DDP wrapper does not have the optimizer parameters. The raw model is the actual model that we want to optimize.
+# Note that in the Karpathy tutotrial he uses DDP  and not FSDP. The optimizer initialization when using DDP is slightly different in that you have to use  the "raw model" parameters beofere wrapping with DDP for optimizer initialization. With FSDP, you can just pass the wrapped model.Refer to the tutorial.
 optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.1, learning_rate = config.base_lr, device_type=device)
 
 if config.FSDP:
@@ -369,7 +368,7 @@ for step in range(training_steps):
     
     
     
-    # update log_params, log traing loss and learning rate to file, print processing stats.
+    # update log_params, log training loss and learning rate to file, print processing stats.
     if config.master_process:
         # update log_params
         log_params.step = step
@@ -384,6 +383,7 @@ for step in range(training_steps):
         # print processing stats
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f} \ntotal tokens seen: {total_tokens_seen:,}")
 
+    # expert utilization tracking code from Claude
     if config.print_token_routing and step % 1000 == 0:
         if config.master_process:  # Only print from master process
             print(f'\n=== Expert Utilization Statistics (Step {step}) ===')
