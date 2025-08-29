@@ -113,7 +113,7 @@ if torch.cuda.is_available():
 #Instantiate the model based on whether expert paralleliztion was chosen in config
 # if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details. NOTE   that compile may not play well with FSDP and especially not well with manual expert parallelization communications . So will have to experiment.
 if config.model_expert_parallelization:
-    model = model_FSDP_parallel(config=config)
+    model = model_FSDP_parallel.CreateMoEParalell(config=config)
     use_compile = False # set to True to use torch.compile
 else:
     model = model_FSDP.CreateMoE(config=config)
@@ -146,17 +146,17 @@ if config.model_expert_parallelization:
         
         # Individual experts should never be sharded - wrap them as atomic units
         if isinstance(module, ExpertMoESwiglu):
-            print(f"[FSDP] Wrapping Expert as atomic unit (no sharding)")
+            # print(f"[FSDP] Wrapping Expert as atomic unit (no sharding)")
             return True
         
         # The gating mechanism should be wrapped as a unit (can be replicated)
         if isinstance(module, TopKGateParallel):
-            print(f"[FSDP] Wrapping TopKGate as atomic unit")
+            # print(f"[FSDP] Wrapping TopKGate as atomic unit")
             return True
         
         # The entire MoE layer should be wrapped as a unit to preserve expert locality
         if isinstance(module, MoELayerParallel):
-            print(f"[FSDP] Wrapping entire MoE layer as atomic unit")
+            # print(f"[FSDP] Wrapping entire MoE layer as atomic unit")
             return True
         
         # For regular transformer components, use the standard policy

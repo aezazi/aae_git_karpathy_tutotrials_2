@@ -45,14 +45,14 @@ else:
 class GPTConfig:
     seq_len: int = 1024 # max sequence length
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
-    batch_size = 32
+    batch_size = 16
     vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
     base_lr = 6e-4 * 3
     warm_up_steps = 300
-    num_experts = 64
+    num_experts = 8
     k = 2
     load_balance_scale = .01
     print_token_routing = True
@@ -146,17 +146,17 @@ def moe_aware_auto_wrap_policy(module, recurse, nonwrapped_numel):
     
     # Individual experts should never be sharded - wrap them as atomic units
     if isinstance(module, ExpertMoESwiglu):
-        print(f"[FSDP] Wrapping Expert as atomic unit (no sharding)")
+        # print(f"[FSDP] Wrapping Expert as atomic unit (no sharding)")
         return True
     
     # The gating mechanism should be wrapped as a unit (can be replicated)
     if isinstance(module, TopKGateParallel):
-        print(f"[FSDP] Wrapping TopKGate as atomic unit")
+        # print(f"[FSDP] Wrapping TopKGate as atomic unit")
         return True
     
     # The entire MoE layer should be wrapped as a unit to preserve expert locality
     if isinstance(module, MoELayerParallel):
-        print(f"[FSDP] Wrapping entire MoE layer as atomic unit")
+        # print(f"[FSDP] Wrapping entire MoE layer as atomic unit")
         return True
     
     # For regular transformer components, use the standard policy
@@ -325,7 +325,7 @@ for step in range(training_steps):
         # we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs. The device must be cuda.
         
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-            logits, loss, count_tokens_processed_by_each_expert = model(x, y)
+            logits, loss, _ = model(x, y)
 
         
         # divide the loss by the number of micro steps to get the average loss of the accumulated micro steps
@@ -371,9 +371,6 @@ for step in range(training_steps):
         # print processing stats
         print(f"Step {step},  shard_idx: {shard_idx},  Loss: {loss_accum.item():.5f},  LR: {optimizer.param_groups[0]['lr']:.7f},  norm: {norm:.4f}, Time: {dt:.2f}sec,  Tokens/sec: {tokens_per_sec:,.0f}")
 
-        if config.print_token_routing and step % 1000 == 0:
-            gathered_counts = [torch.zeros_like(count_tokens_processed_by_each_expert) for _ in range(config.world_size)]
-            dist.all_gather(gathered_counts, count_tokens_processed_by_each_expert)
             
 
     # every x steps evaluate, print, and log hellaswag.
