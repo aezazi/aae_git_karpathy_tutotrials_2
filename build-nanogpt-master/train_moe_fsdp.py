@@ -316,22 +316,22 @@ for step in range(training_steps):
             logits, loss, top_k_all = model(x, y)
 
         # This is a check to make sure the top_k gate is distributing tokens evenly bewtween the experts. Code below checks every block. This is Claude generated code
-        if config.model_expert_parallelization:
-            pass
-        else:
-            with torch.no_grad():
-                for layer_idx, top_k_global_ids in enumerate(top_k_all):
-                    # Get local expert usage counts for this GPU
-                    local_counts = torch.bincount(top_k_global_ids, minlength=config.num_experts)
-                    
-                    if config.FSDP:
-                        # Aggregate counts across all GPUs to get true expert utilization
-                        global_counts = local_counts.clone()
-                        dist.all_reduce(global_counts, op=dist.ReduceOp.SUM)
-                        accum_topk_expert_count[layer_idx] += global_counts
-                    else:
-                        # Single GPU case
-                        accum_topk_expert_count[layer_idx] += local_counts
+        # if config.model_expert_parallelization:
+        #     pass
+        # else:
+        with torch.no_grad():
+            for layer_idx, top_k_global_ids in enumerate(top_k_all):
+                # Get local expert usage counts for this GPU
+                local_counts = torch.bincount(top_k_global_ids, minlength=config.num_experts)
+                
+                if config.FSDP:
+                    # Aggregate counts across all GPUs to get true expert utilization
+                    global_counts = local_counts.clone()
+                    dist.all_reduce(global_counts, op=dist.ReduceOp.SUM)
+                    accum_topk_expert_count[layer_idx] += global_counts
+                else:
+                    # Single GPU case
+                    accum_topk_expert_count[layer_idx] += local_counts
         
 
         # divide the loss by the number of micro steps to get the average loss of the accumulated micro steps
