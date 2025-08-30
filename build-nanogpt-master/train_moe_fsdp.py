@@ -44,15 +44,15 @@ class GPTConfig:
     seq_len: int = 2048 # max sequence length
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
     model_expert_parallelization = False # choose whether to run model with just fsdp or fsdp and expert parallelization
-    batch_size = 16
+    batch_size = 8
     effective_batch_size_multiplier = 8
     vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
-    n_embd: int = 768
+    n_embd: int = 1536
     base_lr = 6e-4 * 3
     warm_up_steps = 300
-    num_experts = 64
+    num_experts = 8
     load_balance_scale = 0.01
     k = 2
     print_token_routing = True

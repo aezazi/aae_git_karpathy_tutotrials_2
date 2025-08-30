@@ -631,3 +631,127 @@ print(sf2)
 10/2
 
 # %%
+import deepspeed
+
+# %%
+import deepspeed
+try:
+    from deepspeed.moe.layer import MoE
+    print("MoE components available")
+except ImportError:
+    print("MoE components missing - reinstall with [moe]")
+
+
+# %%
+def find_moe_in_deepspeed():
+    """Find where MoE classes are actually located in DeepSpeed 0.17.5"""
+    import os
+    import importlib
+    import inspect
+    
+    print("=== Searching for MoE in DeepSpeed 0.17.5 ===")
+    
+    # First, let's examine the moe directory structure
+    try:
+        import deepspeed
+        ds_path = os.path.dirname(deepspeed.__file__)
+        moe_path = os.path.join(ds_path, 'moe')
+        
+        if os.path.exists(moe_path):
+            print(f"MoE directory found at: {moe_path}")
+            print("Contents:")
+            for item in os.listdir(moe_path):
+                if not item.startswith('.'):
+                    print(f"  - {item}")
+                    
+                    # Check if it's a Python file
+                    if item.endswith('.py') and item != '__init__.py':
+                        module_name = item[:-3]
+                        try:
+                            full_module_path = f'deepspeed.moe.{module_name}'
+                            module = importlib.import_module(full_module_path)
+                            
+                            # Look for classes with 'MoE' in the name
+                            for name in dir(module):
+                                if 'MoE' in name and inspect.isclass(getattr(module, name)):
+                                    print(f"    Found class: {name} in {full_module_path}")
+                        except ImportError as e:
+                            print(f"    Could not import {full_module_path}: {e}")
+        else:
+            print("No MoE directory found!")
+    
+    except Exception as e:
+        print(f"Error examining directory structure: {e}")
+    
+    # Try known working patterns from other versions
+    known_patterns = [
+        'deepspeed.moe.layer',
+        'deepspeed.runtime.zero.moe', 
+        'deepspeed.ops.moe',
+        'deepspeed.model_implementations.moe'
+    ]
+    
+    print("\n=== Testing Known Import Patterns ===")
+    working_imports = []
+    
+    for pattern in known_patterns:
+        try:
+            module = importlib.import_module(pattern)
+            # Look for MoE class
+            if hasattr(module, 'MoE'):
+                print(f"✓ Found MoE in {pattern}")
+                working_imports.append(f"from {pattern} import MoE")
+            else:
+                # Look for any class with MoE in name
+                moe_classes = [name for name in dir(module) if 'MoE' in name and inspect.isclass(getattr(module, name, None))]
+                if moe_classes:
+                    print(f"✓ Found MoE classes in {pattern}: {moe_classes}")
+                    for cls in moe_classes:
+                        working_imports.append(f"from {pattern} import {cls}")
+                else:
+                    print(f"- {pattern} exists but no MoE classes found")
+        except ImportError:
+            print(f"✗ {pattern} not found")
+    
+    # Try direct file inspection
+    print("\n=== Direct File Inspection ===")
+    try:
+        import deepspeed.moe as moe_module
+        moe_dir = os.path.dirname(moe_module.__file__)
+        
+        for root, dirs, files in os.walk(moe_dir):
+            for file in files:
+                if file.endswith('.py'):
+                    filepath = os.path.join(root, file)
+                    try:
+                        with open(filepath, 'r') as f:
+                            content = f.read()
+                            if 'class MoE' in content:
+                                rel_path = os.path.relpath(filepath, os.path.dirname(deepspeed.__file__))
+                                module_path = rel_path.replace(os.sep, '.').replace('.py', '')
+                                print(f"Found 'class MoE' in: deepspeed.{module_path}")
+                                working_imports.append(f"from deepspeed.{module_path} import MoE")
+                    except Exception as e:
+                        continue
+    except Exception as e:
+        print(f"File inspection failed: {e}")
+    
+    print("\n=== Summary ===")
+    if working_imports:
+        print("Working import statements found:")
+        for imp in working_imports:
+            print(f"  {imp}")
+        
+        # Test the first one
+        print(f"\n=== Testing First Import ===")
+        try:
+            exec(working_imports[0])
+            print(f"✓ SUCCESS: {working_imports[0]}")
+        except Exception as e:
+            print(f"✗ FAILED: {e}")
+    else:
+        print("❌ No working MoE imports found!")
+        print("This suggests MoE is not properly installed in this DeepSpeed version.")
+# %%
+find_moe_in_deepspeed()
+# %%
