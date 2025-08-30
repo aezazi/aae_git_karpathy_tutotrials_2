@@ -41,7 +41,7 @@ else:
 
 @dataclass
 class GPTConfig:
-    seq_len: int = 1024 # max sequence length
+    seq_len: int = 2048 # max sequence length
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
     model_expert_parallelization = False # choose whether to run model with just fsdp or fsdp and expert parallelization
     batch_size = 16
@@ -52,7 +52,7 @@ class GPTConfig:
     n_embd: int = 768
     base_lr = 6e-4 * 3
     warm_up_steps = 300
-    num_experts = 8
+    num_experts = 64
     load_balance_scale = 0.01
     k = 2
     print_token_routing = True
@@ -62,6 +62,8 @@ class GPTConfig:
         
         self.FSDP = dist.is_initialized()
         self.world_size = dist.get_world_size() if self.FSDP else 1
+
+        assert self.n_embd % self.n_head == 0 
 
         assert self.num_experts % self.world_size == 0, f"num_experts ({self.num_experts}) must be divisible by world_size ({self.world_size})"
 
@@ -120,12 +122,11 @@ else:
     use_compile = True # set to True to use torch.compile
 
 # compute number of model parameters
-# def count_parameters(model):
+# def count_parameters(model, config=None):
 #     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
-
-def count_parameters_moe(model, config):
+def count_parameters_moe(model, config=config):
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     
     # Count expert parameters
@@ -151,12 +152,13 @@ def count_parameters_moe(model, config):
         'params_per_expert': expert_params_per_expert
     }
 
-
+print('here')
 if config.master_process:
-    params_counted = count_parameters_moe(model, config)
+    params_counted = count_parameters_moe(model)
     print(f'\n')
     for key, value in params_counted.items():
-        print(f"{key}: {value}")
+        print(f"{key}: {value:,}")
+    # print(params_counted)
     print(f'\n')
 
 
