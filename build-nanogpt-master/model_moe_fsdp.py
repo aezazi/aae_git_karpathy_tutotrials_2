@@ -1,5 +1,5 @@
 #%%
-#utility file to create model
+# imports
 import os
 from dataclasses import dataclass
 import torch

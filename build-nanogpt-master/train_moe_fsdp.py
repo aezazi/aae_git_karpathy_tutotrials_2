@@ -120,11 +120,45 @@ else:
     use_compile = True # set to True to use torch.compile
 
 # compute number of model parameters
-def count_parameters(model):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+# def count_parameters(model):
+#     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+
+def count_parameters_moe(model, config):
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    
+    # Count expert parameters
+    expert_params = 0
+    shared_params = 0
+    
+    for name, param in model.named_parameters():
+        if 'expert' in name.lower() or 'moe' in name.lower():
+            expert_params += param.numel()
+        else:
+            shared_params += param.numel()
+    
+    # Active parameters per forward pass
+    expert_params_per_expert = expert_params // config.num_experts
+    active_expert_params = expert_params_per_expert * config.k
+    active_params = shared_params + active_expert_params
+    
+    return {
+        'total_params': total_params,
+        'shared_params': shared_params, 
+        'expert_params': expert_params,
+        'active_params': active_params,
+        'params_per_expert': expert_params_per_expert
+    }
+
 
 if config.master_process:
-    print(f"\nTotal parameters: {count_parameters(model):,}\n")
+    params_counted = count_parameters_moe(model, config)
+    print(f'\n')
+    for key, value in params_counted.items():
+        print(f"{key}: {value}")
+    print(f'\n')
+
 
 # torch.set_float32_matmul_precision('high')
 model.to(device)
