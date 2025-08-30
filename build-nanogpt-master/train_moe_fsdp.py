@@ -49,10 +49,10 @@ class GPTConfig:
     vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
-    n_embd: int = 1536
+    n_embd: int = 768
     base_lr = 6e-4 * 3
     warm_up_steps = 300
-    num_experts = 8
+    num_experts = 16
     load_balance_scale = 0.01
     k = 2
     print_token_routing = True
@@ -152,7 +152,7 @@ def count_parameters_moe(model, config=config):
         'params_per_expert': expert_params_per_expert
     }
 
-print('here')
+
 if config.master_process:
     params_counted = count_parameters_moe(model)
     print(f'\n')
