@@ -1,226 +1,205 @@
-# verify_deepspeed_moe.py
-import sys
+#!/usr/bin/env python3
+
 import torch
-import subprocess
+import torch.nn as nn
+import deepspeed
+import os
 
-def check_basic_installation():
-    """Check basic DeepSpeed installation"""
-    print("=== Basic Installation Checks ===")
+def initialize_deepspeed_distributed():
+    """Initialize DeepSpeed's distributed backend for single GPU"""
+    print("=== Initializing DeepSpeed Distributed Backend ===")
+    
+    # Set environment variables for single-process distributed
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29500'
+    os.environ['RANK'] = '0'
+    os.environ['LOCAL_RANK'] = '0' 
+    os.environ['WORLD_SIZE'] = '1'
     
     try:
-        import deepspeed
-        print(f"✓ DeepSpeed version: {deepspeed.__version__}")
-    except ImportError:
-        print("✗ DeepSpeed not installed")
-        return False
-    
-    # Check CUDA availability
-    if torch.cuda.is_available():
-        print(f"✓ CUDA available: {torch.version.cuda}")
-        print(f"✓ GPU count: {torch.cuda.device_count()}")
-    else:
-        print("✗ CUDA not available")
-        return False
-    
-    return True
-
-def check_moe_support():
-    """Check MoE specific components"""
-    print("\n=== MoE Component Checks ===")
-    
-    try:
-        from deepspeed.moe.layer import MoE
-        print("✓ DeepSpeed MoE module importable")
-    except ImportError as e:
-        print(f"✗ MoE import failed: {e}")
-        return False
-    
-    try:
-        from deepspeed.moe.experts import Experts
-        print("✓ MoE Experts module available")
-    except ImportError:
-        print("✗ MoE Experts module not available")
-    
-    try:
-        from deepspeed.moe.sharded_moe import TopKGate
-        print("✓ TopKGate available")
-    except ImportError:
-        print("✗ TopKGate not available")
-    
-    return True
-
-def check_tutel():
-    """Check Tutel installation for high-performance MoE"""
-    print("\n=== Tutel Installation Check ===")
-    
-    try:
-        import tutel
-        print(f"✓ Tutel installed")
-        
-        # Check if tutel MoE is available
-        from tutel import moe as tutel_moe
-        print("✓ Tutel MoE module available")
+        # Initialize distributed backend
+        deepspeed.init_distributed()
+        print("✓ DeepSpeed distributed backend initialized")
         return True
-    except ImportError:
-        print("✗ Tutel not installed (optional but recommended for performance)")
-        return False
+    except Exception as e:
+        print(f"! Could not initialize distributed backend: {e}")
+        try:
+            # Alternative: Initialize torch distributed directly
+            torch.distributed.init_process_group(
+                backend='nccl' if torch.cuda.is_available() else 'gloo',
+                init_method='env://',
+                world_size=1,
+                rank=0
+            )
+            print("✓ PyTorch distributed backend initialized")
+            return True
+        except Exception as e2:
+            print(f"! Could not initialize any distributed backend: {e2}")
+            return False
 
-def test_simple_moe_creation():
-    """Test creating a simple MoE layer"""
-    print("\n=== MoE Layer Creation Test ===")
+class SimpleExpert(nn.Module):
+    """Simple expert for testing"""
+    def __init__(self, hidden_size):
+        super().__init__()
+        self.linear1 = nn.Linear(hidden_size, hidden_size * 2)
+        self.activation = nn.ReLU()
+        self.linear2 = nn.Linear(hidden_size * 2, hidden_size)
+    
+    def forward(self, x):
+        return self.linear2(self.activation(self.linear1(x)))
+
+def test_moe_complete():
+    """Complete MoE test with proper initialization"""
+    print("DeepSpeed MoE Complete Test")
+    print("=" * 40)
+    
+    # Initialize distributed backend
+    if not initialize_deepspeed_distributed():
+        print("❌ Cannot run MoE without distributed backend")
+        print("💡 Try running with: python -m torch.distributed.launch --nproc_per_node=1 test_moe.py")
+        return False
+    
+    print("\n=== Creating MoE Layer ===")
     
     try:
         from deepspeed.moe.layer import MoE
-        import torch.nn as nn
         
-        # Simple expert class
-        class SimpleExpert(nn.Module):
-            def __init__(self, hidden_size):
-                super().__init__()
-                self.linear = nn.Linear(hidden_size, hidden_size)
-            
-            def forward(self, x):
-                return self.linear(x)
-        
-        # Create MoE layer
-        hidden_size = 768
-        num_experts = 8
+        # MoE configuration
+        hidden_size = 512
+        num_experts = 4
         k = 2
         
-        moe = MoE(
+        # Create expert
+        expert = SimpleExpert(hidden_size)
+        
+        # Create MoE layer
+        moe_layer = MoE(
             hidden_size=hidden_size,
-            expert=SimpleExpert(hidden_size),
+            expert=expert,
             num_experts=num_experts,
             k=k,
             capacity_factor=1.25,
             eval_capacity_factor=2.0,
             min_capacity=4,
             use_residual=False,
+            drop_tokens=True,
+            use_rts=True,
+            use_tutel=False  # Set to True if you install tutel
         )
         
         print(f"✓ MoE layer created successfully")
         print(f"  - Hidden size: {hidden_size}")
-        print(f"  - Experts: {num_experts}")
+        print(f"  - Number of experts: {num_experts}")
         print(f"  - Top-k: {k}")
+        print(f"  - Use Tutel: False")
         
-        return True
+        # Move to GPU if available
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        moe_layer = moe_layer.to(device)
+        print(f"✓ Moved to device: {device}")
+        
     except Exception as e:
-        print(f"✗ MoE layer creation failed: {e}")
+        print(f"❌ MoE layer creation failed: {e}")
         return False
-
-def test_moe_forward_pass():
-    """Test a forward pass through MoE"""
-    print("\n=== MoE Forward Pass Test ===")
+    
+    print("\n=== Testing Forward Pass ===")
     
     try:
-        from deepspeed.moe.layer import MoE
-        import torch.nn as nn
-        import torch
-        
-        class SimpleExpert(nn.Module):
-            def __init__(self, hidden_size):
-                super().__init__()
-                self.linear = nn.Linear(hidden_size, hidden_size)
-                self.activation = nn.ReLU()
-            
-            def forward(self, x):
-                return self.activation(self.linear(x))
-        
-        hidden_size = 512
-        batch_size = 4
-        seq_len = 32
-        
-        moe = MoE(
-            hidden_size=hidden_size,
-            expert=SimpleExpert(hidden_size),
-            num_experts=8,
-            k=2,
-            capacity_factor=1.25,
-        )
-        
         # Create test input
-        x = torch.randn(batch_size * seq_len, hidden_size)
+        batch_size = 2
+        seq_len = 16
+        input_tensor = torch.randn(batch_size * seq_len, hidden_size, device=device)
         
-        if torch.cuda.is_available():
-            moe = moe.cuda()
-            x = x.cuda()
-            print("✓ Using CUDA for test")
+        print(f"Input shape: {input_tensor.shape}")
+        
+        # Set to training mode
+        moe_layer.train()
         
         # Forward pass
-        output, gate_loss, metadata = moe(x)
+        with torch.cuda.amp.autocast(enabled=False):  # Disable autocast for stability
+            output, gate_loss, metadata = moe_layer(input_tensor)
         
-        print(f"✓ Forward pass successful")
-        print(f"  - Input shape: {x.shape}")
+        print(f"✓ Forward pass successful!")
+        print(f"  - Output shape: {output.shape}")
+        print(f"  - Gate loss: {gate_loss.item():.6f}")
+        print(f"  - Metadata keys: {list(metadata.keys()) if isinstance(metadata, dict) else 'Not a dict'}")
+        
+        # Test backward pass
+        print("\n=== Testing Backward Pass ===")
+        loss = output.mean() + gate_loss
+        loss.backward()
+        print("✓ Backward pass successful!")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Forward/backward pass failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+def test_with_tutel():
+    """Test MoE with Tutel if available"""
+    print("\n=== Testing with Tutel (if available) ===")
+    
+    try:
+        import tutel
+        print(f"✓ Tutel available: {tutel.__version__}")
+        
+        from deepspeed.moe.layer import MoE
+        
+        hidden_size = 256
+        expert = SimpleExpert(hidden_size)
+        
+        moe_layer = MoE(
+            hidden_size=hidden_size,
+            expert=expert,
+            num_experts=4,
+            k=2,
+            use_tutel=True  # Enable Tutel
+        )
+        
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        moe_layer = moe_layer.to(device)
+        
+        # Test forward pass
+        input_tensor = torch.randn(32, hidden_size, device=device)
+        output, gate_loss, metadata = moe_layer(input_tensor)
+        
+        print("✓ Tutel-enabled MoE works!")
         print(f"  - Output shape: {output.shape}")
         print(f"  - Gate loss: {gate_loss.item():.6f}")
         
         return True
-    except Exception as e:
-        print(f"✗ Forward pass failed: {e}")
-        return False
-
-def check_deepspeed_ops():
-    """Check if DeepSpeed ops are properly compiled"""
-    print("\n=== DeepSpeed Ops Check ===")
-    
-    try:
-        import deepspeed.ops
-        print("✓ DeepSpeed ops module available")
         
-        # Check specific MoE ops
-        try:
-            from deepspeed.ops.sparse_attention import SparseSelfAttention
-            print("✓ Sparse attention ops available")
-        except ImportError:
-            print("! Sparse attention ops not available (may not be needed)")
-        
-        return True
-    except Exception as e:
-        print(f"! DeepSpeed ops check: {e}")
+    except ImportError:
+        print("! Tutel not available - install with: pip install tutel")
         return False
-
-def run_deepspeed_info():
-    """Run deepspeed environment info"""
-    print("\n=== DeepSpeed Environment Info ===")
-    
-    try:
-        result = subprocess.run(['ds_report'], capture_output=True, text=True)
-        if result.returncode == 0:
-            print("✓ DeepSpeed environment report:")
-            print(result.stdout)
-        else:
-            print("! ds_report command failed")
-    except FileNotFoundError:
-        print("! ds_report command not found")
     except Exception as e:
-        print(f"! Error running ds_report: {e}")
+        print(f"! Tutel test failed: {e}")
+        return False
 
 def main():
-    print("DeepSpeed MoE Installation Verification")
-    print("=" * 50)
+    success = test_moe_complete()
     
-    all_passed = True
-    
-    # Run all checks
-    all_passed &= check_basic_installation()
-    all_passed &= check_moe_support()
-    check_tutel()  # Optional
-    check_deepspeed_ops()  # Optional
-    all_passed &= test_simple_moe_creation()
-    all_passed &= test_moe_forward_pass()
-    
-    # Environment info
-    run_deepspeed_info()
-    
-    print("\n" + "=" * 50)
-    if all_passed:
-        print("✓ All critical tests passed! DeepSpeed MoE is ready to use.")
-    else:
-        print("✗ Some tests failed. Check installation.")
+    if success:
+        print("\n🎉 SUCCESS: DeepSpeed MoE is working correctly!")
         
-    print("\nInstallation commands if needed:")
-    print("pip install deepspeed[moe]")
-    print("pip install tutel  # Optional but recommended")
+        # Optional: Test with Tutel
+        test_with_tutel()
+        
+        print("\n📋 Summary:")
+        print("✅ MoE layer creation: Working")
+        print("✅ Forward pass: Working") 
+        print("✅ Backward pass: Working")
+        print("✅ Distributed backend: Working")
+        
+        print("\n💡 Your DeepSpeed MoE setup is ready for training!")
+        print("Use: from deepspeed.moe.layer import MoE")
+        
+    else:
+        print("\n❌ Some issues remain. Try running with torch.distributed.launch:")
+        print("python -m torch.distributed.launch --nproc_per_node=1 --master_port=29501 test_moe.py")
 
 if __name__ == "__main__":
     main()
