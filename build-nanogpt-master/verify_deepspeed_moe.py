@@ -140,11 +140,11 @@ def test_moe_complete():
 
 def test_with_tutel():
     """Test MoE with Tutel if available"""
-    print("\n=== Testing with Tutel (if available) ===")
+    # print("\n=== Testing with Tutel (if available) ===")
     
     try:
         import tutel
-        print(f"✓ Tutel available: {tutel.__version__}")
+        print(f"✓ Tutel available")
         
         from deepspeed.moe.layer import MoE
         
