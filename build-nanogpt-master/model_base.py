@@ -256,6 +256,10 @@ if torch.cuda.is_available():
 # if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details
 
 model = GPT(GPTConfig())
+total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+print(f'model total parameters: {total_params:,}')
+
+
 
 torch.set_float32_matmul_precision('high')
 model.to(device)
@@ -294,18 +298,18 @@ from dataloader_utils import DataLoaderShardMultiGPU
 B = 64 # batch size
 T = 1024 # sequence length
 
-train_loader = DataLoaderShardMultiGPU(B=B, T=T, process_rank = ddp_rank, num_processes=ddp_world_size, split='train')
+train_loader = DataLoaderShardMultiGPU(B=B, seq_len=T, process_rank = ddp_rank, num_processes=ddp_world_size, split='train')
 
-val_loader = DataLoaderShardMultiGPU(B=B, T=T, process_rank = ddp_rank, num_processes=ddp_world_size, split='val')
+val_loader = DataLoaderShardMultiGPU(B=B, seq_len=T, process_rank = ddp_rank, num_processes=ddp_world_size, split='val')
 
 # we want to match the batch size of 0.5M used in the GPT2. Our GPUs can't handle that. So we will use a smaller batch size and accumulate gradients over multiple steps to get the same effect. See the training loop below for details on implementing gradient accumulation.
 effective_batch_size_desired =524288 # 2^19 ~ .5M to match the original GPT-2 paper. 
 
 
-assert effective_batch_size_desired % (train_loader.B * train_loader.T * ddp_world_size) == 0, f"effective batch size {effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.T}"
+assert effective_batch_size_desired % (train_loader.B * train_loader.seq_len * ddp_world_size) == 0, f"effective batch size {effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.T}"
 
 # this is the desired number of micro steps to accumulate gradients over. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU.
-accumulation_steps_desired = effective_batch_size_desired // (train_loader.B * train_loader.T * ddp_world_size) 
+accumulation_steps_desired = effective_batch_size_desired // (train_loader.B * train_loader.seq_len * ddp_world_size) 
 
 if master_process:
     print(f"\neffective batch size desired: {effective_batch_size_desired}")
@@ -346,10 +350,10 @@ print(f'\nScheduler initialized on GPU rank {ddp_rank}, of {ddp_world_size}\n')
 import eval_log_utils as eval_log_utils
 
 log_params = eval_log_utils.LogParamsFilesConfig(
-    ddp = ddp,
-    ddp_world_size = ddp_world_size,
-    ddp_rank = ddp_rank,
-    # ddp_local_rank = ddp_local_rank
+    FSDP = ddp,
+    world_size = ddp_world_size,
+    rank = ddp_rank,
+    local_rank = ddp_local_rank,
     model = model,
     device = device,
     encoder = tiktoken.get_encoding('gpt2'),
@@ -367,7 +371,7 @@ log_params = eval_log_utils.LogParamsFilesConfig(
     lr = 0.0
 )
 
-
+   
 #%%
 # Run the training loop.
 model.train() # set the model to training mode
@@ -417,7 +421,7 @@ for step in range(training_steps):
     
     t1 = time.time()
     dt = (t1 - t0)
-    tokens_processed = train_loader.B * train_loader.T * micro_steps * ddp_world_size
+    tokens_processed = train_loader.B * train_loader.seq_len * micro_steps * ddp_world_size
     tokens_per_sec = tokens_processed / dt
     
     # update log_params, log traing loss and learning rate to file, print processing stats.
@@ -452,6 +456,6 @@ if ddp:
 
 import sys; sys.exit(0) # exit the script after training. This is just for testing the training loop. Remove this line to continue with the training loop.
 
-# torchrun --standalone --nproc_per_node=4 aae_model_base.py
+# torchrun --standalone --nproc_per_node=4 model_base.py
 
 
