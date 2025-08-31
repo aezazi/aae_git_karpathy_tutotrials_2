@@ -126,6 +126,7 @@ class ExpertMLP(nn.Module):
     
 
 
+
 #%%
 class Block(nn.Module):
     def __init__(self, config):
@@ -134,10 +135,11 @@ class Block(nn.Module):
         self.attn = CausalSelfAttention(config)  # Keep existing
         self.ln_2 = nn.LayerNorm(config.n_embd)
         
+    
         # Replace your MoELayer with DeepSpeed MoE
         self.moe = MoE(
             hidden_size=config.n_embd,
-            expert=ExpertMLP,
+            expert= ExpertMLP(config),
             num_experts=config.num_experts,
             k=config.k,
             capacity_factor=1.25,
@@ -149,9 +151,9 @@ class Block(nn.Module):
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
-        moe_output, gate_loss, _ = self.moe(self.ln_2(x))
+        moe_output, _, _ = self.moe(self.ln_2(x))
         x = x + moe_output
-        return x, gate_loss
+        return x
 
 # %%
 class CreateMoEDeepSpeed(nn.Module):
@@ -167,25 +169,36 @@ class CreateMoEDeepSpeed(nn.Module):
         self.transformer.wte.weight = self.lm_head.weight
         self.apply(self._init_weights)
 
+
+        #weight initialization. Mostly from GPT suggestions
+    def _init_weights(self, module):
+        std = 0.02
+        if isinstance(module, nn.Linear):
+            if hasattr(module, 'NANOGPT_SCALE_INIT'):
+                std *= (2 * self.config.n_layer) ** -0.5
+            nn.init.normal_(module.weight, mean=0.0, std=std)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
     def forward(self, idx, targets=None):
         B, T = idx.shape
         assert T <= self.config.seq_len
         
         x = self.transformer.wte(idx)
-        gate_losses = []
         
+        # Process through transformer blocks (no gate loss collection)
         for block in self.transformer.h:
-            x, gate_loss = block(x)
-            gate_losses.append(gate_loss)
+            x = block(x)  # Just get x, no gate losses
         
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x)
         
         loss = None
         if targets is not None:
-            ce_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
-            total_gate_loss = sum(gate_losses)
-            loss = ce_loss + total_gate_loss
+            # Only cross-entropy loss - DeepSpeed handles gate losses
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         
         return logits, loss
 

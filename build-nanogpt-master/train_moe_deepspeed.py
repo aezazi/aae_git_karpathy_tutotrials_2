@@ -10,7 +10,7 @@ import time
 
 import deepspeed
 import json
-import model_moe_deepspeed as model
+import model_moe_deepspeed as model_ds
 import eval_log_utils
 
 
@@ -26,17 +26,17 @@ assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devic
 
 @dataclass
 class GPTConfig:
-    seq_len: int = 2048
-    batch_size: int = 8
+    seq_len: int = 1024
+    batch_size: int = 16
     vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
-    num_experts: int = 16
+    num_experts: int = 4
     k: int = 2
     base_lr: float = 6e-4 * 3
     warm_up_steps: int = 300
-    effective_batch_size_multiplier: int = 8
+    effective_batch_size_multiplier: int = 24
     load_balance_scale: float = 0.01
 
     def __post_init__(self):
@@ -63,9 +63,8 @@ config.effective_batch_size_desired
 
 
 def create_deepspeed_config(config):
-    """Create DeepSpeed configuration dictionary"""
+    """Create DeepSpeed configuration with proper MoE load balancing"""
     effective_batch_size = config.batch_size * config.effective_batch_size_multiplier * config.world_size
-    
     
     ds_config = {
         "train_batch_size": effective_batch_size,
@@ -82,18 +81,19 @@ def create_deepspeed_config(config):
             }
         },
         
+
         "scheduler": {
             "type": "WarmupCosineLR",
             "params": {
-                "warmup_min_lr": 0,
-                "warmup_max_lr": config.base_lr,
+                "warmup_min_ratio": 0.05,               # LR starts at 0
                 "warmup_num_steps": config.warm_up_steps,
-                "total_num_steps": config.training_steps
+                "total_num_steps": config.training_steps,
+                "cos_min_ratio": 0.001                 # final LR = 0.001 * base_lr
             }
         },
         
         "zero_optimization": {
-            "stage": 1,  # Stage 1 recommended for MoE
+            "stage": 1,
             "reduce_scatter": True,
             "contiguous_gradients": True,
             "overlap_comm": True,
@@ -111,16 +111,87 @@ def create_deepspeed_config(config):
         "wall_clock_breakdown": False
     }
     
-    # Add MoE configuration
+    # MoE configuration with load balancing
     if config.num_experts > 1:
         ds_config["moe"] = {
             "enabled": True,
-            "ep_size": config.world_size,
+            "ep_size": min(config.world_size, config.num_experts),
             "moe_param_group": True,
-            "use_residual": False
+            "use_residual": False,
+            # DeepSpeed will handle load balancing automatically
+            "load_balance_scale": config.load_balance_scale  # This tells DeepSpeed the scale to use
         }
     
     return ds_config
+
+
+
+# def create_deepspeed_config(config):
+#     """DeepSpeed config for MoE GPT with BF16, ZeRO stage 1, and proper LR scheduler"""
+    
+#     effective_batch_size = config.batch_size * config.effective_batch_size_multiplier * config.world_size
+    
+#     ds_config = {
+#         # ---------------- Training batch ----------------
+#         "train_batch_size": effective_batch_size,
+#         "train_micro_batch_size_per_gpu": config.batch_size,
+#         "gradient_accumulation_steps": config.effective_batch_size_multiplier,
+        
+#         # ---------------- Optimizer ----------------
+#         "optimizer": {
+#             "type": "AdamW",
+#             "params": {
+#                 "lr": 6e-4 * 3,          # base LR
+#                 "betas": [0.9, 0.95],
+#                 "eps": 1e-8,
+#                 "weight_decay": 0.1
+#             }
+#         },
+        
+#         # ---------------- Scheduler ----------------
+#         "scheduler": {
+#             "type": "WarmupCosineLR",
+#             "params": {
+#                 "warmup_min_ratio": 0.01,               # LR starts at 0
+#                 "warmup_num_steps": 100,
+#                 "total_num_steps": 2000,
+#                 "cos_min_ratio": 0.001                 # final LR = 0.001 * base_lr
+#             }
+#         },
+        
+#         # ---------------- ZeRO Optimization ----------------
+#         "zero_optimization": {
+#             "stage": 1,                               # optimizer state sharding
+#             "reduce_scatter": True,
+#             "contiguous_gradients": True,
+#             "overlap_comm": True,
+#             "allgather_partitions": True,
+#             "allgather_bucket_size": 200_000_000,
+#             "reduce_bucket_size": 200_000_000
+#         },
+        
+#         # ---------------- Mixed precision ----------------
+#         "bf16": {
+#             "enabled": True                           # DeepSpeed autocast handled automatically
+#         },
+        
+#         "gradient_clipping": 1.0,
+#         "steps_per_print": 100,
+#         "wall_clock_breakdown": False
+#     }
+    
+#     # ---------------- Mixture of Experts ----------------
+#     if config.num_experts > 1:
+#         ds_config["moe"] = {
+#             "enabled": True,
+#             "ep_size": min(config.world_size, config.num_experts),  # allows 1 GPU or multiple GPUs
+#             "moe_param_group": True,
+#             "use_residual": False,
+#             "load_balance_scale": config.load_balance_scale
+#         }
+    
+#     return ds_config
+
 
 
 if config.master_process:
@@ -156,12 +227,12 @@ def initialize_deepspeed(model, config):
     )
     
     if config.master_process:
-        print(f"DeepSpeed initialized:")
+        print(f"\nDeepSpeed initialized:")
         print(f"  - World size: {config.world_size}")
         print(f"  - Effective batch size: {ds_config['train_batch_size']}")
         print(f"  - Micro batch size per GPU: {ds_config['train_micro_batch_size_per_gpu']}")
         print(f"  - Gradient accumulation steps: {ds_config['gradient_accumulation_steps']}")
-        print(f"  - MoE enabled: {ds_config.get('moe', {}).get('enabled', False)}")
+        print(f"  - MoE enabled: {ds_config.get('moe', {}).get('enabled', False)}\n")
     
     return model_engine, optimizer, lr_scheduler
 
@@ -201,16 +272,6 @@ def count_parameters_moe(model, config):
     }
 
 
-if config.master_process:
-    params_counted = count_parameters_moe(model)
-    print(f'\n')
-    for key, value in params_counted.items():
-        print(f"{key}: {value:,}")
-    # print(params_counted)
-    print(f'\n')
-
-
-
 
 # %%
 # Instantiate the dataloader and load the data. 
@@ -226,17 +287,34 @@ assert config.effective_batch_size_desired % (train_loader.B * train_loader.seq_
 
 
 def main():
+    import model_moe_deepspeed as model_ds
     # Check CUDA availability
     assert torch.cuda.is_available(), "CUDA required for training"
     
-    # Initialize distributed training if available
+    # FOR SINGLE GPU: Initialize distributed training manually
     if os.environ.get('RANK') is not None:
         print(f'Running in distributed environment. Initializing DeepSpeed')
         deepspeed.init_distributed()
     else:
-        print(f'Running in single GPU environment')
+        print(f'Running in single GPU environment - setting up for DeepSpeed')
+        # Set environment variables for single GPU DeepSpeed
+        os.environ['RANK'] = '0'
+        os.environ['LOCAL_RANK'] = '0'  
+        os.environ['WORLD_SIZE'] = '1'
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '29500'
+        
+        # Initialize PyTorch distributed for DeepSpeed (even for single GPU)
+        import torch.distributed as dist
+        if not dist.is_initialized():
+            dist.init_process_group(
+                backend='nccl',  # Use 'nccl' for GPU, 'gloo' for CPU
+                init_method='env://',
+                world_size=1,
+                rank=0
+            )
     
-    # Configuration
+    # Configuration - recreate after setting env vars
     config = GPTConfig()
     
     if config.master_process:
@@ -255,7 +333,7 @@ def main():
         torch.cuda.manual_seed(42)
     
     # Initialize model
-    model = model.CreateMoEDeepSpeed(config)
+    model = model_ds.CreateMoEDeepSpeed(config)
     
     # Count parameters
     if config.master_process:
@@ -267,7 +345,9 @@ def main():
     # Initialize DeepSpeed
     model_engine, optimizer, lr_scheduler = initialize_deepspeed(model, config)
     device = model_engine.device
+    print(f'\nDeepSpeed model initialized on device: {device}\n')
     
+    # Rest of your training code...
     # Initialize data loaders
     train_loader = DataLoaderShardMultiGPU(
         B=config.batch_size, 
@@ -286,15 +366,15 @@ def main():
     )
     
     # Calculate training steps
-    # training_steps = 10_000_000_000 // config.effective_batch_size_desired
+    training_steps = 10_000_000_000 // config.effective_batch_size_desired
     accumulation_steps_desired = config.effective_batch_size_multiplier
     
     if config.master_process:
         print(f"\nTraining setup:")
-        print(f"  - Training steps for one epoch: {config.training_steps:,}")
+        print(f"  - Training steps for one epoch: {training_steps:,}")
         print(f"  - Accumulation steps: {accumulation_steps_desired}")
     
-    # Initialize logging (keeping your original logging code)
+    # Initialize logging
     log_params = eval_log_utils.LogParamsFilesConfig(
         FSDP=True,  # Keep as True since we're still doing distributed training
         world_size=config.world_size,
@@ -319,10 +399,10 @@ def main():
     # Training loop
     model_engine.train()
     total_tokens_seen = 0
-    
-    for step in range(config.training_steps):
+    # print("Optimizer initial LR:", model_engine.optimizer.param_groups[0]['lr'])
+    for step in range(training_steps):
         t0 = time.time()
-        last_step = (step == config.training_steps - 1)
+        last_step = (step == training_steps - 1)
         
         # Training step with gradient accumulation
         loss_accum = 0.0
@@ -332,11 +412,10 @@ def main():
             x, y = x.to(device), y.to(device)
             
             # Forward pass
-            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-                logits, loss = model_engine(x, y)
+            logits, loss = model_engine(x, y)
             
             # Scale loss for accumulation
-            loss = loss / accumulation_steps_desired
+            # loss = loss / accumulation_steps_desired
             loss_accum += loss.detach()
             
             # Backward pass (DeepSpeed handles everything)
@@ -356,11 +435,11 @@ def main():
         tokens_per_sec = tokens_processed_total / dt
         total_tokens_seen += tokens_processed_total
         
-        # Update log params and log training progress (your original logging)
+        # Update log params and log training progress
         if config.master_process:
             log_params.step = step
             log_params.shard_idx = shard_idx
-            log_params.loss_accum = round(loss_accum.item(), 7)
+            # log_params.loss_accum = round(loss_accum.item(), 7)
             log_params.lr = round(model_engine.get_lr()[0], 7)  # DeepSpeed method to get LR
             
             # Log training loss and learning rate
@@ -373,7 +452,7 @@ def main():
                   f"Tokens/sec: {tokens_per_sec:,.0f}")
             print(f"Total tokens seen: {total_tokens_seen:,}")
         
-        # Evaluation and logging (keeping your original schedule)
+        # Evaluation and logging
         if ((step > 0 and step % 250 == 0) or last_step):
             eval_log_utils.HellaSwag(log_params=log_params).log_print_hella_accuracy()
         
