@@ -1,0 +1,389 @@
+#%%
+import os
+from dataclasses import dataclass
+import torch
+import torch.nn as nn
+from torch.nn import functional as F
+from hellaswag import render_example, iterate_examples
+import tiktoken
+import time
+
+import deepspeed
+import json
+import model_moe_deepspeed as model
+import eval_log_utils
+
+
+
+ #%%
+assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
+
+
+
+# This is the configuration for the GPT model. It defines the hyperparameters for the model. The block size is the maximum sequence length, vocab size is the size of the vocabulary, n_layer is the number of transformer blocks, n_head is the number of attention heads, and n_embd is the embedding dimension. 
+
+# Note on effective batch size: tbd
+
+@dataclass
+class GPTConfig:
+    seq_len: int = 2048
+    batch_size: int = 8
+    vocab_size: int = 50304
+    n_layer: int = 12
+    n_head: int = 12
+    n_embd: int = 768
+    num_experts: int = 16
+    k: int = 2
+    base_lr: float = 6e-4 * 3
+    warm_up_steps: int = 300
+    effective_batch_size_multiplier: int = 8
+    load_balance_scale: float = 0.01
+
+    def __post_init__(self):
+        # Distributed training setup
+        self.world_size = int(os.environ.get('WORLD_SIZE', 1))
+        self.rank = int(os.environ.get('RANK', 0))
+        self.local_rank = int(os.environ.get('LOCAL_RANK', 0))
+        self.master_process = (self.rank == 0)
+        
+        # Validation
+        assert self.n_embd % self.n_head == 0
+        assert self.num_experts % self.world_size == 0
+        assert self.k <= self.num_experts and self.k > 0
+        
+        # Calculate effective batch size
+        self.effective_batch_size_desired = (
+            self.batch_size * self.seq_len * self.world_size * self.effective_batch_size_multiplier
+        )
+        self.training_steps = 10_000_000_000 // self.effective_batch_size_desired
+
+# instantiate and check the config
+config = GPTConfig()
+config.effective_batch_size_desired
+
+
+def create_deepspeed_config(config):
+    """Create DeepSpeed configuration dictionary"""
+    effective_batch_size = config.batch_size * config.effective_batch_size_multiplier * config.world_size
+    
+    
+    ds_config = {
+        "train_batch_size": effective_batch_size,
+        "train_micro_batch_size_per_gpu": config.batch_size,
+        "gradient_accumulation_steps": config.effective_batch_size_multiplier,
+        
+        "optimizer": {
+            "type": "AdamW",
+            "params": {
+                "lr": config.base_lr,
+                "betas": [0.9, 0.95],
+                "eps": 1e-8,
+                "weight_decay": 0.1
+            }
+        },
+        
+        "scheduler": {
+            "type": "WarmupCosineLR",
+            "params": {
+                "warmup_min_lr": 0,
+                "warmup_max_lr": config.base_lr,
+                "warmup_num_steps": config.warm_up_steps,
+                "total_num_steps": config.training_steps
+            }
+        },
+        
+        "zero_optimization": {
+            "stage": 1,  # Stage 1 recommended for MoE
+            "reduce_scatter": True,
+            "contiguous_gradients": True,
+            "overlap_comm": True,
+            "allgather_partitions": True,
+            "allgather_bucket_size": 200000000,
+            "reduce_bucket_size": 200000000
+        },
+        
+        "bf16": {
+            "enabled": True
+        },
+        
+        "gradient_clipping": 1.0,
+        "steps_per_print": 100,
+        "wall_clock_breakdown": False
+    }
+    
+    # Add MoE configuration
+    if config.num_experts > 1:
+        ds_config["moe"] = {
+            "enabled": True,
+            "ep_size": config.world_size,
+            "moe_param_group": True,
+            "use_residual": False
+        }
+    
+    return ds_config
+
+
+if config.master_process:
+    print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
+    print(f'\neffective batch size desired: {config.effective_batch_size_desired:,}')
+
+
+# Note that in the initialization of the network in the ffn class, we are multiplying n_embd (the dimensions of the original embeddings) by 4. So for the inner layers, the dimensionality of the model is 768 * 4 
+
+
+#%%
+
+
+torch.manual_seed(42) # set the random seed for reproducibility
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(42) # set the random seed for cuda for reproducibility
+
+def initialize_deepspeed(model, config):
+    """Initialize DeepSpeed engine with programmatic config"""
+    ds_config = create_deepspeed_config(config)
+    
+    # Optional: save config for debugging
+    if config.master_process:
+        with open('deepspeed_config_debug.json', 'w') as f:
+            json.dump(ds_config, f, indent=2)
+        print(f"DeepSpeed config created and saved for debugging")
+    
+    # Initialize DeepSpeed
+    model_engine, optimizer, _, lr_scheduler = deepspeed.initialize(
+        model=model,
+        config=ds_config,
+        model_parameters=model.parameters()
+    )
+    
+    if config.master_process:
+        print(f"DeepSpeed initialized:")
+        print(f"  - World size: {config.world_size}")
+        print(f"  - Effective batch size: {ds_config['train_batch_size']}")
+        print(f"  - Micro batch size per GPU: {ds_config['train_micro_batch_size_per_gpu']}")
+        print(f"  - Gradient accumulation steps: {ds_config['gradient_accumulation_steps']}")
+        print(f"  - MoE enabled: {ds_config.get('moe', {}).get('enabled', False)}")
+    
+    return model_engine, optimizer, lr_scheduler
+
+# %%
+
+def count_parameters_moe(model, config):
+    """Count model parameters for MoE"""
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    
+    # This is approximate since DeepSpeed handles expert parameters internally
+    # We'll estimate based on model structure
+    expert_params = 0
+    shared_params = 0
+    
+    for name, param in model.named_parameters():
+        if 'expert' in name.lower():
+            expert_params += param.numel()
+        else:
+            shared_params += param.numel()
+    
+    if expert_params == 0:
+        # Estimate expert params from MLP size
+        expert_params_per_expert = config.n_embd * 4 * config.n_embd * 2  # Rough estimate
+        expert_params = expert_params_per_expert * config.num_experts * config.n_layer
+        shared_params = total_params - expert_params
+    
+    expert_params_per_expert = expert_params // (config.num_experts * config.n_layer)
+    active_expert_params = expert_params_per_expert * config.k * config.n_layer
+    active_params = shared_params + active_expert_params
+    
+    return {
+        'total_params': total_params,
+        'shared_params': shared_params,
+        'expert_params': expert_params,
+        'active_params': active_params,
+        'params_per_expert': expert_params_per_expert
+    }
+
+
+if config.master_process:
+    params_counted = count_parameters_moe(model)
+    print(f'\n')
+    for key, value in params_counted.items():
+        print(f"{key}: {value:,}")
+    # print(params_counted)
+    print(f'\n')
+
+
+
+
+# %%
+# Instantiate the dataloader and load the data. 
+from dataloader_utils import DataLoaderShardMultiGPU
+
+
+# initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
+train_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = config.rank, num_processes=config.world_size, split='train')
+
+val_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = config.rank, num_processes=config.world_size, split='val')
+
+assert config.effective_batch_size_desired % (train_loader.B * train_loader.seq_len * config.world_size) == 0, f"effective batch size {config.effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.seq_len}"
+
+
+def main():
+    # Check CUDA availability
+    assert torch.cuda.is_available(), "CUDA required for training"
+    
+    # Initialize distributed training if available
+    if os.environ.get('RANK') is not None:
+        print(f'Running in distributed environment. Initializing DeepSpeed')
+        deepspeed.init_distributed()
+    else:
+        print(f'Running in single GPU environment')
+    
+    # Configuration
+    config = GPTConfig()
+    
+    if config.master_process:
+        print(f'\nGPTConfig instantiated:')
+        print(f'  - Block size: {config.seq_len}')
+        print(f'  - Vocab size: {config.vocab_size}')
+        print(f'  - Layers: {config.n_layer}')
+        print(f'  - Heads: {config.n_head}') 
+        print(f'  - Embedding dim: {config.n_embd}')
+        print(f'  - Experts: {config.num_experts}, k={config.k}')
+        print(f'  - Effective batch size: {config.effective_batch_size_desired:,}')
+    
+    # Set random seeds
+    torch.manual_seed(42)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(42)
+    
+    # Initialize model
+    model = model.CreateMoEDeepSpeed(config)
+    
+    # Count parameters
+    if config.master_process:
+        params_info = count_parameters_moe(model, config)
+        print(f'\nModel parameters:')
+        for key, value in params_info.items():
+            print(f"  {key}: {value:,}")
+    
+    # Initialize DeepSpeed
+    model_engine, optimizer, lr_scheduler = initialize_deepspeed(model, config)
+    device = model_engine.device
+    
+    # Initialize data loaders
+    train_loader = DataLoaderShardMultiGPU(
+        B=config.batch_size, 
+        seq_len=config.seq_len, 
+        process_rank=config.rank, 
+        num_processes=config.world_size, 
+        split='train'
+    )
+    
+    val_loader = DataLoaderShardMultiGPU(
+        B=config.batch_size, 
+        seq_len=config.seq_len, 
+        process_rank=config.rank, 
+        num_processes=config.world_size, 
+        split='val'
+    )
+    
+    # Calculate training steps
+    # training_steps = 10_000_000_000 // config.effective_batch_size_desired
+    accumulation_steps_desired = config.effective_batch_size_multiplier
+    
+    if config.master_process:
+        print(f"\nTraining setup:")
+        print(f"  - Training steps for one epoch: {config.training_steps:,}")
+        print(f"  - Accumulation steps: {accumulation_steps_desired}")
+    
+    # Initialize logging (keeping your original logging code)
+    log_params = eval_log_utils.LogParamsFilesConfig(
+        FSDP=True,  # Keep as True since we're still doing distributed training
+        world_size=config.world_size,
+        rank=config.rank,
+        local_rank=config.local_rank,
+        model=model_engine,  # Pass the DeepSpeed engine
+        device=device,
+        encoder=tiktoken.get_encoding('gpt2'),
+        val_loader=val_loader,
+        loss_dir="train_loss",
+        hella_accu_dir="hella_accuracy", 
+        learn_rate_dir='learn_rate_sched',
+        train_loss_file="train_loss.csv",
+        hella_accu_file="hellaswag_eval.csv",
+        lr_file="learning_rate.csv",
+        step=0,
+        shard_idx=0,
+        loss_accum=0.0,
+        lr=0.0
+    )
+    
+    # Training loop
+    model_engine.train()
+    total_tokens_seen = 0
+    
+    for step in range(config.training_steps):
+        t0 = time.time()
+        last_step = (step == config.training_steps - 1)
+        
+        # Training step with gradient accumulation
+        loss_accum = 0.0
+        
+        for micro_step in range(accumulation_steps_desired):
+            x, y, shard_idx, tokens_abandoned = train_loader.next_batch()
+            x, y = x.to(device), y.to(device)
+            
+            # Forward pass
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                logits, loss = model_engine(x, y)
+            
+            # Scale loss for accumulation
+            loss = loss / accumulation_steps_desired
+            loss_accum += loss.detach()
+            
+            # Backward pass (DeepSpeed handles everything)
+            model_engine.backward(loss)
+        
+        # DeepSpeed step (includes gradient clipping, optimization, and scheduling)
+        model_engine.step()
+        
+        # Synchronize and calculate timing
+        torch.cuda.synchronize()
+        t1 = time.time()
+        dt = t1 - t0
+        
+        # Token counting
+        tokens_processed_local = train_loader.B * train_loader.seq_len * accumulation_steps_desired
+        tokens_processed_total = tokens_processed_local * config.world_size
+        tokens_per_sec = tokens_processed_total / dt
+        total_tokens_seen += tokens_processed_total
+        
+        # Update log params and log training progress (your original logging)
+        if config.master_process:
+            log_params.step = step
+            log_params.shard_idx = shard_idx
+            log_params.loss_accum = round(loss_accum.item(), 7)
+            log_params.lr = round(model_engine.get_lr()[0], 7)  # DeepSpeed method to get LR
+            
+            # Log training loss and learning rate
+            eval_log_utils.TrainLoss(log_params=log_params).log_training_loss()
+            eval_log_utils.LearningRate(log_params=log_params).log_learning_rate()
+            
+            # Print progress
+            print(f"Step {step}, shard_idx: {shard_idx}, Loss: {loss_accum.item():.5f}, "
+                  f"LR: {model_engine.get_lr()[0]:.7f}, Time: {dt:.2f}sec, "
+                  f"Tokens/sec: {tokens_per_sec:,.0f}")
+            print(f"Total tokens seen: {total_tokens_seen:,}")
+        
+        # Evaluation and logging (keeping your original schedule)
+        if ((step > 0 and step % 250 == 0) or last_step):
+            eval_log_utils.HellaSwag(log_params=log_params).log_print_hella_accuracy()
+        
+        if step % 250 == 0 and step > 0:
+            eval_log_utils.Validation(log_params=log_params).check_validation_loss()
+        
+        if ((step % 1000 == 0 and step > 0) or last_step):
+            eval_log_utils.GenerateSample(log_params=log_params).generate(
+                context="Hello, I'm a language model,", sample_max_length=32
+            )
+
+if __name__ == "__main__":
+    main()
