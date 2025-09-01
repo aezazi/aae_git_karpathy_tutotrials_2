@@ -45,13 +45,14 @@ class GPTConfig:
     # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
     model_expert_parallelization = False # choose whether to run the model with just fsdp or the model with fsdp and expert parallelization
     batch_size = 8
-    effective_batch_size_multiplier = 8
+    # effective_batch_size_multiplier = 8
     vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
     base_lr = 6e-4 * 3
     warm_up_steps = 300
+    target_tokens_per_optimizer_step = 1048576
     num_experts = 16
     load_balance_scale = 0.01
     k = 2
@@ -69,7 +70,12 @@ class GPTConfig:
 
         assert self.k <= self.num_experts and self.k > 0, f"k must be at least 1 and less than or equal to num_experts {self.num_experts} you have k={self.k}"
 
-        self.effective_batch_size_desired = self.batch_size * self.seq_len * self.world_size * self.effective_batch_size_multiplier
+        # Compute accumlation steps based on target_tokens_per_optimizer_step, sequence length and world size
+        self.accum_steps = self.target_tokens_per_optimizer_step // (self.batch_size * self.seq_len * self.world_size)
+
+        self.training_steps = (10_000_000_000 // self.target_tokens_per_optimizer_step) + 1
+
+        # self.effective_batch_size_desired = self.batch_size * self.seq_len * self.world_size * self.effective_batch_size_multiplier
 
         self.experts_per_gpu = self.num_experts // self.world_size
         self.rank = dist.get_rank() if dist.is_initialized() else 0
@@ -81,7 +87,7 @@ config = GPTConfig()
 
 if config.master_process:
     print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
-    print(f'\neffective batch size desired: {config.effective_batch_size_desired:,}')
+    # print(f'\neffective batch size desired: {config.effective_batch_size_desired:,}')
 
 
 # Note that in the initialization of the network in the ffn class, we are multiplying n_embd (the dimensions of the original embeddings) by 4. So for the inner layers, the dimensionality of the model is 768 * 4 
@@ -247,14 +253,14 @@ train_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_l
 
 val_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = config.rank, num_processes=config.world_size, split='val')
 
-assert config.effective_batch_size_desired % (train_loader.B * train_loader.seq_len * config.world_size) == 0, f"effective batch size {config.effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.seq_len}"
+assert config.target_tokens_per_optimizer_step % (train_loader.B * train_loader.seq_len * config.world_size) == 0, f"effective batch size {config.effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.seq_len}"
 
 # this is the desired number of micro steps to accumulate gradients over. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. In my implementation this is equal to effective_batch_size_multiplier. Karpathy starts with effective batch_size desired to match gpt2 implementation and then computes accumulation steps to make sure the formula below works with batch_size
-accumulation_steps_desired = config.effective_batch_size_desired // (train_loader.B * train_loader.seq_len * config.world_size) 
+# accumulation_steps_desired = config.effective_batch_size_desired // (train_loader.B * train_loader.seq_len * config.world_size) 
 
 if config.master_process:
-    print(f"\neffective batch size desired: {config.effective_batch_size_desired}")
-    print(f"accumulation steps desired: {accumulation_steps_desired}\n")
+    print(f"\neffective batch size is the same as target tokens per optimizer step: {config.target_tokens_per_optimizer_step}")
+    print(f"accumulation steps: {config.accum_steps}\n")
 
 #%%
 # Instantiate the learning rate scheduler 
@@ -263,12 +269,12 @@ from aae_utils import CosineLearingRateScheduler
 
 
 # compute training steps for 1 epoc. compute number of steps for one pass over our training dataset of 10B tokens
-training_steps = 10_000_000_000 // config.effective_batch_size_desired 
-print(f'\ntraining steps for one epoc: {training_steps:,}\n')
+# training_steps = 10_000_000_000 // config.effective_batch_size_desired 
+print(f'\ntraining steps for one epoc: {config.training_steps:,}\n')
 
 # define the scheduler parameters
 # the number of iterations over which lr is reduced to the minimum
-T_max = training_steps 
+T_max = config.training_steps 
 
 max_lr = config.base_lr # max learning rate
 min_lr = max_lr * 0.1 # min learning rate
@@ -320,14 +326,14 @@ model.train() # set the model to training mode
 total_tokens_seen = 0
 accum_topk_expert_count = [torch.zeros(config.num_experts, device=device, dtype=torch.long) for _ in range(config.n_layer)]
 
-for step in range(training_steps):
+for step in range(config.training_steps):
     t0 = time.time()
-    last_step = (step == training_steps - 1)
+    last_step = (step == config.training_steps - 1)
 
     # Main training loop
     optimizer.zero_grad()
     loss_accum  = 0.0
-    micro_steps = accumulation_steps_desired # set the number of mirco steps to accumulate gradients over
+    micro_steps = config.accum_steps # set the number of mirco steps to accumulate gradients over
     for micro_step in range(micro_steps):
         # this is a gradient accumulation step. We accumulate gradients over desired accumalation steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
         x, y, shard_idx, tokens_abandoned = train_loader.next_batch()

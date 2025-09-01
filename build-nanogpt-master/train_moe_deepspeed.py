@@ -34,8 +34,8 @@ class GPTConfig:
     n_embd: int = 768
     num_experts: int = 4
     k: int = 2
-    base_lr: float = 6e-4 * 3
-    warm_up_steps: int = 300
+    base_lr: float = 1e-3
+    warm_up_steps: int = 100
     target_tokens_per_optimizer_step = 1048576
     # accum_steps: int = 24
     load_balance_scale: float = 0.01
@@ -87,10 +87,11 @@ def create_deepspeed_config(config):
         "scheduler": {
             "type": "WarmupCosineLR",
             "params": {
-                "warmup_min_ratio": 0.0,  # Start from 0, not 0.05
-                "warmup_num_steps": config.warm_up_steps,
-                "total_num_steps": config.training_steps,
-                "cos_min_ratio": 0.1
+                "warmup_min_ratio": 0.0,                 # Start from 0% of base_lr (0.0 * base_lr)
+                "warmup_num_steps": config.warm_up_steps, # Steps to warmup to 100% of base_lr
+                "total_num_steps": config.training_steps, # Total training steps
+                "cos_min_ratio": 0.1,                    # End at 10% of base_lr (0.1 * base_lr)
+                "warmup_type": "linear"                   # Linear warmup (not 'log' default)
             }
         },
         
@@ -343,7 +344,7 @@ def main():
             x, y = x.to(device), y.to(device)
             
             # Forward pass
-            ce_loss, aux_loss_sum, exp_counts_sum = model_engine(x, y)
+            ce_loss, aux_loss_sum, exp_counts_sum, logits = model_engine(x, y)
             combined_loss = ce_loss +(aux_loss_sum * config.load_balance_scale)
             
             # Scale loss for accumulation
@@ -368,9 +369,9 @@ def main():
             print(f"  Base LR: {config.base_lr}")
             print(f"  Current LR: {model_engine.get_lr()[0]}")
             
-            # Force scheduler step if it's not auto-stepping
-            if hasattr(model_engine.lr_scheduler, 'step'):
-                print(f"  Manual scheduler step...")
+            # # Force scheduler step if it's not auto-stepping
+            # if hasattr(model_engine.lr_scheduler, 'step'):
+            #     print(f"  Manual scheduler step...")
         
         # Synchronize and calculate timing
         torch.cuda.synchronize()
