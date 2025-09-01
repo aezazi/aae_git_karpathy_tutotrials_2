@@ -36,7 +36,8 @@ class GPTConfig:
     k: int = 2
     base_lr: float = 6e-4 * 3
     warm_up_steps: int = 300
-    effective_batch_size_multiplier: int = 24
+    target_tokens_per_optimizer_step = 1048576
+    # accum_steps: int = 24
     load_balance_scale: float = 0.01
 
     def __post_init__(self):
@@ -51,25 +52,27 @@ class GPTConfig:
         assert self.num_experts % self.world_size == 0
         assert self.k <= self.num_experts and self.k > 0
         
-        # Calculate effective batch size
-        self.effective_batch_size_desired = (
-            self.batch_size * self.seq_len * self.world_size * self.effective_batch_size_multiplier
-        )
-        self.training_steps = 10_000_000_000 // self.effective_batch_size_desired
+        # Compute accumlation steps based on target_tokens_per_optimizer_step, sequence length and world size
+        self.accum_steps = self.target_tokens_per_optimizer_step // (self.batch_size * self.seq_len * self.world_size)
+        
+        # self.effective_batch_size_desired = (
+        #     self.batch_size * self.seq_len * self.world_size * self.accum_steps
+        # )
+        self.training_steps = (10_000_000_000 // self.target_tokens_per_optimizer_step) + 1
 
 # instantiate and check the config
 config = GPTConfig()
-config.effective_batch_size_desired
+config.target_tokens_per_optimizer_step
 
 
 def create_deepspeed_config(config):
     """Create DeepSpeed configuration with proper MoE load balancing"""
-    effective_batch_size = config.batch_size * config.effective_batch_size_multiplier * config.world_size
+    effective_batch_size_deepspeed = config.batch_size * config.accum_steps * config.world_size
     
     ds_config = {
-        "train_batch_size": effective_batch_size,
+        "train_batch_size": effective_batch_size_deepspeed,
         "train_micro_batch_size_per_gpu": config.batch_size,
-        "gradient_accumulation_steps": config.effective_batch_size_multiplier,
+        "gradient_accumulation_steps": config.accum_steps,
         
         "optimizer": {
             "type": "AdamW",
@@ -129,13 +132,13 @@ def create_deepspeed_config(config):
 # def create_deepspeed_config(config):
 #     """DeepSpeed config for MoE GPT with BF16, ZeRO stage 1, and proper LR scheduler"""
     
-#     effective_batch_size = config.batch_size * config.effective_batch_size_multiplier * config.world_size
+#     effective_batch_size = config.batch_size * config.accum_steps * config.world_size
     
 #     ds_config = {
 #         # ---------------- Training batch ----------------
 #         "train_batch_size": effective_batch_size,
 #         "train_micro_batch_size_per_gpu": config.batch_size,
-#         "gradient_accumulation_steps": config.effective_batch_size_multiplier,
+#         "gradient_accumulation_steps": config.accum_steps,
         
 #         # ---------------- Optimizer ----------------
 #         "optimizer": {
@@ -196,7 +199,7 @@ def create_deepspeed_config(config):
 
 if config.master_process:
     print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
-    print(f'\neffective batch size desired: {config.effective_batch_size_desired:,}')
+    print(f'\neffective batch size desired: {config.target_tokens_per_optimizer_step:,}')
 
 
 # Note that in the initialization of the network in the ffn class, we are multiplying n_embd (the dimensions of the original embeddings) by 4. So for the inner layers, the dimensionality of the model is 768 * 4 
@@ -283,7 +286,7 @@ train_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_l
 
 val_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = config.rank, num_processes=config.world_size, split='val')
 
-assert config.effective_batch_size_desired % (train_loader.B * train_loader.seq_len * config.world_size) == 0, f"effective batch size {config.effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.seq_len}"
+assert config.target_tokens_per_optimizer_step % (train_loader.B * train_loader.seq_len * config.world_size) == 0, f"target_tokens_per_optimizer_step {config.target_tokens_per_optimizer_step} is not divisible by batch size {train_loader.B} and sequence length {train_loader.seq_len}"
 
 
 def main():
@@ -325,7 +328,7 @@ def main():
         print(f'  - Heads: {config.n_head}') 
         print(f'  - Embedding dim: {config.n_embd}')
         print(f'  - Experts: {config.num_experts}, k={config.k}')
-        print(f'  - Effective batch size: {config.effective_batch_size_desired:,}')
+        print(f'  - target tokens per optimzer step: {config.target_tokens_per_optimizer_step:,}')
     
     # Set random seeds
     torch.manual_seed(42)
@@ -366,8 +369,8 @@ def main():
     )
     
     # Calculate training steps
-    training_steps = 10_000_000_000 // config.effective_batch_size_desired
-    accumulation_steps_desired = config.effective_batch_size_multiplier
+    training_steps = 10_000_000_000 // config.target_tokens_per_optimizer_step
+    accumulation_steps_desired = config.accum_steps
     
     if config.master_process:
         print(f"\nTraining setup:")
