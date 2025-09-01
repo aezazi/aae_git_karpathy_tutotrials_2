@@ -347,7 +347,7 @@ def main():
             combined_loss = ce_loss +(aux_loss_sum * config.load_balance_scale)
             
             # Scale loss for accumulation
-            # loss = loss / accumulation_steps_desired
+            combined_loss  = combined_loss  / accumulation_steps_desired
             loss_accum += combined_loss.detach()
             
             # Backward pass (DeepSpeed handles everything)
@@ -409,3 +409,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# python train_moe_deepspeed.py
