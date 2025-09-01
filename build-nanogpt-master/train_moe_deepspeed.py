@@ -352,9 +352,14 @@ def main():
             
             # Backward pass (DeepSpeed handles everything)
             model_engine.backward(combined_loss)
+
+            # ✅ Step only when accumulation boundary is reached
+            if model_engine.is_gradient_accumulation_boundary():
+                avg_loss = loss_accum.item() / accumulation_steps_desired
+                loss_accum = 0.0  # reset for next accumulation
+                model_engine.step()
         
-        # DeepSpeed step (includes gradient clipping, optimization, and scheduling)
-        model_engine.step()
+        #
         # Check if scheduler is stepping properly
         if step < 10:  # Debug first 10 steps
             print(f"DEBUG Step {step}:")
@@ -382,7 +387,7 @@ def main():
         if config.master_process:
             log_params.step = step
             log_params.shard_idx = shard_idx
-            # log_params.loss_accum = round(loss_accum.item(), 7)
+            # log_params.loss_accum = round(avg_loss, 7)
             log_params.lr = round(model_engine.get_lr()[0], 7)  # DeepSpeed method to get LR
             
             # Log training loss and learning rate
@@ -390,7 +395,7 @@ def main():
             eval_log_utils.LearningRate(log_params=log_params).log_learning_rate()
             
             # Print progress
-            print(f"Step {step}, shard_idx: {shard_idx}, Loss: {loss_accum.item():.5f}, "
+            print(f"Step {step}, shard_idx: {shard_idx}, Loss: {avg_loss:.5f}, "
                   f"LR: {model_engine.get_lr()[0]:.7f}, Time: {dt:.2f}sec, "
                   f"Tokens/sec: {tokens_per_sec:,.0f}")
             print(f"Total tokens seen: {total_tokens_seen:,}")
