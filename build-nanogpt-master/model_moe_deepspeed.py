@@ -126,7 +126,6 @@ class ExpertMLP(nn.Module):
     
 
 
-
 #%%
 class Block(nn.Module):
     def __init__(self, config):
@@ -151,9 +150,9 @@ class Block(nn.Module):
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
-        moe_output, _, _ = self.moe(self.ln_2(x))
+        moe_output, l_aux, expert_counts = self.moe(self.ln_2(x))
         x = x + moe_output
-        return x
+        return x, l_aux, expert_counts
 
 # %%
 class CreateMoEDeepSpeed(nn.Module):
@@ -189,19 +188,30 @@ class CreateMoEDeepSpeed(nn.Module):
         
         x = self.transformer.wte(idx)
         
-        # Process through transformer blocks (no gate loss collection)
+        aux_loss_sum = 0.0
+        exp_counts_sum = None  # will hold sum across blocks
+
         for block in self.transformer.h:
-            x = block(x)  # Just get x, no gate losses
+            x, l_aux_block, exp_counts_block = block(x)
+            aux_loss_sum += l_aux_block
+            if exp_counts_block is not None:
+                if exp_counts_sum is None:
+                    exp_counts_sum = exp_counts_block.clone()
+                else:
+                    exp_counts_sum += exp_counts_block
         
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x)
         
         loss = None
         if targets is not None:
-            # Only cross-entropy loss - DeepSpeed handles gate losses
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+            ce_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+            # Combine CE loss and MoE gate loss
+            loss = ce_loss, aux_loss_sum, exp_counts_sum
+
+        return ce_loss, aux_loss_sum, exp_counts_sum
         
-        return logits, loss
+
 
 
 #%%

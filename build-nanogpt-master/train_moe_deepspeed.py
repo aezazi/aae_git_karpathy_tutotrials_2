@@ -343,14 +343,15 @@ def main():
             x, y = x.to(device), y.to(device)
             
             # Forward pass
-            logits, loss = model_engine(x, y)
+            ce_loss, aux_loss_sum, exp_counts_sum = model_engine(x, y)
+            combined_loss = ce_loss +(aux_loss_sum * config.load_balance_scale)
             
             # Scale loss for accumulation
             # loss = loss / accumulation_steps_desired
-            loss_accum += loss.detach()
+            loss_accum += combined_loss.detach()
             
             # Backward pass (DeepSpeed handles everything)
-            model_engine.backward(loss)
+            model_engine.backward(combined_loss)
         
         # DeepSpeed step (includes gradient clipping, optimization, and scheduling)
         model_engine.step()
