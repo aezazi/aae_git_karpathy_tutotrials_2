@@ -84,14 +84,13 @@ def create_deepspeed_config(config):
             }
         },
         
-
         "scheduler": {
             "type": "WarmupCosineLR",
             "params": {
-                "warmup_min_ratio": 0.05,               # LR starts at 0
+                "warmup_min_ratio": 0.0,  # Start from 0, not 0.05
                 "warmup_num_steps": config.warm_up_steps,
                 "total_num_steps": config.training_steps,
-                "cos_min_ratio": 0.001                 # final LR = 0.001 * base_lr
+                "cos_min_ratio": 0.1
             }
         },
         
@@ -105,101 +104,28 @@ def create_deepspeed_config(config):
             "reduce_bucket_size": 200000000
         },
         
-        "bf16": {
-            "enabled": True
-        },
-        
+        "bf16": {"enabled": True},
         "gradient_clipping": 1.0,
         "steps_per_print": 100,
         "wall_clock_breakdown": False
     }
     
-    # MoE configuration with load balancing
     if config.num_experts > 1:
         ds_config["moe"] = {
             "enabled": True,
             "ep_size": min(config.world_size, config.num_experts),
             "moe_param_group": True,
             "use_residual": False,
-            # DeepSpeed will handle load balancing automatically
-            "load_balance_scale": config.load_balance_scale  # This tells DeepSpeed the scale to use
+            "load_balance_scale": config.load_balance_scale
         }
     
     return ds_config
 
 
 
-# def create_deepspeed_config(config):
-#     """DeepSpeed config for MoE GPT with BF16, ZeRO stage 1, and proper LR scheduler"""
-    
-#     effective_batch_size = config.batch_size * config.accum_steps * config.world_size
-    
-#     ds_config = {
-#         # ---------------- Training batch ----------------
-#         "train_batch_size": effective_batch_size,
-#         "train_micro_batch_size_per_gpu": config.batch_size,
-#         "gradient_accumulation_steps": config.accum_steps,
-        
-#         # ---------------- Optimizer ----------------
-#         "optimizer": {
-#             "type": "AdamW",
-#             "params": {
-#                 "lr": 6e-4 * 3,          # base LR
-#                 "betas": [0.9, 0.95],
-#                 "eps": 1e-8,
-#                 "weight_decay": 0.1
-#             }
-#         },
-        
-#         # ---------------- Scheduler ----------------
-#         "scheduler": {
-#             "type": "WarmupCosineLR",
-#             "params": {
-#                 "warmup_min_ratio": 0.01,               # LR starts at 0
-#                 "warmup_num_steps": 100,
-#                 "total_num_steps": 2000,
-#                 "cos_min_ratio": 0.001                 # final LR = 0.001 * base_lr
-#             }
-#         },
-        
-#         # ---------------- ZeRO Optimization ----------------
-#         "zero_optimization": {
-#             "stage": 1,                               # optimizer state sharding
-#             "reduce_scatter": True,
-#             "contiguous_gradients": True,
-#             "overlap_comm": True,
-#             "allgather_partitions": True,
-#             "allgather_bucket_size": 200_000_000,
-#             "reduce_bucket_size": 200_000_000
-#         },
-        
-#         # ---------------- Mixed precision ----------------
-#         "bf16": {
-#             "enabled": True                           # DeepSpeed autocast handled automatically
-#         },
-        
-#         "gradient_clipping": 1.0,
-#         "steps_per_print": 100,
-#         "wall_clock_breakdown": False
-#     }
-    
-#     # ---------------- Mixture of Experts ----------------
-#     if config.num_experts > 1:
-#         ds_config["moe"] = {
-#             "enabled": True,
-#             "ep_size": min(config.world_size, config.num_experts),  # allows 1 GPU or multiple GPUs
-#             "moe_param_group": True,
-#             "use_residual": False,
-#             "load_balance_scale": config.load_balance_scale
-#         }
-    
-#     return ds_config
-
-
-
 if config.master_process:
     print(f'\nGPTConfig instantiated with block size: {config.seq_len}, vocab size: {config.vocab_size}, n_layer: {config.n_layer}, n_head: {config.n_head}, n_embd: {config.n_embd}')
-    print(f'\neffective batch size desired: {config.target_tokens_per_optimizer_step:,}')
+    print(f'\ntarget tokens per optimizer step: {config.target_tokens_per_optimizer_step:,}')
 
 
 # Note that in the initialization of the network in the ffn class, we are multiplying n_embd (the dimensions of the original embeddings) by 4. So for the inner layers, the dimensionality of the model is 768 * 4 
@@ -220,7 +146,7 @@ def initialize_deepspeed(model, config):
     if config.master_process:
         with open('deepspeed_config_debug.json', 'w') as f:
             json.dump(ds_config, f, indent=2)
-        print(f"DeepSpeed config created and saved for debugging")
+        print(f"\nDeepSpeed config created and saved for debugging\n")
     
     # Initialize DeepSpeed
     model_engine, optimizer, _, lr_scheduler = deepspeed.initialize(
@@ -278,15 +204,7 @@ def count_parameters_moe(model, config):
 
 # %%
 # Instantiate the dataloader and load the data. 
-from dataloader_utils import DataLoaderShardMultiGPU
 
-
-# initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
-train_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = config.rank, num_processes=config.world_size, split='train')
-
-val_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = config.rank, num_processes=config.world_size, split='val')
-
-assert config.target_tokens_per_optimizer_step % (train_loader.B * train_loader.seq_len * config.world_size) == 0, f"target_tokens_per_optimizer_step {config.target_tokens_per_optimizer_step} is not divisible by batch size {train_loader.B} and sequence length {train_loader.seq_len}"
 
 
 def main():
@@ -344,6 +262,16 @@ def main():
         print(f'\nModel parameters:')
         for key, value in params_info.items():
             print(f"  {key}: {value:,}")
+
+
+    from dataloader_utils import DataLoaderShardMultiGPU
+    # initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
+    train_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = config.rank, num_processes=config.world_size, split='train')
+
+    val_loader = DataLoaderShardMultiGPU(B=config.batch_size, seq_len=config.seq_len, process_rank = config.rank, num_processes=config.world_size, split='val')
+
+    assert config.target_tokens_per_optimizer_step % (train_loader.B * train_loader.seq_len * config.world_size) == 0, f"target_tokens_per_optimizer_step {config.target_tokens_per_optimizer_step} is not divisible by batch size {train_loader.B} and sequence length {train_loader.seq_len}"
+    
     
     # Initialize DeepSpeed
     model_engine, optimizer, lr_scheduler = initialize_deepspeed(model, config)
@@ -426,6 +354,17 @@ def main():
         
         # DeepSpeed step (includes gradient clipping, optimization, and scheduling)
         model_engine.step()
+        # Check if scheduler is stepping properly
+        if step < 10:  # Debug first 10 steps
+            print(f"DEBUG Step {step}:")
+            print(f"  Scheduler type: {type(model_engine.lr_scheduler)}")
+            print(f"  Scheduler last_epoch: {getattr(model_engine.lr_scheduler, 'last_epoch', 'N/A')}")
+            print(f"  Base LR: {config.base_lr}")
+            print(f"  Current LR: {model_engine.get_lr()[0]}")
+            
+            # Force scheduler step if it's not auto-stepping
+            if hasattr(model_engine.lr_scheduler, 'step'):
+                print(f"  Manual scheduler step...")
         
         # Synchronize and calculate timing
         torch.cuda.synchronize()
@@ -433,7 +372,7 @@ def main():
         dt = t1 - t0
         
         # Token counting
-        tokens_processed_local = train_loader.B * train_loader.seq_len * accumulation_steps_desired
+        tokens_processed_local = train_loader.B * train_loader.seq_len * config.accum_steps
         tokens_processed_total = tokens_processed_local * config.world_size
         tokens_per_sec = tokens_processed_total / dt
         total_tokens_seen += tokens_processed_total

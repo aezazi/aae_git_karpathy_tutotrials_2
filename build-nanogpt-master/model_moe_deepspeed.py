@@ -12,7 +12,7 @@ from hellaswag import render_example, iterate_examples
 class RotaryPosEmbed(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.head_dim = config.n_embd/config.n_head
+        self.head_dim = config.n_embd // config.n_head
         # self.get_theta()
         theta =  10_000 ** (-torch.arange(0, self.head_dim, 2, dtype=torch.float) / self.head_dim)
         self.register_buffer("theta", theta)
@@ -166,8 +166,9 @@ class CreateMoEDeepSpeed(nn.Module):
             ln_f=nn.LayerNorm(config.n_embd)
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        self.transformer.wte.weight = self.lm_head.weight
+        
         self.apply(self._init_weights)
+        self.transformer.wte.weight = self.lm_head.weight
 
 
         #weight initialization. Mostly from GPT suggestions
