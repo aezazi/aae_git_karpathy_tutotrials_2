@@ -22,8 +22,8 @@ def main():
     
     # FOR SINGLE GPU: Initialize distributed training manually
     if os.environ.get('RANK') is not None:
-        print(f'Running in distributed environment. Initializing DeepSpeed')
         deepspeed.init_distributed()
+        print(f'Running in distributed environment. Initializing DeepSpeed')
     else:
         print(f'Running in single GPU environment - setting up for DeepSpeed')
         # Set environment variables for single GPU DeepSpeed
