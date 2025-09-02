@@ -52,7 +52,7 @@ def main():
 @dataclass
 class GPTConfig:
     seq_len: int = 1024
-    batch_size: int = 16
+    batch_size: int = 8
     vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
@@ -61,7 +61,7 @@ class GPTConfig:
     k: int = 2
     base_lr: float = 1e-3
     warm_up_steps: int = 100
-    target_tokens_per_optimizer_step = 1048576
+    target_tokens_per_optimizer_step = 1048576 // 2
     # accum_steps: int = 24
     load_balance_scale: float = 0.01
 
