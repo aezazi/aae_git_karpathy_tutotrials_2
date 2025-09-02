@@ -348,9 +348,7 @@ for step in range(config.training_steps):
             logits, loss, top_k_all = model(x, y)
 
         # This is a check to make sure the top_k gate is distributing tokens evenly bewtween the experts. Code below checks every block. This is Claude generated code
-        # if config.model_expert_parallelization:
-        #     pass
-        # else:
+      
         with torch.no_grad():
             for layer_idx, top_k_global_ids in enumerate(top_k_all):
                 # Get local expert usage counts for this GPU
@@ -367,11 +365,12 @@ for step in range(config.training_steps):
         
 
         # divide the loss by the number of micro steps to get the average loss of the accumulated micro steps
-        loss = loss / micro_steps 
+        # Divide by accumulation steps (so gradient is averaged across micro-batches)
+        microbatch_loss = loss / micro_steps 
         
         # Look at Pytorch documentation for more details on tensor.detach() vs. tensor.item()
-        loss_accum += loss.detach() 
-        loss.backward()
+        loss_accum += microbatch_loss.detach() 
+        microbatch_loss.backward()
 
 
     if config.FSDP:

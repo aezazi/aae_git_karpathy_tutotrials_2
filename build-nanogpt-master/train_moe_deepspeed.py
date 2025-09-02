@@ -73,17 +73,30 @@ def create_deepspeed_config(config):
         "train_batch_size": effective_batch_size_deepspeed,
         "train_micro_batch_size_per_gpu": config.batch_size,
         "gradient_accumulation_steps": config.accum_steps,
+        "gradient_clipping": "auto",
         
+        # "optimizer": {
+        #     "type": "AdamW",
+        #     "params": {
+        #         "lr": config.base_lr,
+        #         "betas": [0.9, 0.95],
+        #         "eps": 1e-8,
+        #         "weight_decay": 0.1
+        #     }
+        # },
+        
+
         "optimizer": {
-            "type": "AdamW",
-            "params": {
-                "lr": config.base_lr,
-                "betas": [0.9, 0.95],
-                "eps": 1e-8,
-                "weight_decay": 0.1
+        "type": "AdamW",
+        "params": {
+            "lr": config.base_lr,
+            "weight_decay": 0.1,
+            "torch_adam": True,
+            "adam_w_mode": True
             }
         },
-        
+
+
         "scheduler": {
             "type": "WarmupCosineLR",
             "params": {
@@ -95,15 +108,28 @@ def create_deepspeed_config(config):
             }
         },
         
+
+
+        # "zero_optimization": {
+        #     "stage": 1,
+        #     "reduce_scatter": True,
+        #     "contiguous_gradients": True,
+        #     "overlap_comm": True,
+        #     "allgather_partitions": True,
+        #     "allgather_bucket_size": 200000000,
+        #     "reduce_bucket_size": 200000000
+        # },
+
+
         "zero_optimization": {
-            "stage": 1,
-            "reduce_scatter": True,
-            "contiguous_gradients": True,
-            "overlap_comm": True,
-            "allgather_partitions": True,
-            "allgather_bucket_size": 200000000,
-            "reduce_bucket_size": 200000000
-        },
+        "stage": 2,
+        "allgather_partitions": True,
+        "allgather_bucket_size": 2e8,
+        "overlap_comm": True,
+        "reduce_scatter": True,
+        "reduce_bucket_size": "auto",
+        "contiguous_gradients": True
+    },
         
         "bf16": {"enabled": True},
         "gradient_clipping": 1.0,
@@ -203,11 +229,6 @@ def count_parameters_moe(model, config):
 
 
 
-# %%
-# Instantiate the dataloader and load the data. 
-
-
-
 def main():
     import model_moe_deepspeed as model_ds
     # Check CUDA availability
@@ -275,7 +296,7 @@ def main():
     
     
     # Initialize DeepSpeed
-    model_engine, optimizer, lr_scheduler = initialize_deepspeed(model, config)
+    model_engine, optimizer, lr_scheduler = initialize_deepspeed(model, config,model_parameters=model.parameters())
     device = model_engine.device
     print(f'\nDeepSpeed model initialized on device: {device}\n')
     
@@ -347,20 +368,74 @@ def main():
             ce_loss, aux_loss_sum, exp_counts_sum, logits = model_engine(x, y)
             combined_loss = ce_loss +(aux_loss_sum * config.load_balance_scale)
             
-            # Scale loss for accumulation
-            combined_loss  = combined_loss  / accumulation_steps_desired
-            loss_accum += combined_loss.detach()
+            # Scale loss for accumulation (DeepSpeed expects this)
+            microbatch_loss = combined_loss / accumulation_steps_desired
             
-            # Backward pass (DeepSpeed handles everything)
-            model_engine.backward(combined_loss)
-
-            # ✅ Step only when accumulation boundary is reached
-            if model_engine.is_gradient_accumulation_boundary():
-                avg_loss = loss_accum.item() / accumulation_steps_desired
-                loss_accum = 0.0  # reset for next accumulation
-                model_engine.step()
+            # Accumulate unscaled loss for logging
+            loss_accum += microbatch_loss.detach()
+            
+            # Backward pass
+            model_engine.backward(microbatch_loss)
+            
         
-        #
+        model_engine.step()
+
+
+
+        if step < 5 and config.master_process:  # Debug first 5 steps
+            print(f"\n=== GRADIENT DEBUG Step {step} ===")
+            
+            # Check if gradients exist and their magnitudes
+            total_grad_norm = 0.0
+            param_count = 0
+            zero_grad_count = 0
+            
+            for name, param in model_engine.module.named_parameters():
+                if param.grad is not None:
+                    grad_norm = param.grad.data.norm().item()
+                    total_grad_norm += grad_norm
+                    param_count += 1
+                    
+                    if grad_norm < 1e-8:
+                        zero_grad_count += 1
+                        
+                    # Print first few parameter gradients
+                    if param_count <= 5:
+                        print(f"  {name}: grad_norm={grad_norm:.6f}, param_norm={param.data.norm().item():.6f}")
+                else:
+                    if param_count <= 5:
+                        print(f"  {name}: NO GRADIENT")
+            
+            avg_grad_norm = total_grad_norm / max(param_count, 1)
+            print(f"  Total params with gradients: {param_count}")
+            print(f"  Params with zero gradients: {zero_grad_count}")
+            print(f"  Average gradient norm: {avg_grad_norm:.8f}")
+            print(f"  CE Loss: {ce_loss.item():.6f}")
+            print(f"  Aux Loss: {aux_loss_sum.item():.6f}")
+            print(f"  Combined Loss: {combined_loss.item() * accumulation_steps_desired:.6f}")
+            
+            # Check if model parameters are actually changing
+            if step == 0:
+                # Store initial parameters for comparison
+                initial_params = {}
+                for name, param in model_engine.module.named_parameters():
+                    initial_params[name] = param.data.clone()
+            elif step == 4:  # Check after a few steps
+                print(f"\n  PARAMETER CHANGE CHECK:")
+                for name, param in model_engine.module.named_parameters():
+                    if name in initial_params:
+                        param_change = (param.data - initial_params[name]).norm().item()
+                        print(f"    {name}: change_norm={param_change:.8f}")
+                        if param_change < 1e-8:
+                            print(f"    WARNING: {name} hasn't changed!")
+                        break  # Just check first parameter
+            
+            print("=== END GRADIENT DEBUG ===\n")
+
+    
+        if model_engine.lr_scheduler is not None:
+            model_engine.lr_scheduler.step()
+
         # Check if scheduler is stepping properly
         if step < 10:  # Debug first 10 steps
             print(f"DEBUG Step {step}:")
@@ -369,9 +444,6 @@ def main():
             print(f"  Base LR: {config.base_lr}")
             print(f"  Current LR: {model_engine.get_lr()[0]}")
             
-            # # Force scheduler step if it's not auto-stepping
-            # if hasattr(model_engine.lr_scheduler, 'step'):
-            #     print(f"  Manual scheduler step...")
         
         # Synchronize and calculate timing
         torch.cuda.synchronize()
@@ -396,7 +468,7 @@ def main():
             eval_log_utils.LearningRate(log_params=log_params).log_learning_rate()
             
             # Print progress
-            print(f"Step {step}, shard_idx: {shard_idx}, Loss: {avg_loss:.5f}, "
+            print(f"Step {step}, shard_idx: {shard_idx}, Loss: { loss_accum.item():.5f}, "
                   f"LR: {model_engine.get_lr()[0]:.7f}, Time: {dt:.2f}sec, "
                   f"Tokens/sec: {tokens_per_sec:,.0f}")
             print(f"Total tokens seen: {total_tokens_seen:,}")
