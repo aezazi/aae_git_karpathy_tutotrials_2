@@ -207,9 +207,9 @@ class CreateMoEDeepSpeed(nn.Module):
         if targets is not None:
             ce_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
             # Combine CE loss and MoE gate loss
-            loss = ce_loss, aux_loss_sum, exp_counts_sum, logits
+            return ce_loss, aux_loss_sum, exp_counts_sum, logits
 
-        return ce_loss, aux_loss_sum, exp_counts_sum, logits
+        return logits
         
 
 

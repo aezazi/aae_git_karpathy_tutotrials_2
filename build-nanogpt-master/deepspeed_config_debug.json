@@ -41,6 +41,6 @@
     "ep_size": 1,
     "moe_param_group": true,
     "use_residual": false,
-    "load_balance_scale": 0.01
+    "load_balance_scale": 0.1
   }
 }
