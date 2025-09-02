@@ -161,14 +161,14 @@ def create_deepspeed_config(config):
 
 
         "zero_optimization": {
-        "stage": 2,
-        "allgather_partitions": True,
-        "allgather_bucket_size": 2e8,
-        "overlap_comm": True,
-        "reduce_scatter": True,
-        "reduce_bucket_size": "auto",
-        "contiguous_gradients": True
-    },
+            "stage": 2,
+            "allgather_partitions": True,
+            "allgather_bucket_size": 2e8,
+            "overlap_comm": True,
+            "reduce_scatter": True,
+            "reduce_bucket_size": "auto",
+            "contiguous_gradients": True
+        },
         
         "bf16": {"enabled": True},
         "gradient_clipping": 1.0,
