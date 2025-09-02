@@ -23,7 +23,7 @@
     }
   },
   "zero_optimization": {
-    "stage": 2,
+    "stage": 0,
     "allgather_partitions": true,
     "allgather_bucket_size": 200000000.0,
     "overlap_comm": true,
@@ -32,15 +32,15 @@
     "contiguous_gradients": true
   },
   "bf16": {
-    "enabled": true
+    "enabled": false
   },
   "steps_per_print": 100,
   "wall_clock_breakdown": false,
   "moe": {
     "enabled": true,
-    "ep_size": 1,
-    "moe_param_group": true,
+    "ep_size": 4,
+    "moe_param_group": false,
     "use_residual": false,
-    "load_balance_scale": 0.1
+    "load_balance_scale": 0.5
   }
 }

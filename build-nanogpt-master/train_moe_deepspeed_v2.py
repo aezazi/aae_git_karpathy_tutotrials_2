@@ -60,7 +60,7 @@ class GPTConfig:
     base_lr: float = 1e-3
     warm_up_steps: int = 100
     target_tokens_per_optimizer_step = 1048576 // 2
-    load_balance_scale: float = 0.1
+    load_balance_scale: float = 0.5
 
     def __post_init__(self):
         # Distributed training setup
@@ -110,7 +110,7 @@ def create_deepspeed_config(config):
         },
 
         "zero_optimization": {
-            "stage": 2,
+            "stage": 0,
             "allgather_partitions": True,
             "allgather_bucket_size": 2e8,
             "overlap_comm": True,
@@ -119,7 +119,7 @@ def create_deepspeed_config(config):
             "contiguous_gradients": True
         },
         
-        "bf16": {"enabled": True},
+        "bf16": {"enabled": False},
         "steps_per_print": 100,
         "wall_clock_breakdown": False
     }
@@ -127,8 +127,8 @@ def create_deepspeed_config(config):
     if config.num_experts > 1:
         ds_config["moe"] = {
             "enabled": True,
-            "ep_size": min(config.world_size, config.num_experts),
-            "moe_param_group": True,
+            "ep_size": config.num_experts,
+            "moe_param_group": False,
             "use_residual": False,
             "load_balance_scale": config.load_balance_scale
         }
@@ -267,6 +267,23 @@ def main():
     device = model_engine.device
     print(f'\nDeepSpeed model initialized on device: {device}\n')
 
+    # After initialize_deepspeed(...)
+    if config.master_process:
+        print("Engine device:", model_engine.device)
+        print("Model engine has optimizer?:", hasattr(model_engine, "optimizer") and model_engine.optimizer is not None)
+        try:
+            print("model_engine.get_lr():", model_engine.get_lr())
+        except Exception:
+            print("model_engine.get_lr() not available")
+        # show optimizer param groups and lr
+        try:
+            opt = model_engine.optimizer
+            print("Num param groups:", len(opt.param_groups))
+            print("Param group lrs (first 10 groups if many):", [g.get("lr", None) for g in opt.param_groups[:10]])
+            print("Sizes of first few param groups:", [len(g['params']) for g in opt.param_groups[:10]])
+        except Exception as e:
+            print("Could not inspect optimizer param_groups:", e)
+
     if config.master_process:
         print(f"\nTraining setup:")
         print(f"  - Training steps: {config.training_steps:,}")
@@ -299,6 +316,22 @@ def main():
     total_tokens_seen = 0
     
     for step in range(config.training_steps):
+
+        # --- CHECKSUM BEFORE STEP (place at start of outer step) ---
+        if config.master_process:
+            def param_checksum(mod):
+                s = 0.0
+                for p in mod.parameters():
+                    if p.requires_grad:
+                        # convert to float to avoid dtype issues
+                        s += float(p.data.float().abs().mean())
+                return s
+
+            checksum_before = param_checksum(model_engine.module)
+            print(f"[DEBUG] Step {step} checksum_before: {checksum_before:.6e}")
+        # ------------------------------------------------------------
+
+
         t0 = time.time()
         last_step = (step == config.training_steps - 1)
         
@@ -312,16 +345,20 @@ def main():
             x, y = x.to(device), y.to(device)
             
             # DEBUGGING: Check input data
-            if step < 5 and micro_step == 0 and config.master_process:
-                print(f"Step {step}: Input stats - x: min={x.min()}, max={x.max()}, y: min={y.min()}, max={y.max()}")
+            # if step < 5 and micro_step == 0 and config.master_process:
+                # print(f"Step {step}: Input stats - x: min={x.min()}, max={x.max()}, y: min={y.min()}, max={y.max()}")
             
             # Forward pass
             ce_loss, aux_loss_sum, exp_counts_sum, logits = model_engine(x, y)
+            # if step < 3 and config.master_process:
+            #     print("DEBUG requires_grad: ce_loss:", ce_loss.requires_grad,
+            #         "aux_loss_sum:", aux_loss_sum.requires_grad)
+            
             
             # DEBUGGING: Check for NaN/Inf
-            if torch.isnan(ce_loss) or torch.isinf(ce_loss):
-                print(f"WARNING: CE Loss is NaN/Inf at step {step}, micro_step {micro_step}")
-                continue
+            # if torch.isnan(ce_loss) or torch.isinf(ce_loss):
+            #     print(f"WARNING: CE Loss is NaN/Inf at step {step}, micro_step {micro_step}")
+            #     continue
                 
             if torch.isnan(aux_loss_sum) or torch.isinf(aux_loss_sum):
                 print(f"WARNING: Aux Loss is NaN/Inf at step {step}, micro_step {micro_step}")
@@ -346,20 +383,53 @@ def main():
             
             # Backward pass
             model_engine.backward(microbatch_loss)
+
+            # # --- DEBUG: check grads immediately after backward (inside micro-step loop) ---
+            # if step < 5 and config.master_process:
+            #     # basic booleans
+            #     print(f"[DEBUG] step {step} micro_step {micro_step}: microbatch_loss.requires_grad = {microbatch_loss.requires_grad}")
+            #     print(f"[DEBUG] ce_loss.grad_fn = {ce_loss.grad_fn}, aux_loss.grad_fn = {aux_loss_sum.grad_fn}")
+
+            #     any_grad = False
+            #     # check a few representative params (head, attn, first expert, lm_head)
+            #     checks = [
+            #         "lm_head.weight",
+            #         "transformer.h.0.attn.c_attn.weight",
+            #         "transformer.h.0.moe.deepspeed_moe.experts.deepspeed_experts.0.linear_1.weight",
+            #         "transformer.h.0.moe.deepspeed_moe.experts.deepspeed_experts.0.c_proj.weight"
+            #     ]
+            #     for name, p in model_engine.module.named_parameters():
+            #         if name in checks:
+            #             print(f"[DEBUG] param {name}: requires_grad={p.requires_grad}, grad is None? {p.grad is None}")
+            #             if p.grad is not None:
+            #                 print(f"    grad norm: {p.grad.norm().item():.6e}")
+            #                 any_grad = True
+
+            #     # if none of the representative params have grads, try a broad scan for any grads
+            #     if not any_grad:
+            #         any_present = False
+            #         for name, p in model_engine.module.named_parameters():
+            #             if p.grad is not None:
+            #                 print(f"[DEBUG] First param with grad: {name}, grad_norm: {p.grad.norm().item():.6e}")
+            #                 any_present = True
+            #                 break
+            #         print(f"[DEBUG] Any grad present after backward? {any_present}")
+            # ------------------------------------------------------------
+
+           
+
         
         # Optimizer step
         model_engine.step()
 
-        # CRITICAL: Check gradients after step
-        if step < 10 and config.master_process:
-            grad_norm = 0.0
-            param_count = 0
-            for name, param in model_engine.module.named_parameters():
-                if param.grad is not None:
-                    grad_norm += param.grad.data.norm().item() ** 2
-                    param_count += 1
-            grad_norm = (grad_norm ** 0.5) / max(param_count, 1)
-            print(f"Step {step}: Avg gradient norm: {grad_norm:.8f}")
+        # --- CHECKSUM AFTER STEP (place immediately after model_engine.step()) ---
+        if config.master_process:
+            checksum_after = param_checksum(model_engine.module)
+            delta = checksum_after - checksum_before
+            print(f"[DEBUG] Step {step} checksum_after: {checksum_after:.6e}, delta: {delta:.6e}")
+        # ------------------------------------------------------------
+
+       
 
         # Learning rate scheduling
         if model_engine.lr_scheduler is not None:
@@ -418,3 +488,4 @@ if __name__ == "__main__":
 
 
 # python train_moe_deepspeed.py
+# %%
