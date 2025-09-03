@@ -48,11 +48,11 @@ class GPTConfig:
     vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
-    n_embd: int = 1056
+    n_embd: int = 1152
     base_lr = 6e-4 * 3
     warm_up_steps = 300
     target_tokens_per_optimizer_step = 1048576 // 2
-    num_experts = 32
+    num_experts = 16
     load_balance_scale = 0.01
     k = 2
     print_token_routing = True
