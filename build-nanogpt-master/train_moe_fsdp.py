@@ -399,7 +399,7 @@ for step in range(config.training_steps):
     
     
     # update log_params, log training loss and learning rate to file, print processing stats.
-    if config.master_process:
+    if config.master_process and step % 10 == 0:
         # update log_params
         log_params.step = step
         log_params.shard_idx = shard_idx

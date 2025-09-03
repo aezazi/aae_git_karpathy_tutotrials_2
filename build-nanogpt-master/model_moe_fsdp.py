@@ -91,7 +91,7 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, seq_len, self.n_head, n_embd // self.n_head) # (B, seq_len, n_heads, dim_heads)
         q = q.view(B, seq_len, self.n_head, n_embd // self.n_head) # (B, seq_len, n_heads, dim_heads)
     
-        # apply rotation and transpose. the reshaping to (B, n_heads, seq_len, dim_heads) is to accommodate the matrix multiplication of k, q, and v along the desiored dimensions
+        # apply rotation and transpose. the reshaping to (B, n_heads, seq_len, dim_heads) is to accommodate the matrix multiplication of k, q, and v along the desired dimensions
         k_rot = self.rot_embed.apply_rotation(x=k).transpose(1, 2) # (B, n_heads, seq_len, dim_heads)
         q_rot = self.rot_embed.apply_rotation(x=q).transpose(1, 2) # (B, n_heads, seq_len, dim_heads)
         
@@ -180,7 +180,6 @@ class TopKMoEGate(nn.Module):
 
         # just a check to make sure the shape manipulations are consistent with original input
         assert n_embd == self.n_embd, f"Expected embedding dim {self.n_embd}, got {n_embd}"
-        # assert token_count == self.batch_size*self.seq_len, f"token_count {self.batch_size*self.seq_len}, got {token_count}"
 
         # project the multi-head attention output n_embd to the number of experts
         logits = self.gate_linear(x_flat) # (batch_size*seq_len, num_experts)
@@ -197,7 +196,7 @@ class TopKMoEGate(nn.Module):
          # Get the top-k logits and their corresponding indices. The pytorch top_k method returns the top-k values and their indices along the last dimension (num_experts). In each batch, for each token in the sequence, it selects the top-k logits and their indices from the logits produced by each expert. Note that the top_k ids are global and not necessarily on this gpu.
         top_k_logits_noisy, top_k_ids_noisy = logits_noisy.topk(self.k, dim=-1)  # (batch_size* seq_len, top_k) 
 
-        # We want sparse matrices. We achieve this by keeping the top-k logits for each token and filling the rest with a value that represents "no contribution" (like negative infinity).  This is done to ensure that the softmax function will ignore these values when computing the weights for each expert. So only the values produced by the top-k experts will contribute to the final output. We implement this by first creating a tensor of the same shape as the logits filled with negative infinity, and then using the scatter function to fill in the top-k logits at the indices of the top-k experts. Note that in this context, softmax is being used to compute "weights" for each expert not probabilities as for multiclass classification. Its a subttle difference but I think important to note.
+        # We want sparse matrices. We achieve this by keeping the top-k logits for each token and filling the rest with a value that represents "no contribution" (like negative infinity).  This is done to ensure that the softmax function will ignore these values when computing the weights for each expert. So only the values produced by the top-k experts will contribute to the final output. We implement this by first creating a tensor of the same shape as the logits filled with negative infinity, and then using the scatter function to fill in the top-k logits at the indices of the top-k experts. Note that in this context, softmax is being used to compute "weights" for each expert not probabilities as for multiclass classification. Its a subtle difference but I think important to note.
         
         #full_like clones a tensor and fills it with a specified value (like infinity).
         zeros = torch.full_like(logits_noisy, float('-inf')) 
@@ -205,8 +204,8 @@ class TopKMoEGate(nn.Module):
         # scatter fills the zeros tensor with the top_k_logits at the indices of the top_k_ids_global_noisy along the last dimension (-1). This creates a sparse matrix where only the top-k logits are kept and the rest are filled with negative infinity.
         sparse_logits_noisy = zeros.scatter(-1, top_k_ids_noisy, top_k_logits_noisy)
 
-        # Note top_k_gated_weights has shape #(B*seq_len, num_experts). The top_k experts will have weights that sum to 1, the other experts will have weights-inf
-        top_k_gated_weights = F.softmax(sparse_logits_noisy, dim=-1) 
+        # Note top_k_gated_weights has shape (B*seq_len, num_experts). The top_k experts will have weights that sum to 1, the other experts will have weights-inf
+        top_k_gated_weights = F.softmax(sparse_logits_noisy, dim=-1) # (B*seq_len, num_experts).
 
         # compute load balance loss using pre-noise logits
         load_balance_loss = self._compute_load_balance_loss(logits)
