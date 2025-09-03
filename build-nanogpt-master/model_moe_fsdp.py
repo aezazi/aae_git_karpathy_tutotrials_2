@@ -180,6 +180,7 @@ class TopKMoEGate(nn.Module):
 
         # just a check to make sure the shape manipulations are consistent with original input
         assert n_embd == self.n_embd, f"Expected embedding dim {self.n_embd}, got {n_embd}"
+        
 
         # project the multi-head attention output n_embd to the number of experts
         logits = self.gate_linear(x_flat) # (batch_size*seq_len, num_experts)
