@@ -1005,4 +1005,16 @@ d = {e_idx: mod for e_idx in range(num_experts) if e_idx % world_size == local_r
 
 print(d)
 # %%
+torch.manual_seed = 42
+t4 = torch.arange(0,240).view(3,5,16)
+print(f'shape (B, T, n_emb): {t4.shape}:\n{t4}')
+print(f'\n===============================================\n')
 
+t5 = t4.view(3, 5, 2, -1)
+print(f'shape (B, T, n_head, n_emb//2): {t5.shape}:\n{t5}')
+print(f'\n===============================================\n')
+
+t6 = t4.view(3, 5, 2, -1).transpose(1,2)
+print(f'shape (B, n_head, T, n_emb//2): {t6.shape}:\n{t6}')
+
+# %%
