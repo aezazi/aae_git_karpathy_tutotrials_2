@@ -280,7 +280,7 @@ else:
         
     print(f"\nusing device: {device}")
 
-torch.manual_seed(42) # set the random seed for reproducibility
+torch.manual_seed = 42 # set the random seed for reproducibility
 if torch.cuda.is_available():
     torch.cuda.manual_seed(42) # set the random seed for cuda for reproducibility
 
@@ -328,7 +328,7 @@ if ddp:
 
 # %%
 # Instantiate the dataloader and load the data. 
-from aae_dataloader_utils import DataLoaderShardMultiGPU
+from dataloader_utils import DataLoaderShardMultiGPU
 
 # initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
 B = 64 # batch size
@@ -382,7 +382,7 @@ print(f'\nScheduler initialized on GPU rank {ddp_rank}, of {ddp_world_size}\n')
 
 #%%
 # create log files, loggers, and evaluators to store training loss, learning rate, validation loss, hellaswag eval results, and generate sample text.
-import aae_eval_log_utils as eval_log_utils
+import eval_log_utils as eval_log_utils
 log_params = eval_log_utils.LogParamsFilesConfig(
     ddp = ddp,
     ddp_world_size = ddp_world_size,

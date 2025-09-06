@@ -10,6 +10,8 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 import numpy as np
 import aae_utils
+
+
 # %%
 """
 understand decorators. Decorators take a function as the argument, add some additional functionality to that function, and return the modified function with same name as the function.. In that sense, they are like a closure.

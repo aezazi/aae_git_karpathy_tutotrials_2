@@ -1,6 +1,6 @@
 #%%
 """
-My implementation of the Karpathy's nanoGPT code for building a dataset from the fineweb-edu dataset. This implementtion is designed to allow shuffling. Each shard contains compelete example documents (Karpathy splits documents between shards). Each document is a tokenized numpy array with the EOT token appended to end. Each shard is a numpy array. Each document is placed in the shard array as a separate numpy object. This will allow the order of the shards as well as the order of the documents within each shard to be shuffled when loading. See aae_dataloader_utils.py
+My implementation of the Karpathy's nanoGPT code for building a dataset from the fineweb-edu dataset. This implementtion is designed to allow shuffling. Each shard contains complete example documents (Karpathy splits documents between shards). Each document is a tokenized numpy array with the EOT token appended to end. Each shard is a numpy array. Each document is placed in the shard array as a separate numpy object. This will allow the order of the shards as well as the order of the documents within each shard to be shuffled when loading. See aae_dataloader_utils.py
 """
 
 # %%
