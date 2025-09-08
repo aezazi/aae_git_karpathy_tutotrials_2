@@ -332,15 +332,15 @@ for step in range(config.training_steps):
     # Main training loop
     optimizer.zero_grad()
     loss_accum  = 0.0
-    micro_steps = config.accum_steps # set the number of mirco steps to accumulate gradients over
-    for micro_step in range(micro_steps):
+    
+    for micro_step in range(config.accum_steps):
         # this is a gradient accumulation step. We accumulate gradients over desired accumalation steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
         x, y, shard_idx, tokens_abandoned = train_loader.next_batch()
         x, y = x.to(device), y.to(device) # move the data to the device. 
 
         # By default, FSDP synchronizes the loss from each process after each micro step by taking an average of all the processes and making that average the loss for all the processes for that step. Its very inefficient to do this at each micro_step. So we want to only synchronize gradients among all the processes on the last micro step. See Karpathy's video tutorial at 2:57:00 for more details. The code below sets the require_backward_grad_sync attribute of the model to True only on the last micro step. 
         if config.FSDP:
-            model.require_backward_grad_sync = (micro_step == micro_steps - 1) 
+            model.require_backward_grad_sync = (micro_step == config.accum_steps - 1) 
 
         # we use autocast to use bfloat16 precision for the forward pass. This is a performance optimization for training on GPUs. The device must be cuda.
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
@@ -363,9 +363,9 @@ for step in range(config.training_steps):
                     accum_topk_expert_count[layer_idx] += local_counts
         
 
-        # divide the loss by the number of micro steps to get the average loss of the accumulated micro steps
-        # Divide by accumulation steps (so gradient is averaged across micro-batches)
-        microbatch_loss = loss / micro_steps 
+        # divide the loss by the number of accum_steps to get the average loss of the accumulated micro steps
+        # Divide by accumulation steps (so gradient is averaged across accum-steps)
+        microbatch_loss = loss / config.accum_steps 
         
         # Look at Pytorch documentation for more details on tensor.detach() vs. tensor.item()
         loss_accum += microbatch_loss.detach() 
@@ -385,7 +385,7 @@ for step in range(config.training_steps):
     
     t1 = time.time()
     dt = (t1 - t0)
-    tokens_processed_local = train_loader.B * train_loader.seq_len * micro_steps
+    tokens_processed_local = train_loader.B * train_loader.seq_len * config.accum_steps
     if config.FSDP:
         # In FSDP, each GPU processes different data, so total tokens is sum across GPUs
         tokens_processed_total = tokens_processed_local * config.world_size
