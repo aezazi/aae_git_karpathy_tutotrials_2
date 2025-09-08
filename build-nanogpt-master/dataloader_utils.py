@@ -121,7 +121,7 @@ class DataLoaderShardMultiGPU:
         load_tokens_convert_to_tensor 
         """
         self.current_shard_idx = 0
-        self.load_tokens_convert_to_tensor(self.shard_file_names[self.current_shard_idx])
+        self.shard_tensor = self.load_tokens_convert_to_tensor(self.shard_file_names[self.current_shard_idx])
         self.current_position = self.B * self.seq_len * self.process_rank  # set the current position in the text for this process
     
     def load_tokens_convert_to_tensor(self, shard_file):
@@ -193,7 +193,7 @@ class DataLoaderShardMultiGPUShuffle:
 
     def reset(self):
         self.current_shard_idx = 0
-        self.load_tokens_convert_to_tensor(new_train_run=True)
+        self.shard_tensor = self.load_tokens_convert_to_tensor(new_train_run=True)
         
         self.current_position = self.B * self.seq_len * self.process_rank  # set the current position in the text for this process
     
