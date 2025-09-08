@@ -193,13 +193,13 @@ class DataLoaderShardMultiGPUShuffle:
 
     def reset(self):
         self.current_shard_idx = 0
-        self.load_tokens_convert_to_tensor(self.shard_file_names[self.current_shard_idx], new_train_run=True)
+        self.load_tokens_convert_to_tensor(new_train_run=True)
         
         self.current_position = self.B * self.seq_len * self.process_rank  # set the current position in the text for this process
     
-    def load_tokens_convert_to_tensor(self, shard_file=None, new_train_run = False):
+    def load_tokens_convert_to_tensor(self,  new_train_run = False):
          # Each shard_file contains  numpy objects each of which is a numpy array of a tokensized document
-        shard_file_docs_np_objects = np.load(f'{self.shard_dir}/{self.shard_file_names[0]}', allow_pickle=True)
+        shard_file_docs_np_objects = np.load(f'{self.shard_dir}/{self.shard_file_names[self.current_shard_idx]}', allow_pickle=True)
 
         # shuffle shard_file_docs. this shuffles the order of individual documents in this shard
         np.random.shuffle(shard_file_docs_np_objects)

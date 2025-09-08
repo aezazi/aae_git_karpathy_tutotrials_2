@@ -45,14 +45,15 @@ class DataLoaderShardMultiGPUShuffle:
     
     def reset(self):
         self.current_shard_idx = 0
-        self.load_tokens_convert_to_tensor(self.shard_file_names[self.current_shard_idx], new_train_run=True)
+        self.load_tokens_convert_to_tensor(new_train_run=True)
         
         self.current_position = self.B * self.seq_len * self.process_rank  # set the current position in the text for this process
     
-    def load_tokens_convert_to_tensor(self, shard_file=None, new_train_run = False):
+    def load_tokens_convert_to_tensor(self, new_train_run = False):
          # Each shard_file contains  numpy objects each of which is a numpy array of a tokensized document
-        shard_file_docs_np_objects = np.load(f'{self.shard_dir}/{self.shard_file_names[0]}', allow_pickle=True)
+        shard_file_docs_np_objects = np.load(f'{self.shard_dir}/{self.shard_file_names[self.current_shard_idx]}', allow_pickle=True)
 
+        
         # shuffle shard_file_docs. this shuffles the order of individual documents in this shard
         np.random.shuffle(shard_file_docs_np_objects)
 
@@ -72,8 +73,9 @@ class DataLoaderShardMultiGPUShuffle:
     
 #%%
 test = DataLoaderShardMultiGPUShuffle(3,7, split='val')
-print(test.shard_numpy.size)
-test.shard_numpy
+print(test.shard_numpy)
+
+# test.shard_numpy
 
     
 
@@ -92,7 +94,7 @@ print(shard_files)
 shard_file = shard_files[0]
 print(f'shard_file: {shard_file}, type: {type(shard_file)}')
 
-shard_file_docs_numpy = np.load(f'{shard_dir}/{shard_file}', allow_pickle=True)
+shard_file_docs_numpy = np.load(f'{shard_dir}/{shard_files}', allow_pickle=True)
 print(f'shard_file_docs_numpy type: {type(shard_file_docs_numpy)}')
 print(shard_file_docs_numpy.size)
 doc = shard_file_docs_numpy[1]
