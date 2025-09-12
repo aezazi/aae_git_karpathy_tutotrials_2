@@ -26,23 +26,22 @@ import functools
  #%%
 assert torch.cuda.is_available()  ,"This script is designed to run on CUDA devices only. Please ensure you have a compatible GPU."
 
+
 # Check if we are running in FSDP mode. If so, we will initialize the process group and set the device for each process. a simple way to check whether your script is being run under Distributed Data Parallel (FSDP) — specifically when using torchrun with a cuda GPU. Note that you can be in FSDP mode even with a single GPU when using torchrun. 
 if os.environ.get('RANK') is not None and os.environ.get('WORLD_SIZE') is not None:
-    print(f'Running in distributed environment. Initializing FSDP\n')
-    init_process_group(backend='nccl') # initialize the process group 
+        print(f'Running in distributed environment. Initializing FSDP\n')
+        init_process_group(backend='nccl') # initialize the process group 
     
 else:
     print(f'Running in a non-distributed environment.\n')
 
 
-# This is the configuration for the GPT model. It defines the hyperparameters for the model. The block size is the maximum sequence length, vocab size is the size of the vocabulary, n_layer is the number of transformer blocks, n_head is the number of attention heads, and n_embd is the embedding dimension. 
-
-# Note on effective batch size: tbd
+# GPTConfig dataclass defines the hyperparameters for the model.  vocab size is the size of the vocabulary, n_layer is the number of transformer blocks, n_head is the number of attention heads, and n_embd is the embedding dimension. 
 
 @dataclass
 class GPTConfig:
+    #  as per Karpathy tutorial, setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
     seq_len: int = 2048 # max sequence length
-    # setting vocab size to 50304 rather than 50257 (the size of the gpt2 vocab) because this is a much more efficient number (divisible by many powers of 2) for gpu kernels and computations. The extra tokens are just padding tokens that are not used in the model. The model will learn to ignore them. this is a tradeoff between memory and performance. 
     model_expert_parallelization = False # choose whether to run the model with just fsdp or the model with fsdp and expert parallelization
     batch_size = 16
     vocab_size: int = 50304
@@ -78,7 +77,7 @@ class GPTConfig:
 
         self.experts_per_gpu = self.num_experts // self.world_size
         self.rank = dist.get_rank() if dist.is_initialized() else 0
-        self.local_rank =  int(os.environ['LOCAL_RANK']) # get the local rank of the current process
+        self.local_rank =  int(os.environ['LOCAL_RANK']) if dist.is_initialized() else 0 # get the local rank of the current process
         self.master_process = (self.rank == 0)
 
 # instantiate and check the config
@@ -125,10 +124,6 @@ if config.model_expert_parallelization:
 else:
     model = model_FSDP.CreateMoE(config=config)
     use_compile = True # set to True to use torch.compile
-
-# compute number of model parameters
-# def count_parameters(model, config=None):
-#     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
 def count_parameters_moe(model, config=config):
@@ -208,13 +203,15 @@ else:
     )
 
 # FSDP also allows us to define a mixed prescision policy. Here, I am just using bf16 for everything, but we can use hybrid. refer to this tutorial for more good info and nuances https://www.youtube.com/watch?v=-caN92JtKqA&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=4
-precision_policy = MixedPrecision(
+    precision_policy = MixedPrecision(
             param_dtype=torch.bfloat16, # param precision
             reduce_dtype=torch.bfloat16, # gradient communication precision
             buffer_dtype=torch.bfloat16 # buffer precision
             )
 
-# wrap model per wrapper policy
+# wrap model per wrapper policy if on more than one gpu
+
+
 model = FSDP_wrap(model,
             auto_wrap_policy=transformer_wrapper_policy,
             mixed_precision=precision_policy,
@@ -230,6 +227,8 @@ model = FSDP_wrap(model,
             )
 
 print(f"\n[FSDP] Rank {config.rank}: Model wrapping complete\n")
+
+
 
 #%%
 # Instantiate the optimizer.
@@ -317,6 +316,50 @@ log_params = eval_log_utils.LogParamsFilesConfig(
     loss_accum = 0.0,
     lr = 0.0
 )
+
+#%%
+from torch.distributed.fsdp import StateDictType
+
+def save_checkpoint_single_gpu(model, optimizer, scheduler, step, config, save_path):
+    """Save checkpoint for FSDP model on single GPU"""
+    print(f"Saving checkpoint at step {step}...")
+    
+    # Use FSDP's state_dict context manager
+    with FSDP_wrap.state_dict_type(model, StateDictType.FULL_STATE_DICT):
+        model_state_dict = model.state_dict()
+    
+    checkpoint = {
+        'model_state_dict': model_state_dict,
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict() if hasattr(scheduler, 'state_dict') else None,
+        'step': step,
+        'config': config,
+        'total_tokens_seen': total_tokens_seen,
+    }
+    
+    torch.save(checkpoint, save_path)
+    print(f"Checkpoint saved to {save_path}")
+
+
+def save_with_minimal_optimizer(model, step, save_path):
+    """Save weights + minimal optimizer state"""
+    print(f"Saving checkpoint at step {step}...")
+    # Clear optimizer buffers temporarily
+    for group in optimizer.param_groups:
+        for p in group['params']:
+            if 'momentum_buffer' in optimizer.state[p]:
+                del optimizer.state[p]['momentum_buffer']
+    
+    with FSDP_wrap.state_dict_type(model, StateDictType.LOCAL_STATE_DICT):
+        checkpoint = {
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'step': step,
+        }
+    
+    torch.save(checkpoint, save_path)
+    print(f"Checkpoint saved to {save_path}")
+
 
 #%%
 # Run the training loop.
@@ -450,8 +493,22 @@ for step in range(config.training_steps):
         eval_log_utils.Validation(log_params=log_params).check_validation_loss()
     
     # every x steps generate from the model.
-    if ((step % 1000 == 0 and step > 0) or last_step):
-        eval_log_utils.GenerateSample(log_params=log_params).generate(context="Hello, I'm a language model,", sample_max_length=32)
+    if ((step % 10000 == 0 and step > 0) or last_step):
+        eval_log_utils.GenerateSample(log_params=log_params).generate(context="Hello, I'm a small language model,", sample_max_length=32)
+
+    # if step % 1000 == 0 or last_step:  # Save every 1000 steps
+    #     checkpoint_path = f"checkpoints_model_moe_fsdp/checkpoint_model_moe_fsdp_step_{step}.pt"
+    #     os.makedirs("checkpoints_model_moe_fsdp", exist_ok=True)
+    #     # save_checkpoint_single_gpu(model, optimizer, scheduler, step, config, checkpoint_path)
+    #     save_with_minimal_optimizer(model, step, checkpoint_path)
+
+# Final save at end of training
+if config.master_process:
+    final_path = "checkpoints_model_moe_fsdp/checkpoint_model_moe_fsdp_final_model.pt"
+    os.makedirs("checkpoints_model_moe_fsdp", exist_ok=True)
+    # save_checkpoint_single_gpu(model, optimizer, scheduler, step, config, final_path)
+    save_with_minimal_optimizer(model, step, final_path)
+
 
 if config.FSDP:
     destroy_process_group()

@@ -1020,3 +1020,53 @@ t6 = t4.view(3, 5, 2, -1).transpose(1,2)
 print(f'shape (B, n_head, T, n_emb//2): {t6.shape}:\n{t6}')
 
 # %%
+import torch
+import torch.nn as nn
+
+# Define the embedding layer
+# 10 unique words in the vocabulary, each word represented by a 5-dimensional vector
+embedding_layer = nn.Embedding(num_embeddings=10, embedding_dim=5)
+
+# Input: a tensor of word indices
+word_indices = torch.tensor([0, 2, 5, 1])
+
+# Get the embeddings for the input indices
+embeddings = embedding_layer(word_indices)
+
+print(embeddings)
+
+# %%
+import numpy as np
+
+# Example tokenized docs (variable length)
+docs = [
+    np.array([1, 2, 3], dtype=np.int32),
+    np.array([4, 5], dtype=np.int32),
+    np.array([6, 7, 8, 9], dtype=np.int32),
+]
+
+# Flatten all tokens
+flat = np.concatenate(docs)
+print(flat)
+# Offsets to mark doc boundaries
+offsets = np.cumsum([0] + [len(d) for d in docs])
+print(offsets)
+
+# Save
+np.savez("dataset.npz", flat=flat, offsets=offsets)
+
+# Load
+data = np.load("dataset.npz")
+flat, offsets = data["flat"], data["offsets"]
+
+# Shuffle docs by shuffling offsets
+perm = np.random.permutation(len(offsets) - 1)
+print(perm)
+
+shuffled_docs = [
+    flat[offsets[i]:offsets[i+1]]
+    for i in perm
+]
+
+print(shuffled_docs)
+# %%
