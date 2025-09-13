@@ -1070,3 +1070,11 @@ shuffled_docs = [
 
 print(shuffled_docs)
 # %%
+# experimenting with creating a dataset iterator from huggingface dataset
+from datasets import load_dataset
+import tiktoken
+import tqdm
+
+
+# %%
+from pathlib import Path

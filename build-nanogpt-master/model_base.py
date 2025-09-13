@@ -260,7 +260,6 @@ total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 print(f'model total parameters: {total_params:,}')
 
 
-
 torch.set_float32_matmul_precision('high')
 model.to(device)
 use_compile = True # set to True to use torch.compile
