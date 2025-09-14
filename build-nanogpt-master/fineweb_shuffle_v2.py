@@ -13,6 +13,7 @@ from tqdm import tqdm
 import os
 import time
 import multiprocessing as mp
+import torch
 
 #%%
 # Constants
@@ -39,10 +40,11 @@ def tokenize(example, eot=eot_token_id):
 
 # %%
 
-dataset_iterator = load_dataset("HuggingFaceFW/fineweb-edu", split="train", name="sample-10BT", streaming=False)
-dataset_iterator_test = dataset_iterator.select(range(10))
-# %%
-dataset_iterator_test[0]['text']
+# dataset_iterator = load_dataset("HuggingFaceFW/fineweb-edu", split="train", name="sample-10BT", streaming=False)
+# dataset_iterator_test = dataset_iterator.select(range(5))
+
+# # %%
+# dataset_iterator_test[0]['text']
 
 #%%
 def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=shard_dir):
@@ -59,7 +61,7 @@ def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=s
         d_start = time.time()
         
         # NOTE: that pool.map outputs a list of  tokens for each example in dataset_iterator  
-        for tokens  in tqdm(pool.imap(tokenize, dataset_iterator_test, chunksize=16), total=len(dataset_iterator_test), desc=" Percent of datatset processed (cumulative)", unit_scale=True, colour='blue'):
+        for tokens  in tqdm(pool.imap(tokenize, dataset_iterator, chunksize=16), total=len(dataset_iterator), desc=" Percent of datatset processed (cumulative)", unit_scale=True, colour='blue'):
             
             assert len(tokens) <= shard_size, "the length of tokens for a document exceeds the shard size. Please increase the shard size or split the document into smaller chunks."
 
@@ -91,55 +93,60 @@ def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=s
                 total_token_count += len(tokens)
             
         if shard_token_count > 0:
+                split = 'val' if shard_idx == 0 else 'train'
+                shard_save_path = os.path.join(shard_dir, f'{split}_shard_{shard_idx:04d}')
+                
                 shard_array_flat = np.concatenate(shard_list)
                 offsets = np.cumsum([0] + [len(d) for d in shard_list])
                 np.savez(shard_save_path, shard_array_flat=shard_array_flat, offsets=offsets)
+                
+                
                 d_end = time.time()
                 dt = d_end - d_start
                 print(f'saved to {shard_save_path} with {shard_token_count:,} tokens | time to create shard: {dt:.2f} sec | {shard_token_count / dt:,.0f} tokens/sec | total tokens: {total_token_count:,}\n')
 
-#%%
-shard_idx = 0
-shard_token_count = 0
-total_token_count = 0
-shard_list = []
-for doc  in dataset_iterator_test:
-     tokens = tokenize(doc)
-     shard_list.append(tokens)
-     shard_array_flat = np.concatenate(shard_list)
-     offsets = np.cumsum([0] + [len(d) for d in shard_list])
-    #  print(type(tokens))
-    #  print(shard_list)
 
-print(len(shard_array_flat))
-print(offsets)
-split = 'val'
-shard_save_path = os.path.join(shard_dir, f'{split}_shard_{shard_idx:04d}')
-np.savez(shard_save_path, shard_array_flat=shard_array_flat, offsets=offsets)
-     
+
+
+
      
 
 
 # %%
-# if __name__ == '__main__':
-#     dataset_iterator = load_dataset("HuggingFaceFW/fineweb-edu", split="train", name="sample-10BT", streaming=False)
-#     dataset_iterator_test = dataset_iterator.select(range(1000))  # Select a subset for testing
-#     create_shards(dataset_iterator, dataset_iterator_test)
+if __name__ == '__main__':
+    dataset_iterator = load_dataset("HuggingFaceFW/fineweb-edu", split="train", name="sample-10BT", streaming=False)
+    dataset_iterator_test = dataset_iterator.select(range(5))  # Select a subset for testing
+    create_shards(dataset_iterator, dataset_iterator_test)
 
-#  %%
-# code to inspect the saved shards
-import numpy as np
-array_of_lists = np.load("aae_token_shards_mp/val_shard_0000.npy", allow_pickle=True)
-print(len(array_of_lists))
-array_of_lists[0] = np.concatenate(([eot_token_id], array_of_lists[0]))  # Add eot token at the beginning of the first list
-print(type(array_of_lists))
-print(type(array_of_lists[1]))
-print('-' * 40)
-print(array_of_lists[0])
-print(f'{len(array_of_lists[0]):,}')
-print('-' * 40)
 
-# flat_array = np.fromiter((token for token_list in array_of_lists for token in token_list), dtype=np.uint16)
-# print(flat_array[:20])
-# print(f'{len(flat_array):,} tokens in the flat array with dtype {flat_array.dtype}')
+
+
+# %%
+# test_doc_tokens_list = [np.array([0,1,2,3,4]),
+#                         np.array([5,6,7]), 
+#                         np.array([8,9,10,11,12,13,14])]
+
+# print(f'test_doc_tokens_list: {len(test_doc_tokens_list)}\n {test_doc_tokens_list}\n')
+# test_doc_tokens_flat_array = np.concatenate(test_doc_tokens_list)
+# print(f'test_doc_tokens_flat_array:\n {test_doc_tokens_flat_array}\n')
+
+# offsets2 = np.cumsum([0] + [len(d) for d in test_doc_tokens_list])
+# print(offsets2)
+
+# num_docs = len(offsets2) - 1
+# print(f'\n num_docs: {num_docs}\n')
+# shuffled_doc_order = np.random.permutation(num_docs)
+# print(f'\n shuffled_doc_order: {shuffled_doc_order}\n')
+
+# shuffled_doc_tokens = [test_doc_tokens_flat_array[offsets2[i] : offsets2[i+1]] for i in shuffled_doc_order]
+
+# print(f'\nshuffled_doc_tokens:\n {shuffled_doc_tokens}')
+
+# print(f"\nshuffled_doc_tokens_tensor:\n{torch.tensor(shuffled_doc_tokens)}")
+
+#%%
+data = np.load(f'aae_edu_fineweb10B_shuffle2/train_shard_0001.npz', mmap_mode='r')
+
+print(data['shard_array_flat'][0:10])
+print(len(data['offsets']))
 # %%
