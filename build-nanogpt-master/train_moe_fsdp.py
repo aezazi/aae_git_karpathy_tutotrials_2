@@ -245,12 +245,13 @@ if config.FSDP:
 # Instantiate the dataloader and load the data. 
 # from dataloader_utils import DataLoaderShardMultiGPU
 from dataloader_utils import DataLoaderShardMultiGPUShuffle
+from dataloader_utils import DataLoaderShardMultiGPUShuffle2
 
 
 # initialize the dataloader for training and validation data. Batch size has to be be customized to fit the gpu being used.
-train_loader = DataLoaderShardMultiGPUShuffle(B=config.batch_size, seq_len=config.seq_len, process_rank = config.rank, num_processes=config.world_size, split='train')
+train_loader = DataLoaderShardMultiGPUShuffle2(B=config.batch_size, seq_len=config.seq_len, process_rank = config.rank, num_processes=config.world_size, split='train')
 
-val_loader = DataLoaderShardMultiGPUShuffle(B=config.batch_size, seq_len=config.seq_len, process_rank = config.rank, num_processes=config.world_size, split='val')
+val_loader = DataLoaderShardMultiGPUShuffle2(B=config.batch_size, seq_len=config.seq_len, process_rank = config.rank, num_processes=config.world_size, split='val')
 
 assert config.target_tokens_per_optimizer_step % (train_loader.B * train_loader.seq_len * config.world_size) == 0, f"effective batch size {config.effective_batch_size_desired} is not divisible by batch size {train_loader.B} and sequence length {train_loader.seq_len}"
 

@@ -61,3 +61,4 @@ aae_shards_mp/
 aae_shards_no_mp/
 aae_edu_fineweb10B_shuffle/
 aae_edu_fineweb10B_shuffle2/
+aae_edu_fineweb10B_shuffle2/val_shard_0000.npz
