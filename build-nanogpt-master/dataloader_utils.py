@@ -232,7 +232,7 @@ class DataLoaderShardMultiGPUShuffle:
             self.remaining_tokens.append(len(remaining_tokens))
             
             # load the next shard
-            self.shard_tensor =  self.load_tokens_convert_to_tensor(self.shard_file_names[self.current_shard_idx])  
+            self.shard_tensor =  self.load_tokens_convert_to_tensor()  
             self.current_position = self.B * self.seq_len * self.process_rank  # reset the current position in the text for this process
         
         # move the tensors to the GPU
@@ -273,7 +273,7 @@ class DataLoaderShardMultiGPUShuffle2:
     
     def load_tokens_convert_to_tensor(self,  new_train_run = False):
          # In this data loader implementation, each shard is is an .npz file which is like .
-         # A NumPy .npz file is a compressed archive format used by NumPy to store multiple arrays in a single file. It’s essentially a zip file where each .npy file (which stores a single array) is one member of the archive. Each array inside can be accessed by a key (like a dictionary). In our case,  each .npz file contains 'shard_flat_array' and 'offsets'. shard_flat_array is a flat array of tokens. The tokens are a concatenation of of the tokens for several documents.  Offsets are the begining and ending indices of each document in 'shard_flat_array'. See numpy docs re mmap_mode='r'
+         # A NumPy .npz file is a compressed archive format used by NumPy to store multiple arrays in a single file. It’s essentially a zip file where each .npy file (which stores a single array) is one member of the archive. Each array inside can be accessed by a key (like a dictionary). In our case,  each .npz file contains 'shard_flat_array' and 'offsets'. shard_flat_array is a flat array of tokens. The tokens are a concatenation of of the tokens for several documents.  Offsets are the begining and ending indices of each document in 'shard_flat_array'. mmap lets you open all shards at once without consuming RAM, then read only the sequences you actually batch into the model. Especially useful if you later train with multiple dataloader workers or distributed GPUs — they can all mmap the same shard file.
         data = np.load(f'{self.shard_dir}/{self.shard_file_names[self.current_shard_idx]}', mmap_mode='r')
 
         shard_array_flat = data['shard_array_flat']
@@ -289,7 +289,7 @@ class DataLoaderShardMultiGPUShuffle2:
         shuffled_docs = [shard_array_flat[offsets[i]:offsets[i+1]] for i in shuffled_doc_order]
 
         # concatenate back to a single numpy array after shuffling
-        self.shard_numpy = np.concatenate()
+        self.shard_numpy = np.concatenate(shuffled_docs)
 
         # if this is the very begining of a training run, insert an eot token at the begining of the first shard array.
         if new_train_run:
@@ -320,7 +320,7 @@ class DataLoaderShardMultiGPUShuffle2:
             self.remaining_tokens.append(len(remaining_tokens))
             
             # load the next shard
-            self.shard_tensor =  self.load_tokens_convert_to_tensor(self.shard_file_names[self.current_shard_idx])  
+            self.shard_tensor =  self.load_tokens_convert_to_tensor()  
             self.current_position = self.B * self.seq_len * self.process_rank  # reset the current position in the text for this process
         
         # move the tensors to the GPU

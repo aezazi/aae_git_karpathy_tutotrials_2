@@ -69,7 +69,7 @@ def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=s
                 split = 'val' if shard_idx == 0 else 'train'
                 shard_save_path = os.path.join(shard_dir, f'{split}_shard_{shard_idx:04d}')
 
-                # Convert shard_list (list of numpy arrays) to a numpy array of numpy array objects
+                # Note that we have to make sure that the data type of shard_array_flat and offsets is int and not object. This will allow us to use mmap wehn loading the data. See numpy docs and comments in class DataLoaderShardMultiGPUShuffle2 for more detail on mmap
                 shard_array_flat = np.concatenate(shard_list).astype(np.int32)
                 offsets = np.cumsum([0] + [len(d) for d in shard_list]).astype(np.int64)
                 np.savez(shard_save_path, shard_array_flat=shard_array_flat, offsets=offsets)
@@ -96,20 +96,14 @@ def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=s
                 split = 'val' if shard_idx == 0 else 'train'
                 shard_save_path = os.path.join(shard_dir, f'{split}_shard_{shard_idx:04d}')
                 
-                shard_array_flat = np.concatenate(shard_list)
-                offsets = np.cumsum([0] + [len(d) for d in shard_list])
+                shard_array_flat = np.concatenate(shard_list).astype(np.int32)
+                offsets = np.cumsum([0] + [len(d) for d in shard_list]).astype(np.int64)
                 np.savez(shard_save_path, shard_array_flat=shard_array_flat, offsets=offsets)
                 
                 
                 d_end = time.time()
                 dt = d_end - d_start
                 print(f'saved to {shard_save_path} with {shard_token_count:,} tokens | time to create shard: {dt:.2f} sec | {shard_token_count / dt:,.0f} tokens/sec | total tokens: {total_token_count:,}\n')
-
-
-
-
-
-     
 
 
 # %%
