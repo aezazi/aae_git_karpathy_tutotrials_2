@@ -70,8 +70,8 @@ def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=s
                 shard_save_path = os.path.join(shard_dir, f'{split}_shard_{shard_idx:04d}')
 
                 # Convert shard_list (list of numpy arrays) to a numpy array of numpy array objects
-                shard_array_flat = np.concatenate(shard_list)
-                offsets = np.cumsum([0] + [len(d) for d in shard_list])
+                shard_array_flat = np.concatenate(shard_list).astype(np.int32)
+                offsets = np.cumsum([0] + [len(d) for d in shard_list]).astype(np.int64)
                 np.savez(shard_save_path, shard_array_flat=shard_array_flat, offsets=offsets)
 
                 # measure time to create this shard
@@ -145,8 +145,8 @@ if __name__ == '__main__':
 # print(f"\nshuffled_doc_tokens_tensor:\n{torch.tensor(shuffled_doc_tokens)}")
 
 #%%
-data = np.load(f'aae_edu_fineweb10B_shuffle2/train_shard_0001.npz', mmap_mode='r')
+# data = np.load(f'aae_edu_fineweb10B_shuffle2/train_shard_0001.npz', mmap_mode='r')
 
-print(data['shard_array_flat'][0:10])
-print(len(data['offsets']))
+# print(data['shard_array_flat'][0:10])
+# print(len(data['offsets']))
 # %%
