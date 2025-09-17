@@ -70,7 +70,11 @@ def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=s
                 shard_save_path = os.path.join(shard_dir, f'{split}_shard_{shard_idx:04d}')
 
                 # Note that we have to make sure that the data type of shard_array_flat and offsets is int and not object. This will allow us to use mmap wehn loading the data. See numpy docs and comments in class DataLoaderShardMultiGPUShuffle2 for more detail on mmap
-                shard_array_flat = np.concatenate(shard_list).astype(np.int32)
+
+                # Convert each array to int32 first, then concatenate
+                shard_list_int32 = [arr.astype(np.int32) for arr in shard_list]
+                
+                shard_array_flat = np.concatenate(shard_list_int32).astype(np.int32)
                 offsets = np.cumsum([0] + [len(d) for d in shard_list]).astype(np.int64)
                 np.savez(shard_save_path, shard_array_flat=shard_array_flat, offsets=offsets)
 

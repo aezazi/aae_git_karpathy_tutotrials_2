@@ -242,7 +242,7 @@ class DataLoaderShardMultiGPUShuffle:
     
 
 class DataLoaderShardMultiGPUShuffle2:
-    def __init__(self, B, seq_len , process_rank=0, num_processes=1, split=None, shard_dir='aae_edu_fineweb10B_shuffle', eot=50256):
+    def __init__(self, B, seq_len , process_rank=0, num_processes=1, split=None, shard_dir='aae_edu_fineweb10B_shuffle2', eot=50256):
             self.B = B
             self.seq_len = seq_len
             self.num_processes = num_processes
