@@ -183,7 +183,6 @@ class DataLoaderShardMultiGPUShuffle:
             #shuffle the order of the files in the shard file directory
             random.shuffle(self.shard_file_names)
             
-            
             # initialize the training run
             self.reset()
 

@@ -139,8 +139,8 @@ if __name__ == '__main__':
 # print(f"\nshuffled_doc_tokens_tensor:\n{torch.tensor(shuffled_doc_tokens)}")
 
 #%%
-# data = np.load(f'aae_edu_fineweb10B_shuffle2/train_shard_0001.npz', mmap_mode='r')
+data = np.load(f'aae_edu_fineweb10B_shuffle2/train_shard_0001.npz', mmap_mode='r')
 
-# print(data['shard_array_flat'][0:10])
-# print(len(data['offsets']))
+print(data['shard_array_flat'][0:10])
+print(len(data['offsets']))
 # %%
