@@ -1071,10 +1071,29 @@ shuffled_docs = [
 print(shuffled_docs)
 # %%
 # experimenting with creating a dataset iterator from huggingface dataset
-from datasets import load_dataset
-import tiktoken
-import tqdm
+import torch
+import torch.nn as nn
+from torch.nn import functional as F
+import torch.optim as optim
+import matplotlib.pyplot as plt
+import numpy as np
+import aae_utils
 
 
 # %%
 from pathlib import Path
+
+# %%
+import torch
+import torch.distributed as dist
+
+print(f"PyTorch version: {torch.__version__}")
+print(f"CUDA available: {torch.cuda.is_available()}")
+print(f"CUDA version: {torch.version.cuda}")
+print(f"NCCL available: {dist.is_nccl_available()}")
+print(f"Number of GPUs: {torch.cuda.device_count()}")
+# %%
+import trl
+print(trl.__version__)
+
+# %%
