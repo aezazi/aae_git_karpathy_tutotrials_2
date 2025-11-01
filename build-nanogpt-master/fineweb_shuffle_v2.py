@@ -5,7 +5,6 @@ My implementation of the Karpathy's nanoGPT code for building a dataset from the
 
 # %%
 #imports
-#imports
 from datasets import load_dataset
 import tiktoken
 import numpy as np

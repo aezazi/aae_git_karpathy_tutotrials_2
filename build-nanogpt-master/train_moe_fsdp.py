@@ -196,7 +196,7 @@ if config.model_expert_parallelization:
     transformer_wrapper_policy = moe_aware_auto_wrap_policy
 else:
         
-    # With FSDP, we can wrap different parts of the model. Here I am following a strategy presented in a pytorch tutorial to wrap the transformer block. It's possibel to separately wrap the Moe layer. Will experiment when I get this working.
+    # With FSDP, we can wrap different parts of the model. Here I am following a strategy presented in a pytorch tutorial to wrap the transformer block. It's possible to separately wrap the Moe layer. Will experiment when I get this working.
     transformer_wrapper_policy = functools.partial(
         transformer_auto_wrap_policy,
         transformer_layer_cls = {Block} # transformer layer class as per pytorch tutorial video
@@ -234,7 +234,7 @@ print(f"\n[FSDP] Rank {config.rank}: Model wrapping complete\n")
 # Instantiate the optimizer.
 from aae_utils import ConfigureOptimizer
 
-# Note that in the Karpathy tutotrial he uses DDP  and not FSDP. The optimizer initialization when using DDP is slightly different in that you have to use  the "raw model" parameters beofere wrapping with DDP for optimizer initialization. With FSDP, you can just pass the wrapped model.Refer to the tutorial.
+# Note that in the Karpathy tutotrial he uses DDP  and not FSDP. The optimizer initialization when using DDP is slightly different in that you have to use  the "raw model" parameters befor wrapping with DDP for optimizer initialization. With FSDP, you can just pass the wrapped model.Refer to the tutorial.
 optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.1, learning_rate = config.base_lr, device_type=device)
 
 if config.FSDP:
