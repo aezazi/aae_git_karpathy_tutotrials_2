@@ -1,6 +1,6 @@
 #%%
 """
-FineWeb-Edu dataset (for srs pretraining)
+FineWeb-Edu dataset (for srs pre-training)
 https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu
 Downloads and tokenizes the data and saves data shards to disk.
 Run simply as:
@@ -35,13 +35,13 @@ print(eot_token_id)
 
 #%%
 # create tokenization function
-# NOTE: The use of encoder.encode_ordinary(). This is beacuse When preparing data for training: You usually want full control over where and when special tokens (like <|endoftext|>) are inserted. encode_ordinary gives you just the raw tokenization, so you can insert special tokens like eot_token_id manually, e.g., at shard boundaries or document ends.
+# NOTE: The use of encoder.encode_ordinary(). This is because When preparing data for training: You usually want full control over where and when special tokens (like <|endoftext|>) are inserted. encode_ordinary gives you just the raw tokenization, so you can insert special tokens like eot_token_id manually, e.g., at shard boundaries or document ends.
 def tokenize(example, eot=eot_token_id):
     text = example['text']
     tokens = encoder.encode_ordinary(text)
     tokens.append(eot)
     tokens = np.array(tokens, dtype=np.uint16)
-    # print('tokeninzing')
+    # print('tokenizing')
     return tokens
 
 
@@ -73,7 +73,7 @@ def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=s
     with mp.Pool(num_workers) as pool:
 
         shard_idx = 0
-        # initialize shard tokens with eot token at the begining to signal that this document is a continuation
+        # initialize shard tokens with eot token at the beginning to signal that this document is a continuation
         shard_tokens_buffer = np.empty(shard_size, dtype=np.uint16)
         shard_tokens_buffer[0] = eot_token_id
         print(f'shard buffer len: {len(shard_tokens_buffer)}')
@@ -82,13 +82,13 @@ def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=s
         d_start = time.time()
         
         # NOTE: that pool.map outputs a list of  tokens for each example in dataset_iterator 
-        # creating the 'results' variable is how we can wrap the pool output in tqdm for showing progress bars. wraping pool.imap directly in tqdm did not work.
+        # creating the 'results' variable is how we can wrap the pool output in tqdm for showing progress bars. wrapping pool.imap directly in tqdm did not work.
         results = tqdm(pool.imap(tokenize, dataset_iterator), total=len(dataset_iterator), desc=" Percent of datatset processed (cumulative)", unit_scale=True, colour='blue')
        
 
         for tokens  in results:
             
-            # print(f'shard idx = {shard_idx} | example: {i} | tokens lenght; {len(tokens)}')
+            # print(f'shard idx = {shard_idx} | example: {i} | tokens length; {len(tokens)}')
 
             # my approach differs from Karpathy in that I do not split documents between shards. If current example does not fit in the current shard, save the shard and start a new one
             if shard_token_count + len(tokens) > shard_size:
@@ -117,7 +117,7 @@ def create_shards(dataset_iterator=None, dataset_iterator_test=None, shard_dir=s
                 # if progress_bar is None:
                 #     progress_bar = tqdm(total=shard_size, unit="tokens", desc=f"Shard {shard_idx}")
                 # progress_bar.update(len(tokens))
-                # print(f'concacting example: {i} to shard: {shard_idx}')
+                # print(f'concatenating example: {i} to shard: {shard_idx}')
                 # print(f'shard_token_count: {shard_token_count:,}')
         
         # If we have iterated through all the tokens in the dataset and the shard is not full, write any remaining tokens as the last shard. 

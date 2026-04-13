@@ -24,7 +24,7 @@ effective batch size is the same as target tokens per optimizer step: 524288
 accumulation steps: 16
 
 
-training steps for one epoc: 19,074
+training steps for one epoch: 19,074
 
 
 Scheduler initialized on GPU rank 0, of 1
@@ -2993,7 +2993,7 @@ rank 0 sample 0: Hello, I'm a small language model, and I know that I would neve
 rank 0 sample 1: Hello, I'm a small language model, so that's what I'm doing, but the concept to do something such as this isn't exactly practical in the
 
 
-rank 0 sample 2: Hello, I'm a small language model, so I try to run this from command line (Ctrl+click), but I've noticed that the command line doesn
+rank 0 sample 2: Hello, I'm a small language model, so I try to run this from command line (Ctrl+click), but I've noticed that the command line does
 
 
 rank 0 sample 3: Hello, I'm a small language model, and not a general-purpose programming language like c++. I know you have built up a couple of frameworks that

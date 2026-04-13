@@ -28,7 +28,7 @@ class RotaryPosEmbed(nn.Module):
         self.register_buffer("cached_angles", angles)  # (max_seq_len, head_dim // 2)
         
 
-    # Note that the code below allows for variable length sequences. If sequence length is always fixed, it would be more efficient to compute angles in the __init()__ and resigter to a buffer as I have done above. I'm leaving this function here for reference
+    # Note that the code below allows for variable length sequences. If sequence length is always fixed, it would be more efficient to compute angles in the __init()__ and register to a buffer as I have done above. I'm leaving this function here for reference
     # def get_angles(self, seq_len=1024, device=None):
     #     position = torch.arange(0, seq_len, 1.0)
     #     angles = torch.outer(position.to(device=device), self.theta)
@@ -94,7 +94,7 @@ class CausalSelfAttention(nn.Module):
 
         # Karpathy explains the purpose of the following to be to make the training process more efficient in Pytorch by splitting the channels into multiple heads. Each head is a slice of the channels. This allows for more parallelization and less memory usage.
     
-        # for rotary embedding, do not tranpose k and q to (B, n_heads, seq_len, dim_heads) until the rotation is applied
+        # for rotary embedding, do not transpose k and q to (B, n_heads, seq_len, dim_heads) until the rotation is applied
         k = k.view(B, seq_len, self.n_head, n_embd // self.n_head) # (B, seq_len, n_heads, dim_heads)
         q = q.view(B, seq_len, self.n_head, n_embd // self.n_head) # (B, seq_len, n_heads, dim_heads)
     
@@ -105,7 +105,7 @@ class CausalSelfAttention(nn.Module):
         v = v.view(B, seq_len, self.n_head, n_embd // self.n_head).transpose(1, 2) # (B, n_heads, seq_len, dim_heads)
 
 
-        # Pytorch implementation of Flash attention algorithim. This is the scaled dot-product attention built-in pytorch function. It takes the dot product of the query and key, scales it by the square root of the head size, and then applies a softmax to get the attention weights. The attention weights are then multiplied by the value to get the output. the is_causal=True argument ensures that the attention is only applied to the left of the current position in the sequence (i.e. it is causal). This is done by applying a mask to the attention weights. See Karpathy's video tutorial at 2:00:00 for more details. 
+        # Pytorch implementation of Flash attention algorithm. This is the scaled dot-product attention built-in pytorch function. It takes the dot product of the query and key, scales it by the square root of the head size, and then applies a softmax to get the attention weights. The attention weights are then multiplied by the value to get the output. the is_causal=True argument ensures that the attention is only applied to the left of the current position in the sequence (i.e. it is causal). This is done by applying a mask to the attention weights. See Karpathy's video tutorial at 2:00:00 for more details. 
         y = F.scaled_dot_product_attention(q_rot, k_rot, v, is_causal=True) # (B, n_heads, seq_len, dim_heads)
         
         # transpose back to (B, seq_len, n_heads*dim_heads) and combine heads. Note that the y vector returned by scaled_dot_product is not contiguous. For view() to work, the original tensor must be contiguous in memory. reshape() can work with both contiguous and non-contiguous tensors, automatically handling the necessary memory operations. 
@@ -136,7 +136,7 @@ class ExpertMoESwiglu(nn.Module):
         x= self.c_proj(x)
         return x
     
-# this class implemets top_k sparse gating 
+# this class implements top_k sparse gating 
 class TopKGateParallel(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -213,7 +213,7 @@ class TopKGateParallel(nn.Module):
          # Get the top-k logits and their corresponding indices. The pytorch top_k method returns the top-k values and their indices along the last dimension (num_experts). In each batch, for each token in the sequence, it selects the top-k logits and their indices from the logits produced by each expert. Note that the top_k ids are global and not necessarily on this gpu.
         top_k_logits_noisy, top_k_ids_global_noisy = logits_noisy.topk(self.k, dim=-1)  # (batch_size* seq_len, top_k) 
 
-        # We want sparse matrices. We achieve this by keeping the top-k logits for each token and filling the rest with a value that represents "no contribution" (like negative infinity).  This is done to ensure that the softmax function will ignore these values when computing the weights for each expert. So only the values produced by the top-k experts will contribute to the final output. We implement this by first creating a tensor of the same shape as the logits filled with negative infinity, and then using the scatter function to fill in the top-k logits at the indices of the top-k experts. Note that in this context, softmax is being used to compute "weights" for each expert not probabilities as for multiclass classification. Its a subttle difference but I think important to note.
+        # We want sparse matrices. We achieve this by keeping the top-k logits for each token and filling the rest with a value that represents "no contribution" (like negative infinity).  This is done to ensure that the softmax function will ignore these values when computing the weights for each expert. So only the values produced by the top-k experts will contribute to the final output. We implement this by first creating a tensor of the same shape as the logits filled with negative infinity, and then using the scatter function to fill in the top-k logits at the indices of the top-k experts. Note that in this context, softmax is being used to compute "weights" for each expert not probabilities as for multi-class classification. Its a subtle difference but I think important to note.
         
         #full_like clones a tensor and fills it with a specified value (like infinity).
         zeros = torch.full_like(logits_noisy, float('-inf')) 
@@ -243,7 +243,7 @@ class MoELayerParallel(nn.Module):
         self.rank = dist.get_rank() if dist.is_initialized() else 0
         self.experts_per_gpu = config.experts_per_gpu
 
-        # expert to gpu assginment based on gpu rank. Pre compute expert assginments for all gpus
+        # expert to gpu assignment based on gpu rank. Pre compute expert assignments for all gpus
         self.gpu_expert_ranges = {} # dictionary to hold gpu --> expert assignment
         for gpu_rank in range(self.world_size):
             start = gpu_rank * self.experts_per_gpu
@@ -268,7 +268,7 @@ class MoELayerParallel(nn.Module):
         # self.count_tokens_processed_by_each_expert = torch.zeros(self.num_experts, dtype=torch.int, device=torch.device(f"cuda:{self.rank}"), requires_grad=False) # (num_experts_per_gpu,)
 
 
-        # NOTE: all-to-all communication: In a MoE setup, the topk gate will assign tokens being processed on this gpu to anyone of the num_experts. The experts assgined to a token may or may not be on this gpu. So we have to identify which gpu is hosting the expert to which a token is assgined, send the token to that gpu/expert for processing  and then receive the result back to rejoin the batch-sequence on this gpu.  
+        # NOTE: all-to-all communication: In a MoE setup, the topk gate will assign tokens being processed on this gpu to anyone of the num_experts. The experts assigned to a token may or may not be on this gpu. So we have to identify which gpu is hosting the expert to which a token is assigned, send the token to that gpu/expert for processing  and then receive the result back to rejoin the batch-sequence on this gpu.  
         
         # create communication buffers for all to all communication.
         self.send_buffer = None
@@ -276,7 +276,7 @@ class MoELayerParallel(nn.Module):
     
     def _get_expert_assignments_with_padding(self, top_k_ids_global, top_k_gate_weights_global):
         """
-        determine which tokens are assgined to which gpu by the topk gate.
+        determine which tokens are assigned to which gpu by the topk gate.
         returns a dictionary that maps gpu global rank --> (token_indices, expert_local_id)
         """
         
@@ -290,10 +290,10 @@ class MoELayerParallel(nn.Module):
             expert_mask = ((top_k_ids_global>=self.gpu_expert_global_id_start) & (top_k_ids_global < self.gpu_expert_global_id_end)).any(dim=-1) # (batch_size*seq_len,)
 
             if expert_mask.any():
-                # We extract the positions in expert_mask with value TRUE. These positions correspond to the token positions (indicies) in the sequence were tokens have at least one assigned experts on this gpu_rank. note that using torch.where(condition) with just one argument returns a tuple of 1-D tensors, where each tensor represents the indices of the elements in the input condition that evaluate to True along each dimension of the input tensor. The first element in the tuple corresponds to the row indices and the second element corresponds to the column indices. We need the row indices (element 0) which correspond to the token positions (rows) in the sequence.
+                # We extract the positions in expert_mask with value TRUE. These positions correspond to the token positions (indices) in the sequence were tokens have at least one assigned experts on this gpu_rank. note that using torch.where(condition) with just one argument returns a tuple of 1-D tensors, where each tensor represents the indices of the elements in the input condition that evaluate to True along each dimension of the input tensor. The first element in the tuple corresponds to the row indices and the second element corresponds to the column indices. We need the row indices (element 0) which correspond to the token positions (rows) in the sequence.
                 token_positions = torch.where(expert_mask)[0]
 
-                # For each token which has one or both of its assigned experts on this gpu_rank, get its local expert assignments. The assginments may have different number of experts between 1 and k experts. all to all communication expects all tensors to be of the same size and dtype. So we have to pad all expert assignments to the same length (k). 
+                # For each token which has one or both of its assigned experts on this gpu_rank, get its local expert assignments. The assignments may have different number of experts between 1 and k experts. all to all communication expects all tensors to be of the same size and dtype. So we have to pad all expert assignments to the same length (k). 
                 top_k_expert_local_id_assignments_padded = []
                 top_k_weights_padded =[]
                 
@@ -336,7 +336,7 @@ class MoELayerParallel(nn.Module):
                 # stack the padded experts ids into a tensor. This will have shape (num_tokens, k) where num_tokens is the number of tokens assigned to this gpu_rank and k is the number of experts per token.
                 top_k_expert_local_id_assignments_padded = torch.stack(top_k_expert_local_id_assignments_padded)
 
-                # stack the padded weights into a tensor same as done aove for top_k_expert_local_id_assignments_padded
+                # stack the padded weights into a tensor same as done above for top_k_expert_local_id_assignments_padded
                 top_k_weights_padded = torch.stack(top_k_weights_padded)
 
                 # create a mask to filter the padding. the mask will have shape (num_tokens, k) where num_tokens is the number of tokens assigned to this gpu_rank and k is the number of experts per token. The mask will be True for the experts that were assigned to the token and False for the padding dummy.
@@ -381,7 +381,7 @@ class MoELayerParallel(nn.Module):
                 send_tokens_list.append(send_tokens)
                 # print(f'[DEBUG] Rank {self.rank} send_tokens shape: {send_tokens.shape}')
                 
-                # Note that for expert_ids, weights, and mask, the assginments method already filtered out tokens with no expert assignments on this gpu.
+                # Note that for expert_ids, weights, and mask, the assignments method already filtered out tokens with no expert assignments on this gpu.
                 send_expert_ids = top_k_expert_local_id_assignments_padded
                 send_expert_list.append(send_expert_ids)
                 # print(f'[DEBUG] Rank {self.rank} send_expert_ids shape: {send_expert_ids.shape}')
@@ -493,7 +493,7 @@ class MoELayerParallel(nn.Module):
             empty_counts = torch.zeros(self.experts_per_gpu, dtype=torch.int, device=device)
             return empty_output, empty_counts
         
-        # create tensor to hold the output of locas experts.
+        # create tensor to hold the output of local experts.
         output = torch.zeros(num_received_tokens, self.n_embd, device=device, dtype=tokens.dtype) # (num_received_tokens, n_embd)
 
         # iterate over each token and process it through its assigned experts
@@ -519,7 +519,7 @@ class MoELayerParallel(nn.Module):
             # iterate over each expert assigned to this token
             for k_idx in range(self.k):
 
-                # k_idx is the local id of topk experts. check if this expert is real and not padding. if the expert assginment k_idx != -1, it's real.
+                # k_idx is the local id of topk experts. check if this expert is real and not padding. if the expert assignment k_idx != -1, it's real.
                 
                 expert_local_id = token_expert_ids[k_idx].item()
                 if expert_local_id != -1:
@@ -563,7 +563,7 @@ class MoELayerParallel(nn.Module):
         
         device = processed_tokens.device
 
-        # Step 1: Prepare send data - split processed tokens back according to forward receive counts. Whatever tokens this gpu received and proceesed must be sent back to the gpus that sent the tokens
+        # Step 1: Prepare send data - split processed tokens back according to forward receive counts. Whatever tokens this gpu received and processed must be sent back to the gpus that sent the tokens
         # The processed_tokens are in the same order as we received them (GPU rank order)
         send_counts_back = recv_counts_forward.copy()  # Send back exactly what we received
         send_tokens_list_back = []
@@ -624,11 +624,11 @@ class MoELayerParallel(nn.Module):
 
     def _reassemble_sequence(self, x_flat, recv_tokens_back, original_assignments):
         """
-        reassmeble the processed tokens back into the original sequence order
+        reassemble the processed tokens back into the original sequence order
         """
         device = x_flat.device
 
-        # create a tensor to hold reassebled sequence
+        # create a tensor to hold reassembled sequence
         reassembled_sequence = torch.empty_like(x_flat)  # (batch_size * seq_len, n_embd)
 
         # Recall that recv_tokens_back contains processed tokens in GPU order, not the original sequence order. So we loop over each GPU, extract the original token positions from the GPU that we had sent tokens to for processing, and place the processed tokens back in their original positions in the reassembled_sequence tensor
@@ -731,7 +731,7 @@ class Block(nn.Module):
         return x, top_k_ids_global, load_balance_loss
     
 #%%
-class CreateMoEParalell(nn.Module):
+class CreateMoeParallel(nn.Module):
     """
     create the full model
     """    

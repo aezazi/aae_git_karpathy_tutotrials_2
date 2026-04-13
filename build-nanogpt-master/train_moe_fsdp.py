@@ -68,7 +68,7 @@ class GPTConfig:
 
         assert self.k <= self.num_experts and self.k > 0, f"k must be at least 1 and less than or equal to num_experts {self.num_experts} you have k={self.k}"
 
-        # Compute accumlation steps based on target_tokens_per_optimizer_step, sequence length and world size
+        # Compute accumulation steps based on target_tokens_per_optimizer_step, sequence length and world size
         self.accum_steps = self.target_tokens_per_optimizer_step // (self.batch_size * self.seq_len * self.world_size)
 
         self.training_steps = (10_000_000_000 // self.target_tokens_per_optimizer_step) + 1
@@ -116,10 +116,10 @@ if torch.cuda.is_available():
 
 
 # %%
-#Instantiate the model based on whether expert paralleliztion was chosen in config
+#Instantiate the model based on whether expert parallelization was chosen in config
 # if cuda is available, use torch.compile to optimize the model for training on GPUs. This is a performance optimization that allows for more efficient training on GPUs. It uses the PyTorch JIT compiler to optimize the model for the specific hardware and software configuration. This is done to improve performance and reduce memory usage. we use bfloat16 precision for the forward pass and use torch.compile. See Karpathy's tutorial at 1:24:00 and 1:49:00 for details. NOTE   that compile may not play well with FSDP and especially not well with manual expert parallelization communications . So will have to experiment.
 if config.model_expert_parallelization:
-    model = model_FSDP_parallel.CreateMoEParalell(config=config)
+    model = model_FSDP_parallel.CreateMoeParallel(config=config)
     use_compile = False # set to True to use torch.compile
 else:
     model = model_FSDP.CreateMoE(config=config)
@@ -202,7 +202,7 @@ else:
         transformer_layer_cls = {Block} # transformer layer class as per pytorch tutorial video
     )
 
-# FSDP also allows us to define a mixed prescision policy. Here, I am just using bf16 for everything, but we can use hybrid. refer to this tutorial for more good info and nuances https://www.youtube.com/watch?v=-caN92JtKqA&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=4
+# FSDP also allows us to define a mixed precision policy. Here, I am just using bf16 for everything, but we can use hybrid. refer to this tutorial for more good info and nuances https://www.youtube.com/watch?v=-caN92JtKqA&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=4
     precision_policy = MixedPrecision(
             param_dtype=torch.bfloat16, # param precision
             reduce_dtype=torch.bfloat16, # gradient communication precision
@@ -216,7 +216,7 @@ model = FSDP_wrap(model,
             auto_wrap_policy=transformer_wrapper_policy,
             mixed_precision=precision_policy,
         
-            # reccommendation and other good info from tutorial: https://www.youtube.com/watch?v=sDM56HOziE4&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=8
+            # recommendation and other good info from tutorial: https://www.youtube.com/watch?v=sDM56HOziE4&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=8
             backward_prefetch=BackwardPrefetch.BACKWARD_PRE,
 
             # note that ShardingStrategy.NO_SHARD is the equivalent of having the model run in DDP mode
@@ -234,7 +234,7 @@ print(f"\n[FSDP] Rank {config.rank}: Model wrapping complete\n")
 # Instantiate the optimizer.
 from aae_utils import ConfigureOptimizer
 
-# Note that in the Karpathy tutotrial he uses DDP  and not FSDP. The optimizer initialization when using DDP is slightly different in that you have to use  the "raw model" parameters befor wrapping with DDP for optimizer initialization. With FSDP, you can just pass the wrapped model.Refer to the tutorial.
+# Note that in the Karpathy tutorial he uses DDP  and not FSDP. The optimizer initialization when using DDP is slightly different in that you have to use  the "raw model" parameters befor wrapping with DDP for optimizer initialization. With FSDP, you can just pass the wrapped model.Refer to the tutorial.
 optimizer = ConfigureOptimizer(model).create_optimizer(weight_decay=0.1, learning_rate = config.base_lr, device_type=device)
 
 if config.FSDP:
@@ -265,12 +265,12 @@ if config.master_process:
 #%%
 # Instantiate the learning rate scheduler 
 # NOTE: I moved the code for the scheduler to a separate aae_utils.py file.
-from aae_utils import CosineLearingRateScheduler
+from aae_utils import CosineLearningRateScheduler
 
 
-# compute training steps for 1 epoc. compute number of steps for one pass over our training dataset of 10B tokens
+# compute training steps for 1 epoch. compute number of steps for one pass over our training dataset of 10B tokens
 # training_steps = 10_000_000_000 // config.effective_batch_size_desired 
-print(f'\ntraining steps for one epoc: {config.training_steps:,}\n')
+print(f'\ntraining steps for one epoch: {config.training_steps:,}\n')
 
 # define the scheduler parameters
 # the number of iterations over which lr is reduced to the minimum
@@ -279,7 +279,7 @@ T_max = config.training_steps
 max_lr = config.base_lr # max learning rate
 min_lr = max_lr * 0.1 # min learning rate
 
-# modified from gpt paper per AK suggestion to be more aggresive with startup steps than paper
+# modified from gpt paper per AK suggestion to be more aggressive with startup steps than paper
 warm_up_steps = 300 
 
 # whether to use cosine annealing with restarts or not
@@ -291,7 +291,7 @@ T_0 = T_max // 4
 T_mult = 3 # the factor by which T_0 is multiplied at each restart.
 
 # instantiate and create learning rate scheduler
-scheduler = CosineLearingRateScheduler(optimizer=optimizer, T_max=T_max, restart=restart, warm_up_steps=warm_up_steps, max_lr=max_lr, min_lr=min_lr, T_mult=T_mult, T_0=T_0)
+scheduler = CosineLearningRateScheduler(optimizer=optimizer, T_max=T_max, restart=restart, warm_up_steps=warm_up_steps, max_lr=max_lr, min_lr=min_lr, T_mult=T_mult, T_0=T_0)
 print(f'\nScheduler initialized on GPU rank {config.rank}, of {config.world_size}\n')
 
 #%%
@@ -379,7 +379,7 @@ for step in range(config.training_steps):
     loss_accum  = 0.0
     
     for micro_step in range(config.accum_steps):
-        # this is a gradient accumulation step. We accumulate gradients over desired accumalation steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
+        # this is a gradient accumulation step. We accumulate gradients over desired accumulation steps before updating the weights. This is done to reduce the number of weight updates and improve training stability. It is also done to reduce the memory usage on the GPU. 
         x, y, shard_idx, tokens_abandoned = train_loader.next_batch()
         x, y = x.to(device), y.to(device) # move the data to the device. 
 
@@ -391,7 +391,7 @@ for step in range(config.training_steps):
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
             logits, loss, top_k_all = model(x, y)
 
-        # This is a check to make sure the top_k gate is distributing tokens evenly bewtween the experts. Code below checks every block. This is Claude generated code
+        # This is a check to make sure the top_k gate is distributing tokens evenly between the experts. Code below checks every block. This is Claude generated code
       
         with torch.no_grad():
             for layer_idx, top_k_global_ids in enumerate(top_k_all):

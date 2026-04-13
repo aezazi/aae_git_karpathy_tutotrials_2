@@ -20,7 +20,7 @@ class RotaryPosEmbed(nn.Module):
         self.register_buffer("cached_angles", angles)  # (max_seq_len, head_dim // 2)
         
 
-    # Note that the code below allows for variable length sequences. If sequence length is always fixed, it would be more efficient to compute angles in the __init()__ and resigter to a buffer as I have done above. I'm leaving this function here for reference
+    # Note that the code below allows for variable length sequences. If sequence length is always fixed, it would be more efficient to compute angles in the __init()__ and register to a buffer as I have done above. I'm leaving this function here for reference
     # def get_angles(self, seq_len=1024, device=None):
     #     position = torch.arange(0, seq_len, 1.0)
     #     angles = torch.outer(position.to(device=device), self.theta)
@@ -76,7 +76,7 @@ class CausalSelfAttention(nn.Module):
         B, seq_len, n_embd = x.size()
 
         # split the embeddings into key, query, value
-        # B is batch size. seq_len is the length of each sequence. the last dimension is the embedding dimension. n_heads is number of heads, dim_heads is the number of dimensions of each head, and self.n_embd is the dimensionality of the original input embedding and model residual stream. n_embd = n_heads * dim_heads  e.g. in GPT-2 (124M), n_heads=12, dim_heads=64, so n_heads*dim_heads=n_embd=768 channels in the transformer. Note from above the self.c_attn() projects the dimensionality(n_embd) of the input by 3x so that when split into q, k, v vectors, each will have dim = n_embd. 
+        # B is batch size. seq_len is the length of each sequence. the last dimension is the embedding dimension. n_heads is number of heads, dim_heads is the number of dimensions of each head, and self.n_embd is the dimensionality of the original input embedding and model residual stream. n_embd = n_heads * dim_heads  e.g. in GPT-2 (124M), n_heads=12, dim_heads=64, so n_heads*dim_heads=n_embd=768 channels in the transformer. Note from above that self.c_attn() projects the dimensionality(n_embd) of the input to (3xn_embd) so that when split into q, k, v vectors, each will have dim = n_embd. 
         qkv = self.c_attn(x) # (B, seq_len, 3 * n_embd)
         # print(qkv.shape)
 
@@ -86,7 +86,7 @@ class CausalSelfAttention(nn.Module):
 
         # Karpathy explains the purpose of the following to be to make the training process more efficient in Pytorch by splitting the channels into multiple heads. Each head is a slice of the channels. This allows for more parallelization and less memory usage.
     
-        # for rotary embedding, do not tranpose k and q to (B, n_heads, seq_len, dim_heads) until the rotation is applied
+        # for rotary embedding, do not transpose k and q to (B, n_heads, seq_len, dim_heads) until the rotation is applied
         k = k.view(B, seq_len, self.n_head, n_embd // self.n_head) # (B, seq_len, n_heads, dim_heads)
         q = q.view(B, seq_len, self.n_head, n_embd // self.n_head) # (B, seq_len, n_heads, dim_heads)
     
@@ -97,7 +97,7 @@ class CausalSelfAttention(nn.Module):
         v = v.view(B, seq_len, self.n_head, n_embd // self.n_head).transpose(1, 2) # (B, n_heads, seq_len, dim_heads)
 
 
-        # Pytorch implementation of Flash attention algorithim. This is the scaled dot-product attention built-in pytorch function. It takes the dot product of the query and key, scales it by the square root of the head size, and then applies a softmax to get the attention weights. The attention weights are then multiplied by the value to get the output. the is_causal=True argument ensures that the attention is only applied to the left of the current position in the sequence (i.e. it is causal). This is done by applying a mask to the attention weights. See Karpathy's video tutorial at 2:00:00 for more details. 
+        # Pytorch implementation of Flash attention algorithm. This is the scaled dot-product attention built-in pytorch function. It takes the dot product of the query and key, scales it by the square root of the head size, and then applies a softmax to get the attention weights. The attention weights are then multiplied by the value to get the output. the is_causal=True argument ensures that the attention is only applied to the left of the current position in the sequence (i.e. it is causal). This is done by applying a mask to the attention weights. See Karpathy's video tutorial at 2:00:00 for more details. 
         y = F.scaled_dot_product_attention(q_rot, k_rot, v, is_causal=True) # (B, n_heads, seq_len, dim_heads)
         
         # transpose back to (B, seq_len, n_heads*dim_heads) and combine heads. Note that the y vector returned by scaled_dot_product is not contiguous. For view() to work, the original tensor must be contiguous in memory. reshape() can work with both contiguous and non-contiguous tensors, automatically handling the necessary memory operations. 
@@ -128,7 +128,7 @@ class ExpertMoESwiglu(nn.Module):
         x= self.c_proj(x)
         return x
     
-# this class implemets top_k sparse gating 
+# this class implements top_k sparse gating 
 class TopKMoEGate(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -174,7 +174,7 @@ class TopKMoEGate(nn.Module):
 
 
     def forward(self, x_flat):
-        # x_flat has shape (batch_size*sequence_length, embedding dimension) and is the output of the multi-head attention layer after being flattened in foreard method of the MoELayer
+        # x_flat has shape (batch_size*sequence_length, embedding dimension) and is the output of the multi-head attention layer after being flattened in forward method of the MoELayer
         token_count, n_embd = x_flat.shape
 
         # just a check to make sure the shape manipulations are consistent with original input
@@ -196,7 +196,7 @@ class TopKMoEGate(nn.Module):
          # Get the top-k logits and their corresponding indices. The pytorch top_k method returns the top-k values and their indices along the last dimension (num_experts). In each batch, for each token in the sequence, it selects the top-k logits and their indices from the logits produced by each expert. Note that the top_k ids are global and not necessarily on this gpu.
         top_k_logits_noisy, top_k_ids_noisy = logits_noisy.topk(self.k, dim=-1)  # (batch_size* seq_len, top_k) 
 
-        # We want sparse matrices. We achieve this by keeping the top-k logits for each token and filling the rest with a value that represents "no contribution" (like negative infinity).  This is done to ensure that the softmax function will ignore these values when computing the weights for each expert. So only the values produced by the top-k experts will contribute to the final output. We implement this by first creating a tensor of the same shape as the logits filled with negative infinity, and then using the scatter function to fill in the top-k logits at the indices of the top-k experts. Note that in this context, softmax is being used to compute "weights" for each expert not probabilities as for multiclass classification. Its a subtle difference but I think important to note.
+        # We want sparse matrices. We achieve this by keeping the top-k logits for each token and filling the rest with a value that represents "no contribution" (like negative infinity).  This is done to ensure that the softmax function will ignore these values when computing the weights for each expert. So only the values produced by the top-k experts will contribute to the final output. We implement this by first creating a tensor of the same shape as the logits filled with negative infinity, and then using the scatter function to fill in the top-k logits at the indices of the top-k experts. Note that in this context, softmax is being used to compute "weights" for each expert not probabilities as for multi-class classification. Its a subtle difference but I think important to note.
         
         #full_like clones a tensor and fills it with a specified value (like infinity).
         zeros = torch.full_like(logits_noisy, float('-inf')) 
@@ -262,7 +262,7 @@ class MoELayer(nn.Module):
                 expert_input = x_flat[expert_mask_flat] # (number of tokens where expert i is in top_k, n_embd)
                 # print(f'\nexpert_input shape: {expert_input.shape} \n{expert_input}\n')
                 
-                # apply expert i to the expert_input. Again, note that based on the mask described above, epxert i is applied only to the tokens where it is in the top_k indices.
+                # apply expert i to the expert_input. Again, note that based on the mask described above, expert i is applied only to the tokens where it is in the top_k indices.
                 expert_output = expert(expert_input) # (number of tokens where expert i is in top_k, n_embd)
                 # print(f'expert_output shape: {expert_output.shape} \n{expert_output}\n')
 
@@ -326,16 +326,18 @@ class CreateMoE(nn.Module):
         # weight tying design. the idea is to tie the weights of the input and output embeddings so that they are the same. This is done to reduce the number of parameters in the model and to improve generalization. 
         self.transformer.wte.weight = self.lm_head.weight
 
-        # initialization
+        # initialization.
+        # In PyTorch, the self.apply(fn) method, available within torch.nn.Module subclasses, is used to recursively apply a given function fn to every submodule of the current module, as well as to the module itself.
+        # Here's how it works:Recursion: When self.apply(fn) is called on a module, it first iterates through all its immediate child modules (obtained via .children()). For each child, it recursively calls module.apply(fn) with the argument to fn being the (sub)module it is visiting. The function fn must accept only one argument.
         self.apply(self._init_weights)
 
-    #weight initialization. Mostly from GPT suggestions
+    #weight initialization parameters. Mostly from GPT suggestions. Note that the parameter "module" can be name anything so long as the method accepts only one argument in addition to self. 
     def _init_weights(self, module):
     # Standard GPT-style init
         std = 0.02
 
         if isinstance(module, nn.Linear):
-            # ✅ Detect if this linear is inside an MoE expert
+            # ✅ Detect if this linear is inside a MoE expert
             if hasattr(module, "_am_expert"):
                 # Experts get smaller init for stability
                 std = 0.01
